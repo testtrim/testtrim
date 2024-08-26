@@ -12,6 +12,14 @@ fn main() {
 
 fn function1() {
     println!("Function 1");
+
+    // Just to create some coverage data, let's check if a specific file exists and print some other lines.
+    let path = std::path::Path::new("src/main.rs");
+    if path.exists() {
+        println!("File exists!");
+    } else {
+        println!("File does not exist!");
+    }
 }
 
 fn function2() {
