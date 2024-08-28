@@ -114,6 +114,17 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     println!("Minimum tests affected count = {:?}", stats.min_tests_affected_by_change);
     println!("Median tests affected count = {:?}", stats.median_tests_affected_by_change);
     println!("Maximum tests affected count = {:?}", stats.max_tests_affected_by_change);
+
+    // Display every input file, and the number of tests that would need to be re-executed:
+    println!("file\ttests-to-rerun\ttotal-tests");
+    for (file, tests_affected) in &coverage_data.file_to_test_map {
+        println!(
+            "{}\t{}\t{}",
+            file,
+            tests_affected.len(),
+            total_tests,
+        );
+    }
 }
 
 struct TestFileStatistics {
