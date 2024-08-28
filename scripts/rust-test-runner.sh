@@ -3,18 +3,23 @@
 set -eu -o pipefail
 # set -x
 
-BINARIES=$( \
+BINARY_ARRAY=($( \
   RUSTFLAGS="-C instrument-coverage" \
     cargo test --workspace --tests --no-run --message-format=json \
       | jq -r "select(.profile.test == true) | .filenames[]" \
       | grep -v dSYM -
-)
+))
 
+# Create a new array with "--binary" before each binary
+BINARY_ARGS=()
+for binary in "${BINARY_ARRAY[@]}"; do
+  BINARY_ARGS+=("-object" "$binary")
+done
 
 rm -rf coverage-output
 mkdir coverage-output
 
-for b in $BINARIES;
+for b in "${BINARY_ARRAY[@]}"
 do
   echo $b
   bname=$(basename $b)
@@ -37,7 +42,7 @@ do
 
     cargo cov -- export \
       -Xdemangler=rustfilt \
-      $BINARIES \
+      "${BINARY_ARGS[@]}" \
       --format=lcov \
       --instr-profile=coverage-output/$bname/$t.profdata \
       > coverage-output/$bname/$t.lcov

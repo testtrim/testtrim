@@ -21,7 +21,7 @@ rm *.profdata
 LLVM_PROFILE_FILE="default_%m_%p.profraw" RUSTFLAGS="-C instrument-coverage" \
   cargo test --tests
 
-cargo profdata -- merge -sparse default_*_*.profraw -o default.profdata
+cargo profdata -- merge -sparse default*.profraw -o default.profdata
 
 BINARIES=$( \
   for file in \
