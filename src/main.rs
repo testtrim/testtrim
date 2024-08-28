@@ -23,6 +23,9 @@ enum Commands {
         /// The file containing the diff
         #[clap(short, long, value_parser)]
         diff_file: String,
+        /// Root directory of the repository; used to normalize file names between the coverage data and the diff file.
+        #[clap(short, long, value_parser)]
+        repository_root: String,
     },
 }
 
@@ -36,7 +39,6 @@ struct CoverageSource {
     #[clap(short = 'a', long, value_parser, group = "coverage_source")]
     coverage_archive: Option<String>,
 }
-
 
 fn main() {
     let cli = Cli::parse();
@@ -54,14 +56,61 @@ fn main() {
             };
             print_analysis_results(&coverage_data);
         },
-        Commands::AnalyzeTests { coverage_source, diff_file } => {
-            if let Some(dir) = &coverage_source.coverage_dir {
-                println!("Analyzing tests based on coverage in {} and diff in {}", dir, diff_file);
+        Commands::AnalyzeTests { coverage_source, diff_file, repository_root } => {
+            let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+                let coverage_dir = Path::new(dir);
+                process_coverage_files(coverage_dir)
             } else if let Some(archive) = &coverage_source.coverage_archive {
-                println!("Analyzing tests based on coverage archive {} and diff in {}", archive, diff_file);
-            }
-            // TODO: Implement the analysis logic
+                let archive_path = Path::new(archive);
+                process_coverage_archive(archive_path)
+            } else {
+                unreachable!("Either coverage_dir or coverage_archive must be provided")
+            };
+
+            process_diff_file(&coverage_data, &diff_file, &repository_root);
         },
+    }
+}
+
+fn process_diff_file(coverage_data: &CoverageData, diff_file: &str, repository_root: &str) {
+    // FIXME: diff_file is not truly a diff (right now), but just a EOL terminated list of files that are modified for
+    // simplicity.  Make it a diff later.
+    //
+    // For now, read that list of files:
+    let diff_content = fs::read_to_string(diff_file).expect("Failed to read diff file");
+    let files_changed: Vec<&str> = diff_content.lines().collect();
+    println!("files_changed: {:?}", files_changed);
+
+    // Get the absolute path of repository root.
+    let repository_root_abs = fs::canonicalize(repository_root).expect("Failed to canonicalize repository root");
+    println!("repository_root_abs: {:?}", repository_root_abs);
+
+    // Now search coverage data for all the tests that we need to run.
+    let mut tests_to_run = HashSet::new();
+    for file in files_changed {
+        // Treat the file name as relative to the repository_root_abs; don't canonicalize it because it might not exist
+        // and apparently that's a requirement for that func.
+        let file_abs = repository_root_abs.join(file);
+        println!("changed file, abs: {:?}", file_abs);
+
+        coverage_data.file_to_test_map.get(file_abs.to_str().unwrap()).map(|tests| {
+            println!("\tFound {} tests", tests.len());
+            tests_to_run.extend(tests.iter().cloned());
+        });
+    }
+
+    println!("{} tests to execute", tests_to_run.len());
+    for test in &tests_to_run {
+        println!("\t{}", test);
+    }
+    if coverage_data.test_set.is_empty() {
+        println!("can't compute %age");
+    } else {
+        println!(
+            "Analysis shows there were {} tests, so this is {}%",
+            coverage_data.test_set.len(),
+            100 * tests_to_run.len() / coverage_data.test_set.len()
+        );
     }
 }
 
