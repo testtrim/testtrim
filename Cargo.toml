@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 lcov = "=0.8.1"
+clap = { version = "3.2", features = ["derive"] }
+tar = "0.4"
+bzip2 = "0.4"

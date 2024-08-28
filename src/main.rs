@@ -1,11 +1,68 @@
-use std::{collections::{HashMap, HashSet}, fs, path::Path};
-use lcov::{report::section::function, Reader, Record};
+use std::{collections::{HashMap, HashSet}, fs, io::{BufReader, Read}, path::Path};
+use lcov::{Reader, Record};
+use clap::{Parser, Subcommand, Args};
+use tar::Archive;
+use bzip2::read::BzDecoder;
+
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Print stats on the coverage
+    PrintStats(CoverageSource),
+    /// Analyze and output the tests to execute
+    AnalyzeTests {
+        #[clap(flatten)]
+        coverage_source: CoverageSource,
+        /// The file containing the diff
+        #[clap(short, long, value_parser)]
+        diff_file: String,
+    },
+}
+
+#[derive(Args)]
+#[clap(group = clap::ArgGroup::new("coverage_source").required(true).multiple(false))]
+struct CoverageSource {
+    /// The directory containing coverage files
+    #[clap(short = 'd', long, value_parser, group = "coverage_source")]
+    coverage_dir: Option<String>,
+    /// The archive containing coverage files
+    #[clap(short = 'a', long, value_parser, group = "coverage_source")]
+    coverage_archive: Option<String>,
+}
+
 
 fn main() {
-    let coverage_dir = Path::new("/home/mfenniak/Dev/alacritty/coverage-output");
-    let coverage_data = process_coverage_files(coverage_dir);
+    let cli = Cli::parse();
 
-    print_analysis_results(&coverage_data);
+    match &cli.command {
+        Commands::PrintStats(coverage_source) => {
+            let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+                let coverage_dir = Path::new(dir);
+                process_coverage_files(coverage_dir)
+            } else if let Some(archive) = &coverage_source.coverage_archive {
+                let archive_path = Path::new(archive);
+                process_coverage_archive(archive_path)
+            } else {
+                unreachable!("Either coverage_dir or coverage_archive must be provided")
+            };
+            print_analysis_results(&coverage_data);
+        },
+        Commands::AnalyzeTests { coverage_source, diff_file } => {
+            if let Some(dir) = &coverage_source.coverage_dir {
+                println!("Analyzing tests based on coverage in {} and diff in {}", dir, diff_file);
+            } else if let Some(archive) = &coverage_source.coverage_archive {
+                println!("Analyzing tests based on coverage archive {} and diff in {}", archive, diff_file);
+            }
+            // TODO: Implement the analysis logic
+        },
+    }
 }
 
 struct CoverageData {
@@ -44,34 +101,71 @@ fn process_test_executor_directory(
 
         if let Some("lcov") = test_output_path.extension().and_then(|ext| ext.to_str()) {
             println!("\tTest case: {}", test_output_path.display());
-            process_lcov_file(&test_output_path, file_to_test_map, test_set, function_to_test_map);
+
+            let test_name = test_output_path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("Failed to extract test name")
+                .to_string();
+
+            test_set.insert(test_output_path.to_str().unwrap().to_string());
+
+            let file = fs::File::open(&test_output_path).expect("Failed to open LCOV file");
+            process_lcov(file, &test_name, file_to_test_map, function_to_test_map);
         }
     }
 }
 
-fn process_lcov_file(
-    lcov_path: &Path,
+
+fn process_coverage_archive(archive_path: &Path) -> CoverageData {
+    let mut test_set: HashSet<String> = HashSet::new();
+    let mut file_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut function_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
+
+    let file = fs::File::open(archive_path).expect("Failed to open archive file");
+    let bz2 = BzDecoder::new(file);
+    let mut archive = Archive::new(bz2);
+
+    for entry in archive.entries().expect("Failed to read archive entries") {
+        let mut entry = entry.expect("Failed to read archive entry");
+        let path = entry.path().expect("Failed to get entry path").into_owned();
+
+        if let Some(extension) = path.extension() {
+            if extension == "lcov" {
+                println!("Processing LCOV file: {}", path.display());
+
+                let test_name = path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .expect("Failed to extract test name")
+                    .to_string();
+                test_set.insert(path.to_str().unwrap().to_string());
+
+                process_lcov(&mut entry, &test_name, &mut file_to_test_map, &mut function_to_test_map);
+            }
+        }
+    }
+
+    CoverageData {
+        test_set,
+        file_to_test_map,
+        function_to_test_map,
+    }
+}
+
+fn process_lcov<T: Read>(
+    reader: T,
+    test_name: &str,
     file_to_test_map: &mut HashMap<String, HashSet<String>>,
-    test_set: &mut HashSet<String>,
     function_to_test_map: &mut HashMap<String, HashSet<String>>,
 ) {
-    let test_name = lcov_path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .expect("Failed to extract test name")
-        .to_string();
-
-    // FIXME: in the future, store some kind of structure representing the "Address" of this test (eg. for rust, the
-    // project/workspace/test-executor then fully-qualified name).  For now, the lcov path will stand-in for that.
-    test_set.insert(lcov_path.to_str().unwrap().to_string());
-
-    let reader = Reader::open_file(lcov_path).expect("Failed to open LCOV file");
+    let buf_reader = BufReader::new(reader);
+    let reader = Reader::new(buf_reader);
     let mut current_source_file = None;
     let mut current_source_file_is_hit = false;
 
     for record in reader {
         match record {
             Ok(Record::SourceFile { path }) => {
-                update_file_to_test_map(file_to_test_map, &current_source_file, &test_name, current_source_file_is_hit);
+                update_file_to_test_map(file_to_test_map, &current_source_file, test_name, current_source_file_is_hit);
                 current_source_file = Some(path.to_str().expect("Invalid UTF-8 in path").to_string());
                 current_source_file_is_hit = false;
             }
@@ -79,10 +173,10 @@ fn process_lcov_file(
                 current_source_file_is_hit = true;
             }
             Ok(Record::EndOfRecord) => {
-                update_file_to_test_map(file_to_test_map, &current_source_file, &test_name, current_source_file_is_hit);
+                update_file_to_test_map(file_to_test_map, &current_source_file, test_name, current_source_file_is_hit);
             }
-            Ok(Record::FunctionData { name: function_name, count } ) if count > 0 => {
-                update_function_to_test_map(function_to_test_map, &function_name, &test_name);
+            Ok(Record::FunctionData { name: function_name, count }) if count > 0 => {
+                update_function_to_test_map(function_to_test_map, &function_name, test_name);
             }
             _ => {}
         }
@@ -137,14 +231,14 @@ fn print_analysis_results(coverage_data: &CoverageData) {
         // Avoid division by zero
         println!("No input source files ({}) or tests ({}) found.", stats.input_file_count, total_tests);
     } else {
-    println!(
-        "On average, for each source file, we'd have to rerun {} tests ({}%)",
-        stats.input_file_total_tests_affected / stats.input_file_count,
-        100 * stats.input_file_total_tests_affected / stats.input_file_count / total_tests
-    );
-    println!("By file: Minimum tests affected count = {:?}", stats.by_file_min_tests_affected_by_change);
-    println!("By file: Median tests affected count = {:?}", stats.by_file_median_tests_affected_by_change);
-    println!("By file: Maximum tests affected count = {:?}", stats.by_file_max_tests_affected_by_change);
+        println!(
+            "On average, for each source file, we'd have to rerun {} tests ({}%)",
+            stats.input_file_total_tests_affected / stats.input_file_count,
+            100 * stats.input_file_total_tests_affected / stats.input_file_count / total_tests
+        );
+        println!("By file: Minimum tests affected count = {:?}", stats.by_file_min_tests_affected_by_change);
+        println!("By file: Median tests affected count = {:?}", stats.by_file_median_tests_affected_by_change);
+        println!("By file: Maximum tests affected count = {:?}", stats.by_file_max_tests_affected_by_change);
     }
 
     // Display every input file, and the number of tests that would need to be re-executed:
@@ -161,11 +255,11 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     if stats.input_function_count == 0 || total_tests == 0 {
         println!("No input source functions ({}) or tests ({}) found.", stats.input_function_count, total_tests);
     } else {
-    println!(
-        "On average, for each source function, we'd have to rerun {} tests ({}%)",
-        stats.input_function_total_tests_affected / stats.input_function_count,
-        100 * stats.input_function_total_tests_affected / stats.input_function_count / total_tests
-    );
+        println!(
+            "On average, for each source function, we'd have to rerun {} tests ({}%)",
+            stats.input_function_total_tests_affected / stats.input_function_count,
+            100 * stats.input_function_total_tests_affected / stats.input_function_count / total_tests
+        );
     }
     println!("By function: Minimum tests affected count = {:?}", stats.by_function_min_tests_affected_by_change);
     println!("By function: Median tests affected count = {:?}", stats.by_function_median_tests_affected_by_change);
