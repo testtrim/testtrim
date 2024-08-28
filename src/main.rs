@@ -133,6 +133,10 @@ fn print_analysis_results(coverage_data: &CoverageData) {
 
     let stats = calculate_statistics(&coverage_data);
 
+    if stats.input_file_count == 0 || total_tests == 0 {
+        // Avoid division by zero
+        println!("No input source files ({}) or tests ({}) found.", stats.input_file_count, total_tests);
+    } else {
     println!(
         "On average, for each source file, we'd have to rerun {} tests ({}%)",
         stats.input_file_total_tests_affected / stats.input_file_count,
@@ -141,6 +145,7 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     println!("By file: Minimum tests affected count = {:?}", stats.by_file_min_tests_affected_by_change);
     println!("By file: Median tests affected count = {:?}", stats.by_file_median_tests_affected_by_change);
     println!("By file: Maximum tests affected count = {:?}", stats.by_file_max_tests_affected_by_change);
+    }
 
     // Display every input file, and the number of tests that would need to be re-executed:
     println!("file\ttests-to-rerun\ttotal-tests");
@@ -153,11 +158,15 @@ fn print_analysis_results(coverage_data: &CoverageData) {
         );
     }
 
+    if stats.input_function_count == 0 || total_tests == 0 {
+        println!("No input source functions ({}) or tests ({}) found.", stats.input_function_count, total_tests);
+    } else {
     println!(
         "On average, for each source function, we'd have to rerun {} tests ({}%)",
         stats.input_function_total_tests_affected / stats.input_function_count,
         100 * stats.input_function_total_tests_affected / stats.input_function_count / total_tests
     );
+    }
     println!("By function: Minimum tests affected count = {:?}", stats.by_function_min_tests_affected_by_change);
     println!("By function: Median tests affected count = {:?}", stats.by_function_median_tests_affected_by_change);
     println!("By function: Maximum tests affected count = {:?}", stats.by_function_max_tests_affected_by_change);
