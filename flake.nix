@@ -40,11 +40,12 @@
             cargo-binutils
           ];
 
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;          
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
 
           shellHook = ''
             export RUSTFLAGS="-C instrument-coverage"
             export LLVM_PROFILE_FILE="default.profraw"
+            export RUST_BACKTRACE=full
           '';
         };
     });
