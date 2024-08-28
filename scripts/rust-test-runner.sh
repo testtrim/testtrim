@@ -20,10 +20,11 @@ do
   bname=$(basename $b)
 
   mkdir -p coverage-output/$bname
-  $b --list | grep ": test" | sed -e 's/: test//' > coverage-output/$bname/test-list.txt
+  $b --list | (grep ": test" || true) | sed -e 's/: test//' > coverage-output/$bname/test-list.txt
 
   for t in $(cat coverage-output/$bname/test-list.txt);
   do
+    echo "Execute test $t..."
     set +e
     LLVM_PROFILE_FILE="coverage-output/$bname/$t.profraw" \
       RUSTFLAGS="-C instrument-coverage" \
