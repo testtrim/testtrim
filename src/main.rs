@@ -3,6 +3,7 @@ use lcov::{Reader, Record};
 use clap::{Parser, Subcommand, Args};
 use tar::Archive;
 use bzip2::read::BzDecoder;
+use sevenz_rust::{Password, SevenZReader};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -164,39 +165,76 @@ fn process_test_executor_directory(
     }
 }
 
-
 fn process_coverage_archive(archive_path: &Path) -> CoverageData {
     let mut test_set: HashSet<String> = HashSet::new();
     let mut file_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
     let mut function_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
 
-    let file = fs::File::open(archive_path).expect("Failed to open archive file");
-    let bz2 = BzDecoder::new(file);
-    let mut archive = Archive::new(bz2);
+    let extension = archive_path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
-    for entry in archive.entries().expect("Failed to read archive entries") {
-        let mut entry = entry.expect("Failed to read archive entry");
-        let path = entry.path().expect("Failed to get entry path").into_owned();
-
-        if let Some(extension) = path.extension() {
-            if extension == "lcov" {
-                println!("Processing LCOV file: {}", path.display());
-
-                let test_name = path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .expect("Failed to extract test name")
-                    .to_string();
-                test_set.insert(path.to_str().unwrap().to_string());
-
-                process_lcov(&mut entry, &test_name, &mut file_to_test_map, &mut function_to_test_map);
-            }
-        }
+    match extension {
+        "bz2" => process_tar_bz2(archive_path, &mut test_set, &mut file_to_test_map, &mut function_to_test_map),
+        "7z" => process_7z(archive_path, &mut test_set, &mut file_to_test_map, &mut function_to_test_map),
+        _ => panic!("Unsupported archive format"),
     }
 
     CoverageData {
         test_set,
         file_to_test_map,
         function_to_test_map,
+    }
+}
+
+fn process_tar_bz2(
+    archive_path: &Path,
+    test_set: &mut HashSet<String>,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    let file = fs::File::open(archive_path).expect("Failed to open archive file");
+    let bz2 = BzDecoder::new(file);
+    let mut archive = Archive::new(bz2);
+
+    for entry in archive.entries().expect("Failed to read archive entries") {
+        let mut entry = entry.expect("Failed to read archive entry");
+        let path = entry.path().unwrap().to_str().unwrap().to_string();
+        println!("bz2: {}", path);
+        process_archive_entry(&path, &mut entry, test_set, file_to_test_map, function_to_test_map);
+    }
+}
+
+fn process_7z(
+    archive_path: &Path,
+    test_set: &mut HashSet<String>,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    // let file = fs::File::open(archive_path).expect("Failed to open archive file");
+    let mut sz = SevenZReader::open(archive_path, Password::empty()).expect("Failed to create 7z reader");
+
+    sz.for_each_entries(|entry, reader| {
+        println!("7z: {}", entry.name());
+        process_archive_entry(entry.name(), reader, test_set, file_to_test_map, function_to_test_map);
+        Ok(true) // FIXME: not sure if true or false is needed here
+    }).expect("for_each_entries");
+}
+
+fn process_archive_entry<R: Read + ?Sized>(
+    entry_name: &str,
+    entry: &mut R,
+    test_set: &mut HashSet<String>,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    // check if lcov, and if so, extract the test name...
+    if entry_name.ends_with(".lcov") {
+        let test_name = Path::new(entry_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("Failed to extract test name")
+            .to_string();
+        test_set.insert(test_name.clone());
+        process_lcov(entry, &test_name, file_to_test_map, function_to_test_map);
     }
 }
 
