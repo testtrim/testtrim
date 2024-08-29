@@ -31,7 +31,8 @@ rm ../archive-pre-$COMMIT.tgz
 find coverage-output | grep profraw$ | xargs rm
 find coverage-output | grep profdata$ | xargs rm
 
-tar -jcvf ../coverage-output-pre-$COMMIT.tar.bz2 coverage-output
+# tar -jcvf ../coverage-output-pre-$COMMIT.tar.bz2 coverage-output
+7z a ../coverage-output-pre-$COMMIT.7z coverage-output
 
 # That concludes the "test coverage map"; now I just need to know what files were affected.  That's easy:
 git diff --name-only $COMMIT^ $COMMIT > ../coverage-files-changed-$COMMIT.txt
