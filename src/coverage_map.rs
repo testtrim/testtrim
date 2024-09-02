@@ -1,13 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, path::PathBuf};
 
 pub struct CoverageData {
     test_set: HashSet<String>,
-    file_to_test_map: HashMap<String, HashSet<String>>,
+    file_to_test_map: HashMap<PathBuf, HashSet<String>>,
     function_to_test_map: HashMap<String, HashSet<String>>,
 }
 
 pub struct FileCoverage {
-    pub file_name: String, // FIXME: change to PathBuf in the future -- rework everything using file paths to just stick with PathBuf
+    pub file_name: PathBuf,
     pub test_name: String,
 }
 
@@ -29,7 +29,7 @@ impl CoverageData {
         &self.test_set
     }
 
-    pub fn file_to_test_map(&self) -> &HashMap<String, HashSet<String>> {
+    pub fn file_to_test_map(&self) -> &HashMap<PathBuf, HashSet<String>> {
         &self.file_to_test_map
     }
 
@@ -63,9 +63,9 @@ impl CoverageData {
 pub struct TestFileStatistics {
     pub input_file_count: usize,
     pub input_file_total_tests_affected: usize,
-    pub by_file_min_tests_affected_by_change: Option<(String, usize)>,
-    pub by_file_median_tests_affected_by_change: Option<(String, usize)>,
-    pub by_file_max_tests_affected_by_change: Option<(String, usize)>,
+    pub by_file_min_tests_affected_by_change: Option<(PathBuf, usize)>,
+    pub by_file_median_tests_affected_by_change: Option<(PathBuf, usize)>,
+    pub by_file_max_tests_affected_by_change: Option<(PathBuf, usize)>,
 
     pub input_function_count: usize,
     pub input_function_total_tests_affected: usize,
@@ -78,18 +78,18 @@ impl CoverageData {
     pub fn calculate_statistics(&self) -> TestFileStatistics {
         // Calculate a lowest, highest, and median test file -- take the file_to_test_map hashmap and create a version that
         // is sorted by the length of its tests so that we can just pull the first, middle, and last one:
-        let mut sorted_file_to_test_map: Vec<(&String, &HashSet<String>)> = self.file_to_test_map().iter().collect();
+        let mut sorted_file_to_test_map: Vec<(&PathBuf, &HashSet<String>)> = self.file_to_test_map().iter().collect();
         sorted_file_to_test_map.sort_by_key(|(_, tests)| tests.len());
 
-        let by_file_min_tests_affected_by_change = sorted_file_to_test_map.first().map(|(file, tests)| ((*file).to_string(), tests.len()));
+        let by_file_min_tests_affected_by_change = sorted_file_to_test_map.first().map(|(file, tests)| ((*file).clone(), tests.len()));
         let by_file_median_tests_affected_by_change = if !sorted_file_to_test_map.is_empty() {
             let middle_index = sorted_file_to_test_map.len() / 2;
             let (file, tests) = &sorted_file_to_test_map[middle_index];
-            Some(((*file).to_string(), tests.len()))
+            Some(((*file).clone(), tests.len()))
         } else {
             None
         };
-        let by_file_max_tests_affected_by_change = sorted_file_to_test_map.last().map(|(file, tests)| ((*file).to_string(), tests.len()));
+        let by_file_max_tests_affected_by_change = sorted_file_to_test_map.last().map(|(file, tests)| ((*file).clone(), tests.len()));
 
         let input_file_total_tests_affected = sorted_file_to_test_map.iter().map(|(_, tests)| tests.len()).sum();
         let input_file_count = sorted_file_to_test_map.len();
@@ -153,24 +153,24 @@ mod tests {
     fn test_add_file_to_test() {
         let mut coverage_data = CoverageData::new();
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file1.rs".to_string(),
+            file_name: PathBuf::from("file1.rs"),
             test_name: "test1".to_string(),
         });
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file1.rs".to_string(),
+            file_name: PathBuf::from("file1.rs"),
             test_name: "test2".to_string(),
         });
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file2.rs".to_string(),
+            file_name: PathBuf::from("file2.rs"),
             test_name: "test1".to_string(),
         });
 
         assert_eq!(coverage_data.file_to_test_map().len(), 2);
-        assert_eq!(coverage_data.file_to_test_map().get("file1.rs").unwrap().len(), 2);
-        assert_eq!(coverage_data.file_to_test_map().get("file2.rs").unwrap().len(), 1);
-        assert!(coverage_data.file_to_test_map().get("file1.rs").unwrap().contains("test1"));
-        assert!(coverage_data.file_to_test_map().get("file1.rs").unwrap().contains("test2"));
-        assert!(coverage_data.file_to_test_map().get("file2.rs").unwrap().contains("test1"));
+        assert_eq!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().len(), 2);
+        assert_eq!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().len(), 1);
+        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains("test1"));
+        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains("test2"));
+        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().contains("test1"));
     }
 
     #[test]
@@ -225,29 +225,29 @@ mod tests {
         coverage_data.add_test("test3"); // touches 3 files
 
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file1.rs".to_string(),
+            file_name: PathBuf::from("file1.rs"),
             test_name: "test1".to_string(),
         });
 
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file1.rs".to_string(),
+            file_name: PathBuf::from("file1.rs"),
             test_name: "test2".to_string(),
         });
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file2.rs".to_string(),
+            file_name: PathBuf::from("file2.rs"),
             test_name: "test2".to_string(),
         });
 
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file1.rs".to_string(),
+            file_name: PathBuf::from("file1.rs"),
             test_name: "test3".to_string(),
         });
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file2.rs".to_string(),
+            file_name: PathBuf::from("file2.rs"),
             test_name: "test3".to_string(),
         });
         coverage_data.add_file_to_test(FileCoverage {
-            file_name: "file3.rs".to_string(),
+            file_name: PathBuf::from("file3.rs"),
             test_name: "test3".to_string(),
         });
 
@@ -255,9 +255,9 @@ mod tests {
 
         assert_eq!(stats.input_file_count, 3);
         assert_eq!(stats.input_file_total_tests_affected, 6);
-        assert_eq!(stats.by_file_min_tests_affected_by_change, Some(("file3.rs".to_string(), 1)));
-        assert_eq!(stats.by_file_median_tests_affected_by_change, Some(("file2.rs".to_string(), 2)));
-        assert_eq!(stats.by_file_max_tests_affected_by_change, Some(("file1.rs".to_string(), 3)));
+        assert_eq!(stats.by_file_min_tests_affected_by_change, Some((PathBuf::from("file3.rs"), 1)));
+        assert_eq!(stats.by_file_median_tests_affected_by_change, Some((PathBuf::from("file2.rs"), 2)));
+        assert_eq!(stats.by_file_max_tests_affected_by_change, Some((PathBuf::from("file1.rs"), 3)));
     }
 
     #[test]

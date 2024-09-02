@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::{self}, io::{BufReader, Read}, path::Path};
+use std::{collections::HashSet, fs::{self}, io::{BufReader, Read}, path::{Path, PathBuf}};
 use coverage_map::{CoverageData, FileCoverage, FunctionCoverage};
 use lcov::{Reader, Record};
 use clap::{Parser, Subcommand, Args};
@@ -164,7 +164,7 @@ fn process_diff_file(coverage_data: &CoverageData, diff_file: &str, repository_r
         let file_abs = repository_root_abs.join(file);
         println!("changed file, abs: {:?}", file_abs);
 
-        if let Some(tests) = coverage_data.file_to_test_map().get(file_abs.to_str().unwrap()) {
+        if let Some(tests) = coverage_data.file_to_test_map().get(&file_abs) {
             println!("\tFound {} tests", tests.len());
             tests_to_run.extend(tests.iter().cloned());
         }
@@ -399,7 +399,7 @@ fn process_lcov<T: Read>(
 ) {
     let buf_reader = BufReader::new(reader);
     let reader = Reader::new(buf_reader);
-    let mut current_source_file: Option<String> = None;
+    let mut current_source_file: Option<PathBuf> = None;
     let mut current_source_file_is_hit = false;
 
     for record in reader {
@@ -417,7 +417,7 @@ fn process_lcov<T: Read>(
                     _ => {}
                 }
                 // update_file_to_test_map(file_to_test_map, &current_source_file, test_name, current_source_file_is_hit);
-                current_source_file = Some(path.to_str().expect("Invalid UTF-8 in path").to_string());
+                current_source_file = Some(path);
                 current_source_file_is_hit = false;
             }
             Ok(Record::LineData { count, .. }) if count > 0 => {
@@ -468,7 +468,7 @@ fn process_profraw<T: Read>(
         for file in metadata.file_paths {
             coverage_data.add_file_to_test(
                 FileCoverage {
-                    file_name: file.to_str().expect("path->str").to_string(),
+                    file_name: file,
                     test_name: test_name.to_string(),
                 }
             );
@@ -487,13 +487,13 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     // let total_tests = file_to_test_map.values().map(|tests| tests.len()).sum::<usize>();
 
     // Example analysis (unchanged)
-    if let Some(tests_affected) = coverage_data.file_to_test_map().get("/home/mfenniak/Dev/rust-coverage-thingy/src/main.rs") {
+    if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("/home/mfenniak/Dev/rust-coverage-thingy/src/main.rs")) {
         println!(
             "If src/main.rs is changed, {} tests need to be rerun ({:?})",
             tests_affected.len(),
             tests_affected,
         );
-    } else if let Some(tests_affected) = coverage_data.file_to_test_map().get("src/main.rs") {
+    } else if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("src/main.rs")) {
         println!(
             "If src/main.rs is changed, {} tests need to be rerun ({:?})",
             tests_affected.len(),
@@ -503,13 +503,13 @@ fn print_analysis_results(coverage_data: &CoverageData) {
         println!("can't find src/main.rs");
     }
 
-    if let Some(tests_affected) = coverage_data.file_to_test_map().get("/home/mfenniak/Dev/rust-coverage-thingy/src/rust_llvm.rs") {
+    if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("/home/mfenniak/Dev/rust-coverage-thingy/src/rust_llvm.rs")) {
         println!(
             "If src/rust_llvm.rs is changed, {} tests need to be rerun ({:?})",
             tests_affected.len(),
             tests_affected,
         );
-    } else if let Some(tests_affected) = coverage_data.file_to_test_map().get("src/rust_llvm.rs") {
+    } else if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("src/rust_llvm.rs")) {
         println!(
             "If src/rust_llvm.rs is changed, {} tests need to be rerun ({:?})",
             tests_affected.len(),
@@ -539,7 +539,7 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     println!("file\ttests-to-rerun\ttotal-tests");
     for (file, tests_affected) in coverage_data.file_to_test_map() {
         println!(
-            "{}\t{}\t{}",
+            "{:?}\t{}\t{}",
             file,
             tests_affected.len(),
             total_tests,
