@@ -519,7 +519,7 @@ fn print_analysis_results(coverage_data: &CoverageData) {
         println!("can't find src/rust_llvm.rs");
     }
 
-    let stats = calculate_statistics(coverage_data);
+    let stats = coverage_data.calculate_statistics();
 
     if stats.input_file_count == 0 || total_tests == 0 {
         // Avoid division by zero
@@ -568,71 +568,6 @@ fn print_analysis_results(coverage_data: &CoverageData) {
             tests_affected.len(),
             total_tests,
         );
-    }
-}
-
-struct TestFileStatistics {
-    input_file_count: usize,
-    input_file_total_tests_affected: usize,
-    by_file_min_tests_affected_by_change: Option<(String, usize)>,
-    by_file_median_tests_affected_by_change: Option<(String, usize)>,
-    by_file_max_tests_affected_by_change: Option<(String, usize)>,
-
-    input_function_count: usize,
-    input_function_total_tests_affected: usize,
-    by_function_min_tests_affected_by_change: Option<(String, usize)>,
-    by_function_median_tests_affected_by_change: Option<(String, usize)>,
-    by_function_max_tests_affected_by_change: Option<(String, usize)>,
-}
-
-fn calculate_statistics(coverage_data: &CoverageData) -> TestFileStatistics {
-    // Calculate a lowest, highest, and median test file -- take the file_to_test_map hashmap and create a version that
-    // is sorted by the length of its tests so that we can just pull the first, middle, and last one:
-    let mut sorted_file_to_test_map: Vec<(&String, &HashSet<String>)> = coverage_data.file_to_test_map().iter().collect();
-    sorted_file_to_test_map.sort_by_key(|(_, tests)| tests.len());
-
-    let by_file_min_tests_affected_by_change = sorted_file_to_test_map.first().map(|(file, tests)| ((*file).to_string(), tests.len()));
-    let by_file_median_tests_affected_by_change = if !sorted_file_to_test_map.is_empty() {
-        let middle_index = sorted_file_to_test_map.len() / 2;
-        let (file, tests) = &sorted_file_to_test_map[middle_index];
-        Some(((*file).to_string(), tests.len()))
-    } else {
-        None
-    };
-    let by_file_max_tests_affected_by_change = sorted_file_to_test_map.last().map(|(file, tests)| ((*file).to_string(), tests.len()));
-
-    let input_file_total_tests_affected = sorted_file_to_test_map.iter().map(|(_, tests)| tests.len()).sum();
-    let input_file_count = sorted_file_to_test_map.len();
-
-    // Repeat stats calculation by function
-    let mut sorted_function_to_test_map: Vec<(&String, &HashSet<String>)> = coverage_data.function_to_test_map().iter().collect();
-    sorted_function_to_test_map.sort_by_key(|(_, tests)| tests.len());
-
-    let by_function_min_tests_affected_by_change = sorted_function_to_test_map.first().map(|(function, tests)| ((*function).to_string(), tests.len()));
-    let by_function_median_tests_affected_by_change = if !sorted_function_to_test_map.is_empty() {
-        let middle_index = sorted_function_to_test_map.len() / 2;
-        let (function, tests) = &sorted_function_to_test_map[middle_index];
-        Some(((*function).to_string(), tests.len()))
-    } else {
-        None
-    };
-    let by_function_max_tests_affected_by_change = sorted_function_to_test_map.last().map(|(function, tests)| ((*function).to_string(), tests.len()));
-
-    let input_function_total_tests_affected = sorted_function_to_test_map.iter().map(|(_, tests)| tests.len()).sum();
-    let input_function_count = sorted_function_to_test_map.len();
-
-    TestFileStatistics {
-        input_file_count,
-        input_file_total_tests_affected,
-        by_file_min_tests_affected_by_change,
-        by_file_median_tests_affected_by_change,
-        by_file_max_tests_affected_by_change,
-
-        input_function_count,
-        input_function_total_tests_affected,
-        by_function_min_tests_affected_by_change,
-        by_function_median_tests_affected_by_change,
-        by_function_max_tests_affected_by_change,
     }
 }
 
