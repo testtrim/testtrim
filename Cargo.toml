@@ -9,3 +9,6 @@ clap = { version = "*", features = ["derive"] }
 tar = "*"
 bzip2 = "*"
 sevenz-rust = "*"
+llvm_profparser = "*"
+anyhow = "*"
+thiserror = "*"

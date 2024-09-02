@@ -1,9 +1,12 @@
 use std::{collections::{HashMap, HashSet}, fs, io::{BufReader, Read}, path::Path};
 use lcov::{Reader, Record};
 use clap::{Parser, Subcommand, Args};
+use rust_llvm::{CoverageLibrary, ProfilingData};
 use tar::Archive;
 use bzip2::read::BzDecoder;
 use sevenz_rust::{Password, SevenZReader};
+
+mod rust_llvm;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -28,6 +31,15 @@ enum Commands {
         #[clap(short, long, value_parser)]
         repository_root: String,
     },
+
+    PrintStats2 {
+        #[clap(flatten)]
+        coverage_source: CoverageSource,
+
+        /// Path of one or more binaries to read LLVM instrumentation data from
+        #[clap(short, long, value_parser)]
+        binaries: Vec<String>,
+    }
 }
 
 #[derive(Args)]
@@ -68,7 +80,52 @@ fn main() {
                 unreachable!("Either coverage_dir or coverage_archive must be provided")
             };
 
-            process_diff_file(&coverage_data, &diff_file, &repository_root);
+            process_diff_file(&coverage_data, diff_file, repository_root);
+        },
+        Commands::PrintStats2 { coverage_source, binaries } => {
+
+            let mut coverage_library = CoverageLibrary::new();
+            for binary in binaries {
+                println!("Loading binary ...");
+                let binary_path = Path::new(binary);
+                coverage_library.load_binary(binary_path).expect("load_binary");
+                // let coverage_data = read_object_file(binary_path, &coverage_library).expect("Failed to read object file");
+                // println!("Coverage data for {}: {:?}", binary, coverage_data);
+            }
+
+            let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+                let coverage_dir = Path::new(dir);
+                process_profraw_coverage_files(&coverage_library, coverage_dir)
+            } else if let Some(archive) = &coverage_source.coverage_archive {
+                let archive_path = Path::new(archive);
+                process_profraw_coverage_archive(&coverage_library, archive_path)
+            } else {
+                unreachable!("Either coverage_dir or coverage_archive must be provided")
+            };
+            print_analysis_results(&coverage_data);
+
+            // let test_file = "/home/mfenniak/Dev/alacritty/coverage-output/alacritty-96e68ef375a5c974/string::tests::into_shortened_with_shortener.profraw";
+            // let test_data = ProfilingData::new_from_profraw(Path::new(test_file)).expect("new_from_profraw");
+
+            // for point in test_data.get_hit_instrumentation_points() {
+            //     println!("found point...");
+
+            //     let metadata = coverage_library.search_metadata(&point).expect("search_metadata");
+            //     println!("metadata: {:?}", metadata);
+            // }
+
+
+
+            // coverage_source.coverage_dir.unwrap()
+
+            // for test_executor_entry in fs::read_dir(coverage_dir).expect("Failed to read coverage directory") {
+            //     let test_executor_path = test_executor_entry.expect("Failed to read directory entry").path();
+            //     println!("Test executor binary: {}", test_executor_path.display());
+
+            //     process_test_executor_directory(&test_executor_path, &mut file_to_test_map, &mut test_set, &mut function_to_test_map);
+            // }
+
+
         },
     }
 }
@@ -94,10 +151,10 @@ fn process_diff_file(coverage_data: &CoverageData, diff_file: &str, repository_r
         let file_abs = repository_root_abs.join(file);
         println!("changed file, abs: {:?}", file_abs);
 
-        coverage_data.file_to_test_map.get(file_abs.to_str().unwrap()).map(|tests| {
+        if let Some(tests) = coverage_data.file_to_test_map.get(file_abs.to_str().unwrap()) {
             println!("\tFound {} tests", tests.len());
             tests_to_run.extend(tests.iter().cloned());
-        });
+        }
     }
 
     println!("{} tests to execute", tests_to_run.len());
@@ -165,6 +222,51 @@ fn process_test_executor_directory(
     }
 }
 
+fn process_profraw_coverage_files(coverage_library: &CoverageLibrary, coverage_dir: &Path) -> CoverageData {
+    let mut test_set: HashSet<String> = HashSet::new();
+    let mut file_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut function_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for test_executor_entry in fs::read_dir(coverage_dir).expect("Failed to read coverage directory") {
+        let test_executor_path = test_executor_entry.expect("Failed to read directory entry").path();
+        println!("Test executor binary: {}", test_executor_path.display());
+
+        process_profraw_test_executor_directory(&test_executor_path, coverage_library, &mut file_to_test_map, &mut test_set, &mut function_to_test_map);
+    }
+
+    CoverageData {
+        test_set,
+        file_to_test_map,
+        function_to_test_map,
+    }
+}
+
+fn process_profraw_test_executor_directory(
+    test_executor_path: &Path,
+    coverage_library: &CoverageLibrary,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    test_set: &mut HashSet<String>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    for test_output_entry in fs::read_dir(test_executor_path).expect("Failed to read test executor directory") {
+        let test_output_path = test_output_entry.expect("Failed to read directory entry").path();
+
+        if let Some("profraw") = test_output_path.extension().and_then(|ext| ext.to_str()) {
+            println!("\tTest case: {}", test_output_path.display());
+
+            let test_name = test_output_path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("Failed to extract test name")
+                .to_string();
+
+            test_set.insert(test_output_path.to_str().unwrap().to_string());
+
+            let file = fs::File::open(&test_output_path).expect("Failed to open LCOV file");
+            process_profraw(file, &test_name, coverage_library, file_to_test_map, function_to_test_map);
+        }
+    }
+}
+
 fn process_coverage_archive(archive_path: &Path) -> CoverageData {
     let mut test_set: HashSet<String> = HashSet::new();
     let mut file_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
@@ -175,6 +277,26 @@ fn process_coverage_archive(archive_path: &Path) -> CoverageData {
     match extension {
         "bz2" => process_tar_bz2(archive_path, &mut test_set, &mut file_to_test_map, &mut function_to_test_map),
         "7z" => process_7z(archive_path, &mut test_set, &mut file_to_test_map, &mut function_to_test_map),
+        _ => panic!("Unsupported archive format"),
+    }
+
+    CoverageData {
+        test_set,
+        file_to_test_map,
+        function_to_test_map,
+    }
+}
+
+fn process_profraw_coverage_archive(coverage_library: &CoverageLibrary, archive_path: &Path) -> CoverageData {
+    let mut test_set: HashSet<String> = HashSet::new();
+    let mut file_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut function_to_test_map: HashMap<String, HashSet<String>> = HashMap::new();
+
+    let extension = archive_path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+
+    match extension {
+        "bz2" => process_profraw_tar_bz2(coverage_library, archive_path, &mut test_set, &mut file_to_test_map, &mut function_to_test_map),
+        "7z" => process_profraw_7z(coverage_library, archive_path, &mut test_set, &mut file_to_test_map, &mut function_to_test_map),
         _ => panic!("Unsupported archive format"),
     }
 
@@ -203,6 +325,25 @@ fn process_tar_bz2(
     }
 }
 
+fn process_profraw_tar_bz2(
+    coverage_library: &CoverageLibrary,
+    archive_path: &Path,
+    test_set: &mut HashSet<String>,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    let file = fs::File::open(archive_path).expect("Failed to open archive file");
+    let bz2 = BzDecoder::new(file);
+    let mut archive = Archive::new(bz2);
+
+    for entry in archive.entries().expect("Failed to read archive entries") {
+        let mut entry = entry.expect("Failed to read archive entry");
+        let path = entry.path().unwrap().to_str().unwrap().to_string();
+        println!("bz2: {}", path);
+        process_profraw_archive_entry(coverage_library, &path, &mut entry, test_set, file_to_test_map, function_to_test_map);
+    }
+}
+
 fn process_7z(
     archive_path: &Path,
     test_set: &mut HashSet<String>,
@@ -215,6 +356,23 @@ fn process_7z(
     sz.for_each_entries(|entry, reader| {
         println!("7z: {}", entry.name());
         process_archive_entry(entry.name(), reader, test_set, file_to_test_map, function_to_test_map);
+        Ok(true) // FIXME: not sure if true or false is needed here
+    }).expect("for_each_entries");
+}
+
+fn process_profraw_7z(
+    coverage_library: &CoverageLibrary,
+    archive_path: &Path,
+    test_set: &mut HashSet<String>,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    // let file = fs::File::open(archive_path).expect("Failed to open archive file");
+    let mut sz = SevenZReader::open(archive_path, Password::empty()).expect("Failed to create 7z reader");
+
+    sz.for_each_entries(|entry, reader| {
+        println!("7z: {}", entry.name());
+        process_profraw_archive_entry(coverage_library, entry.name(), reader, test_set, file_to_test_map, function_to_test_map);
         Ok(true) // FIXME: not sure if true or false is needed here
     }).expect("for_each_entries");
 }
@@ -235,6 +393,25 @@ fn process_archive_entry<R: Read + ?Sized>(
             .to_string();
         test_set.insert(test_name.clone());
         process_lcov(entry, &test_name, file_to_test_map, function_to_test_map);
+    }
+}
+
+fn process_profraw_archive_entry<R: Read + ?Sized>(
+    coverage_library: &CoverageLibrary,
+    entry_name: &str,
+    entry: &mut R,
+    test_set: &mut HashSet<String>,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    if entry_name.ends_with(".profraw") {
+        let test_name = Path::new(entry_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("Failed to extract test name")
+            .to_string();
+        test_set.insert(test_name.clone());
+        process_profraw(entry, &test_name, coverage_library, file_to_test_map, function_to_test_map);
     }
 }
 
@@ -270,20 +447,41 @@ fn process_lcov<T: Read>(
     }
 }
 
+fn process_profraw<T: Read>(
+    reader: T,
+    test_name: &str,
+    coverage_library: &CoverageLibrary,
+    file_to_test_map: &mut HashMap<String, HashSet<String>>,
+    function_to_test_map: &mut HashMap<String, HashSet<String>>,
+) {
+    let profiling_data = ProfilingData::new_from_profraw_reader(reader).expect("new_from_profraw_reader");
+
+    for point in profiling_data.get_hit_instrumentation_points() {
+        // println!("found point...");
+
+        let metadata = coverage_library.search_metadata(&point)
+            .expect("search_metadata success")
+            .expect("search_metadata returned value");
+        // println!("metadata: {:?}", metadata);
+
+        for file in metadata.file_paths {
+            update_file_to_test_map(file_to_test_map, &Some(file.to_str().expect("path->str").to_string()), test_name, true);
+        }
+        update_function_to_test_map(function_to_test_map, &metadata.function_name, test_name);
+    }
+}
+
 fn update_file_to_test_map(
     file_to_test_map: &mut HashMap<String, HashSet<String>>,
     current_source_file: &Option<String>,
     test_name: &str,
     is_hit: bool,
 ) {
-    match (is_hit, current_source_file) {
-        (true, Some(source_file)) => {
-            file_to_test_map
-                .entry(source_file.clone())
-                .or_insert_with(HashSet::new)
-                .insert(test_name.to_string());
-        }
-        (_, _) => {}
+    if let (true, Some(source_file)) = (is_hit, current_source_file) {
+        file_to_test_map
+            .entry(source_file.clone())
+            .or_default()
+            .insert(test_name.to_string());
     }
 }
 
@@ -294,7 +492,7 @@ fn update_function_to_test_map(
 ) {
     function_to_test_map
         .entry(function_name.to_string())
-        .or_insert_with(HashSet::new)
+        .or_default()
         .insert(test_name.to_string());
 }
 
@@ -312,7 +510,7 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     //     );
     // }
 
-    let stats = calculate_statistics(&coverage_data);
+    let stats = calculate_statistics(coverage_data);
 
     if stats.input_file_count == 0 || total_tests == 0 {
         // Avoid division by zero
@@ -379,7 +577,6 @@ struct TestFileStatistics {
 }
 
 fn calculate_statistics(coverage_data: &CoverageData) -> TestFileStatistics {
-
     // Calculate a lowest, highest, and median test file -- take the file_to_test_map hashmap and create a version that
     // is sorted by the length of its tests so that we can just pull the first, middle, and last one:
     let mut sorted_file_to_test_map: Vec<(&String, &HashSet<String>)> = coverage_data.file_to_test_map.iter().collect();
@@ -427,46 +624,5 @@ fn calculate_statistics(coverage_data: &CoverageData) -> TestFileStatistics {
         by_function_min_tests_affected_by_change,
         by_function_median_tests_affected_by_change,
         by_function_max_tests_affected_by_change,
-    }
-}
-
-fn function1() {
-    println!("Function 1");
-
-    // Just to create some coverage data, let's check if a specific file exists and print some other lines.
-    let path = std::path::Path::new("src/main.rs");
-    if path.exists() {
-        println!("File exists!");
-    } else {
-        println!("File does not exist!");
-    }
-}
-
-fn function2() {
-    println!("Function 2");
-}
-
-fn function3() {
-    println!("Function 3");
-}
-
-// unit tests, fake
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_function1() {
-        function1();
-    }
-
-    #[test]
-    fn test_function2() {
-        function2();
-    }
-
-    #[test]
-    fn test_function3() {
-        function3();
     }
 }
