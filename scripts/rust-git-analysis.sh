@@ -27,10 +27,6 @@ tar -xvf ../archive-pre-$COMMIT.tgz
 rm ../archive-pre-$COMMIT.tgz
 ../rust-test-runner.sh
 
-# Remove unnecessary files... probably ought to clean this up in rust-test-runner.sh
-find coverage-output | grep profraw$ | xargs rm
-find coverage-output | grep profdata$ | xargs rm
-
 # tar -jcvf ../coverage-output-pre-$COMMIT.tar.bz2 coverage-output
 7z a ../coverage-output-pre-$COMMIT.7z coverage-output
 
@@ -38,4 +34,4 @@ find coverage-output | grep profdata$ | xargs rm
 git diff --name-only $COMMIT^ $COMMIT > ../coverage-files-changed-$COMMIT.txt
 
 popd
-rm -rf tmp-$COMMIT
+# rm -rf tmp-$COMMIT # Need to keep this around for the test binaries

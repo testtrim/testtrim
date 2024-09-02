@@ -37,19 +37,5 @@ do
     test_result=$?
     set -e
     # FIXME: do something with test failure?
-
-    cargo profdata -- merge -sparse coverage-output/$bname/$t.profraw -o coverage-output/$bname/$t.profdata
-
-    cargo cov -- export \
-      -Xdemangler=rustfilt \
-      "${BINARY_ARGS[@]}" \
-      --format=lcov \
-      --instr-profile=coverage-output/$bname/$t.profdata \
-      > coverage-output/$bname/$t.lcov
   done
 done
-
-# cargo cov -- report \
-#     -Xdemangler=rustfilt \
-#     ./target/debug/deps/alacritty_terminal-9aa76ce6cd8a2b47 \
-#     --instr-profile=./coverage-output/alacritty_terminal-9aa76ce6cd8a2b47/term::tests::simple_selection_works.profdata
