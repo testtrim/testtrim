@@ -149,7 +149,7 @@ pub struct InstrumentationPointMetadata {
 /// This function is just used for internal testing of coverage reporting, and should be ignored otherwise.
 #[allow(dead_code)]
 pub fn sentinel_function() -> i32 {
-    return 1 + 1;
+    1 + 1
 }
 
 #[cfg(test)]
@@ -170,6 +170,4 @@ mod tests {
         let x = 1 + 1;
         assert_eq!(x, 2);
     }
-
-
 }
