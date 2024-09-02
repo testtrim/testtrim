@@ -1,0 +1,18 @@
+name: Rust Checks
+
+on: [push]
+
+jobs:
+  rust-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: apt-get update && apt-get install -y sudo awscli # install-nix-actions requires `sudo`...
+      - uses: https://github.com/cachix/install-nix-action@v22
+      # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
+      # we're running as a Gitea action so Gitea puts its own token in {{ github.token }} which GitHub can't understand.
+      # So we replace github.com in the access-token field of the nix.conf file.
+      - run: sed -i 's/github.com/gitea.kainnef.com/' /etc/nix/nix.conf
+      - run: nix develop .# --command cargo build
+      - run: nix develop .# --command cargo test
+      - run: nix develop .# --command cargo clippy -- -D warnings
