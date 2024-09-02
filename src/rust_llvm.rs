@@ -146,6 +146,12 @@ pub struct InstrumentationPointMetadata {
     pub function_name: String,
 }
 
+/// This function is just used for internal testing of coverage reporting, and should be ignored otherwise.
+#[allow(dead_code)]
+pub fn sentinel_function() -> i32 {
+    return 1 + 1;
+}
+
 #[cfg(test)]
 mod tests {
     use std::env::current_exe;
@@ -156,4 +162,14 @@ mod tests {
         let mut lib = CoverageLibrary::new();
          lib.load_binary(&current_exe().expect("current_exe()")).expect("failed to load binary");
     }
+
+    /// This is a sentinel test that doesn't reach outside of this module, and should only have this file (eg.
+    /// rust_llvm.rs) as a dependency for execution.
+    #[test]
+    fn sentinel_local_file() {
+        let x = 1 + 1;
+        assert_eq!(x, 2);
+    }
+
+
 }

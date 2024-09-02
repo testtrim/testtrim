@@ -501,14 +501,37 @@ fn print_analysis_results(coverage_data: &CoverageData) {
     // let total_tests = file_to_test_map.values().map(|tests| tests.len()).sum::<usize>();
 
     // Example analysis (unchanged)
-    // if let Some(tests_affected) = coverage_data.file_to_test_map.get("/home/mfenniak/Dev/alacritty/alacritty_terminal/src/term/cell.rs") {
-    //     println!(
-    //         "If alacritty_terminal/src/term/cell.rs is changed, {} tests need to be rerun, out of {} tests; {}% of tests",
-    //         tests_affected.len(),
-    //         total_tests,
-    //         100 * tests_affected.len() / total_tests
-    //     );
-    // }
+    if let Some(tests_affected) = coverage_data.file_to_test_map.get("/home/mfenniak/Dev/rust-coverage-thingy/src/main.rs") {
+        println!(
+            "If src/main.rs is changed, {} tests need to be rerun ({:?})",
+            tests_affected.len(),
+            tests_affected,
+        );
+    } else if let Some(tests_affected) = coverage_data.file_to_test_map.get("src/main.rs") {
+        println!(
+            "If src/main.rs is changed, {} tests need to be rerun ({:?})",
+            tests_affected.len(),
+            tests_affected,
+        );
+    } else {
+        println!("can't find src/main.rs");
+    }
+
+    if let Some(tests_affected) = coverage_data.file_to_test_map.get("/home/mfenniak/Dev/rust-coverage-thingy/src/rust_llvm.rs") {
+        println!(
+            "If src/rust_llvm.rs is changed, {} tests need to be rerun ({:?})",
+            tests_affected.len(),
+            tests_affected,
+        );
+    } else if let Some(tests_affected) = coverage_data.file_to_test_map.get("src/rust_llvm.rs") {
+        println!(
+            "If src/rust_llvm.rs is changed, {} tests need to be rerun ({:?})",
+            tests_affected.len(),
+            tests_affected,
+        );
+    } else {
+        println!("can't find src/rust_llvm.rs");
+    }
 
     let stats = calculate_statistics(coverage_data);
 
@@ -624,5 +647,19 @@ fn calculate_statistics(coverage_data: &CoverageData) -> TestFileStatistics {
         by_function_min_tests_affected_by_change,
         by_function_median_tests_affected_by_change,
         by_function_max_tests_affected_by_change,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rust_llvm::sentinel_function;
+
+    /// This is a sentinel test that doesn't reach outside of this project, but does go from main.rs -> rust_llvm.rs.
+    /// As a result, this test should be considered for re-run if rust_llvm.rs changes or main.rs changes, but nothing
+    /// else.
+    #[test]
+    fn sentinel_internal_file() {
+        let x = sentinel_function();
+        assert_eq!(x, 2);
     }
 }
