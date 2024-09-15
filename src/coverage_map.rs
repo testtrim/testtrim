@@ -1,19 +1,39 @@
 use std::{collections::{HashMap, HashSet}, path::PathBuf};
+use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
+pub struct RustTestIdentifier {
+    /// Project-relative source path that defines the binary which contains the test.  For example,
+    /// some_module/src/lib.rs.
+    pub test_src_path: PathBuf,
+    /// Name of the test.  For example, basic_ops::tests::test_add.
+    pub test_name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CoverageData {
-    test_set: HashSet<String>,
-    file_to_test_map: HashMap<PathBuf, HashSet<String>>,
-    function_to_test_map: HashMap<String, HashSet<String>>,
+    // FIXME: RustTestIdentifier is specific to Rust -- in the future this structure probably becomes generic over
+    // different types of test identifier storage.
+    test_set: HashSet<RustTestIdentifier>,
+    file_to_test_map: HashMap<PathBuf, HashSet<RustTestIdentifier>>,
+    function_to_test_map: HashMap<String, HashSet<RustTestIdentifier>>,
 }
 
 pub struct FileCoverage {
     pub file_name: PathBuf,
-    pub test_name: String,
+    pub test_identifier: RustTestIdentifier,
 }
 
 pub struct FunctionCoverage {
     pub function_name: String,
-    pub test_name: String,
+    pub test_identifier: RustTestIdentifier,
+}
+
+impl Default for CoverageData {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CoverageData {
@@ -25,20 +45,20 @@ impl CoverageData {
         }
     }
 
-    pub fn test_set(&self) -> &HashSet<String> {
+    pub fn test_set(&self) -> &HashSet<RustTestIdentifier> {
         &self.test_set
     }
 
-    pub fn file_to_test_map(&self) -> &HashMap<PathBuf, HashSet<String>> {
+    pub fn file_to_test_map(&self) -> &HashMap<PathBuf, HashSet<RustTestIdentifier>> {
         &self.file_to_test_map
     }
 
-    pub fn function_to_test_map(&self) -> &HashMap<String, HashSet<String>> {
+    pub fn function_to_test_map(&self) -> &HashMap<String, HashSet<RustTestIdentifier>> {
         &self.function_to_test_map
     }
 
-    pub fn add_test(&mut self, test_name: &str) {
-        self.test_set.insert(test_name.to_string());
+    pub fn add_test(&mut self, test_identifier: RustTestIdentifier) {
+        self.test_set.insert(test_identifier);
     }
 
     pub fn add_file_to_test(&mut self, coverage: FileCoverage) {
@@ -47,7 +67,7 @@ impl CoverageData {
         self.file_to_test_map
             .entry(coverage.file_name)
             .or_default()
-            .insert(coverage.test_name);
+            .insert(coverage.test_identifier);
     }
 
     pub fn add_function_to_test(&mut self, coverage: FunctionCoverage) {
@@ -56,7 +76,7 @@ impl CoverageData {
         self.function_to_test_map
             .entry(coverage.function_name)
             .or_default()
-            .insert(coverage.test_name);
+            .insert(coverage.test_identifier);
     }
 }
 
@@ -78,7 +98,7 @@ impl CoverageData {
     pub fn calculate_statistics(&self) -> TestFileStatistics {
         // Calculate a lowest, highest, and median test file -- take the file_to_test_map hashmap and create a version that
         // is sorted by the length of its tests so that we can just pull the first, middle, and last one:
-        let mut sorted_file_to_test_map: Vec<(&PathBuf, &HashSet<String>)> = self.file_to_test_map().iter().collect();
+        let mut sorted_file_to_test_map: Vec<(&PathBuf, &HashSet<RustTestIdentifier>)> = self.file_to_test_map().iter().collect();
         sorted_file_to_test_map.sort_by_key(|(_, tests)| tests.len());
 
         let by_file_min_tests_affected_by_change = sorted_file_to_test_map.first().map(|(file, tests)| ((*file).clone(), tests.len()));
@@ -95,7 +115,7 @@ impl CoverageData {
         let input_file_count = sorted_file_to_test_map.len();
 
         // Repeat stats calculation by function
-        let mut sorted_function_to_test_map: Vec<(&String, &HashSet<String>)> = self.function_to_test_map().iter().collect();
+        let mut sorted_function_to_test_map: Vec<(&String, &HashSet<RustTestIdentifier>)> = self.function_to_test_map().iter().collect();
         sorted_function_to_test_map.sort_by_key(|(_, tests)| tests.len());
 
         let by_function_min_tests_affected_by_change = sorted_function_to_test_map.first().map(|(function, tests)| ((*function).to_string(), tests.len()));
@@ -130,6 +150,19 @@ impl CoverageData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lazy_static::lazy_static;
+
+    lazy_static! {
+        static ref test1: RustTestIdentifier = {
+            RustTestIdentifier { test_src_path: PathBuf::from("src/lib.rs"), test_name: "test1".to_string() }
+        };
+        static ref test2: RustTestIdentifier = {
+            RustTestIdentifier { test_src_path: PathBuf::from("src/lib.rs"), test_name: "test2".to_string() }
+        };
+        static ref test3: RustTestIdentifier = {
+            RustTestIdentifier { test_src_path: PathBuf::from("sub_module/src/lib.rs"), test_name: "test1".to_string() }
+        };
+    }
 
     #[test]
     fn test_new_coverage_data() {
@@ -142,11 +175,11 @@ mod tests {
     #[test]
     fn test_add_test() {
         let mut coverage_data = CoverageData::new();
-        coverage_data.add_test("test1");
-        coverage_data.add_test("test2");
+        coverage_data.add_test(test1.clone());
+        coverage_data.add_test(test2.clone());
         assert_eq!(coverage_data.test_set().len(), 2);
-        assert!(coverage_data.test_set().contains("test1"));
-        assert!(coverage_data.test_set().contains("test2"));
+        assert!(coverage_data.test_set().contains(&test1));
+        assert!(coverage_data.test_set().contains(&test2));
     }
 
     #[test]
@@ -154,23 +187,23 @@ mod tests {
         let mut coverage_data = CoverageData::new();
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_name: "test1".to_string(),
+            test_identifier: test1.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_name: "test2".to_string(),
+            test_identifier: test2.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file2.rs"),
-            test_name: "test1".to_string(),
+            test_identifier: test1.clone(),
         });
 
         assert_eq!(coverage_data.file_to_test_map().len(), 2);
         assert_eq!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().len(), 2);
         assert_eq!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().len(), 1);
-        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains("test1"));
-        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains("test2"));
-        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().contains("test1"));
+        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains(&test1));
+        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains(&test2));
+        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().contains(&test1));
     }
 
     #[test]
@@ -178,23 +211,23 @@ mod tests {
         let mut coverage_data = CoverageData::new();
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
-            test_name: "test1".to_string(),
+            test_identifier: test1.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
-            test_name: "test2".to_string(),
+            test_identifier: test2.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func2".to_string(),
-            test_name: "test1".to_string(),
+            test_identifier: test1.clone(),
         });
 
         assert_eq!(coverage_data.function_to_test_map().len(), 2);
         assert_eq!(coverage_data.function_to_test_map().get("func1").unwrap().len(), 2);
         assert_eq!(coverage_data.function_to_test_map().get("func2").unwrap().len(), 1);
-        assert!(coverage_data.function_to_test_map().get("func1").unwrap().contains("test1"));
-        assert!(coverage_data.function_to_test_map().get("func1").unwrap().contains("test2"));
-        assert!(coverage_data.function_to_test_map().get("func2").unwrap().contains("test1"));
+        assert!(coverage_data.function_to_test_map().get("func1").unwrap().contains(&test1));
+        assert!(coverage_data.function_to_test_map().get("func1").unwrap().contains(&test2));
+        assert!(coverage_data.function_to_test_map().get("func2").unwrap().contains(&test1));
     }
 
     #[test]
@@ -220,35 +253,35 @@ mod tests {
         let mut coverage_data = CoverageData::new();
 
         // Add some test data
-        coverage_data.add_test("test1"); // touches 1 file
-        coverage_data.add_test("test2"); // touches 2 files
-        coverage_data.add_test("test3"); // touches 3 files
+        coverage_data.add_test(test1.clone()); // touches 1 file
+        coverage_data.add_test(test2.clone()); // touches 2 files
+        coverage_data.add_test(test3.clone()); // touches 3 files
 
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_name: "test1".to_string(),
+            test_identifier: test1.clone(),
         });
 
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_name: "test2".to_string(),
+            test_identifier: test2.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file2.rs"),
-            test_name: "test2".to_string(),
+            test_identifier: test2.clone(),
         });
 
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_name: "test3".to_string(),
+            test_identifier: test3.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file2.rs"),
-            test_name: "test3".to_string(),
+            test_identifier: test3.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file3.rs"),
-            test_name: "test3".to_string(),
+            test_identifier: test3.clone(),
         });
 
         let stats = coverage_data.calculate_statistics();
@@ -265,35 +298,35 @@ mod tests {
         let mut coverage_data = CoverageData::new();
 
         // Add some test data
-        coverage_data.add_test("test1"); // touches 1 file
-        coverage_data.add_test("test2"); // touches 2 files
-        coverage_data.add_test("test3"); // touches 3 files
+        coverage_data.add_test(test1.clone()); // touches 1 file
+        coverage_data.add_test(test2.clone()); // touches 2 files
+        coverage_data.add_test(test3.clone()); // touches 3 files
 
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "function1".to_string(),
-            test_name: "test1".to_string(),
+            test_identifier: test1.clone(),
         });
 
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "function1".to_string(),
-            test_name: "test2".to_string(),
+            test_identifier: test2.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "function2".to_string(),
-            test_name: "test2".to_string(),
+            test_identifier: test2.clone(),
         });
 
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "function1".to_string(),
-            test_name: "test3".to_string(),
+            test_identifier: test3.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "function2".to_string(),
-            test_name: "test3".to_string(),
+            test_identifier: test3.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "function3".to_string(),
-            test_name: "test3".to_string(),
+            test_identifier: test3.clone(),
         });
 
         let stats = coverage_data.calculate_statistics();

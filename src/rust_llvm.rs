@@ -28,6 +28,12 @@ pub struct CoverageLibrary {
     object_files: Vec<CoverageMappingInfo>,
 }
 
+impl Default for CoverageLibrary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoverageLibrary {
     /// Create a new, blank coverage library.
     pub fn new() -> Self {
@@ -127,6 +133,7 @@ impl ProfilingData {
 
 /// Wrapper around NamedInstrProfRecord, which represents an instrumentation codepoint that may have been hit during an
 /// instrumented profiling run.
+#[derive(Debug)]
 pub struct InstrumentationPoint {
     rec: NamedInstrProfRecord
 }

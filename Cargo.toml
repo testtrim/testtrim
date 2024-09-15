@@ -12,3 +12,9 @@ sevenz-rust = "*"
 llvm_profparser = "*"
 anyhow = "*"
 thiserror = "*"
+serde = { version = "*", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "*"
+tempdir = "*"
+lazy_static = "*"

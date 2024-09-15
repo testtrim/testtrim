@@ -15,4 +15,6 @@ jobs:
       - run: sed -i 's/github.com/forgejo.kainnef.com/' /etc/nix/nix.conf
       - run: nix develop .# --command cargo build
       - run: nix develop .# --command cargo test
+        env:
+          RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
       - run: nix develop .# --command cargo clippy -- -D warnings
