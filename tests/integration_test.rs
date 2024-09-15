@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use rust_coverage_thingy::{process_command, Cli, Commands};
-use rust_coverage_thingy::coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
-use rust_coverage_thingy::rust_llvm::{CoverageLibrary, ProfilingData};
+use testtrim::{process_command, Cli, Commands};
+use testtrim::coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
+use testtrim::rust_llvm::{CoverageLibrary, ProfilingData};
 use serde_json::Value;
 use std::{env, fs, io};
 use std::collections::HashSet;
@@ -307,15 +307,15 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
 
 #[test]
 fn rust_linearcommits_filecoverage() -> Result<()> {
-    let tmp_dir = TempDir::new("rust-coverage-thingy-test")?;
+    let tmp_dir = TempDir::new("testtrim-test")?;
     let _tmp_dir_cwd = ChangeWorkingDirectory::new(tmp_dir.path());
 
     git_clone()?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("rust-coverage-specimen")); // FIXME: hack assumes folder name
 
-    // FIXME: This will run with the env of the rust-coverage-thingy project, which is OK for the short-term -- but it
-    // would make sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to
-    // start a shell and read .envrc, for any future commands?
+    // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
+    // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a
+    // shell and read .envrc, for any future commands?
 
     let base_coverage_data = {
         git_checkout("base")?;

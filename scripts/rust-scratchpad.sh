@@ -6,13 +6,13 @@ set -eux -o pipefail
 # cargo profdata -- merge -sparse default.profraw -o default.profdata
 # cargo cov -- show \
 #     -Xdemangler=rustfilt \
-#     target/debug/rust-coverage-thingy \
+#     target/debug/testtrim \
 #     --instr-profile=default.profdata \
 #     --show-line-counts-or-regions \
 #     --show-instantiations
 # cargo cov -- report \
 #     -Xdemangler=rustfilt \
-#     target/debug/rust-coverage-thingy \
+#     target/debug/testtrim \
 #     --instr-profile=default.profdata
 
 rm *.profraw

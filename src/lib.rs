@@ -483,7 +483,7 @@ pub fn process_command(cli: Cli) {
 //     // let total_tests = file_to_test_map.values().map(|tests| tests.len()).sum::<usize>();
 
 //     // Example analysis (unchanged)
-//     if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("/home/mfenniak/Dev/rust-coverage-thingy/src/main.rs")) {
+//     if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("/home/mfenniak/Dev/testtrim/src/main.rs")) {
 //         println!(
 //             "If src/main.rs is changed, {} tests need to be rerun ({:?})",
 //             tests_affected.len(),
@@ -499,7 +499,7 @@ pub fn process_command(cli: Cli) {
 //         println!("can't find src/main.rs");
 //     }
 
-//     if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("/home/mfenniak/Dev/rust-coverage-thingy/src/rust_llvm.rs")) {
+//     if let Some(tests_affected) = coverage_data.file_to_test_map().get(&PathBuf::from("/home/mfenniak/Dev/testtrim/src/rust_llvm.rs")) {
 //         println!(
 //             "If src/rust_llvm.rs is changed, {} tests need to be rerun ({:?})",
 //             tests_affected.len(),

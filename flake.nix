@@ -36,7 +36,7 @@
             # allows access to llvm-profdata
             # $ cargo profdata -- merge -sparse default.profraw -o default.profdata
             # and llvm-cov...
-            # $ cargo cov -- show -Xdemangler=rustfilt target/debug/rust-coverage-thingy -instr-profile=default.profdata -show-line-counts-or-regions -show-instantiations
+            # $ cargo cov -- show -Xdemangler=rustfilt target/debug/testtrim -instr-profile=default.profdata -show-line-counts-or-regions -show-instantiations
             cargo-binutils
           ];
 
