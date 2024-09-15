@@ -1,19 +1,13 @@
-use std::{
-    io::Read,
-    path::{
-        Path,
-        PathBuf
-    }
-};
+use anyhow::Result;
 use llvm_profparser::{
     coverage_mapping::read_object_file,
-    instrumentation_profile::types::{
-        InstrumentationProfile,
-        NamedInstrProfRecord
-    },
-    CoverageMappingInfo
+    instrumentation_profile::types::{InstrumentationProfile, NamedInstrProfRecord},
+    CoverageMappingInfo,
 };
-use anyhow::Result;
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 // #[derive(Error, Debug)]
 // pub enum RustLlvmError {
@@ -51,28 +45,27 @@ impl CoverageLibrary {
         Ok(())
     }
 
-    pub fn search_metadata(&self, point: &InstrumentationPoint) -> Result<Option<InstrumentationPointMetadata>> {
+    pub fn search_metadata(
+        &self,
+        point: &InstrumentationPoint,
+    ) -> Result<Option<InstrumentationPointMetadata>> {
         match (point.rec.name_hash, point.rec.hash) {
             (Some(name_hash), Some(fn_hash)) => {
-
                 // FIXME: This is a linear search; should build more efficient data structures in the future as object
                 // files are loaded.
                 for object_file in &self.object_files {
                     for c in &object_file.cov_fun {
                         if c.header.name_hash == name_hash && c.header.fn_hash == fn_hash {
-
                             // Find the file that matches the function
                             match object_file.cov_map.get(&c.header.filenames_ref) {
                                 Some(file) => {
                                     // FIXME: I don't know if the multiple file paths here are right... need to create
                                     // some synthetic test cases and verify that the references make sense to me, and
                                     // maybe verify some of the test-project cases to understand them.
-                                    return Ok(Some(
-                                        InstrumentationPointMetadata {
-                                            file_paths: file.clone(),
-                                            function_name: point.rec.name.clone().unwrap(),
-                                        }
-                                    ));
+                                    return Ok(Some(InstrumentationPointMetadata {
+                                        file_paths: file.clone(),
+                                        function_name: point.rec.name.clone().unwrap(),
+                                    }));
                                 }
                                 None => {
                                     println!("\t\tNo file found for function");
@@ -96,7 +89,7 @@ impl CoverageLibrary {
 /// ProfilingData is currently just a wrapper around llvm_profparser's InstrumentationProfile.  Wrapping these objects
 /// lightly in the rust_llvm module allows future complexity (which will likely be needed) to be isolated here.
 pub struct ProfilingData {
-    instrumentation_profile: InstrumentationProfile
+    instrumentation_profile: InstrumentationProfile,
 }
 
 impl ProfilingData {
@@ -123,7 +116,7 @@ impl ProfilingData {
             for c in rec.counts() {
                 if *c > 0 {
                     res.push(InstrumentationPoint { rec: rec.clone() });
-                    break
+                    break;
                 }
             }
         }
@@ -135,9 +128,8 @@ impl ProfilingData {
 /// instrumented profiling run.
 #[derive(Debug)]
 pub struct InstrumentationPoint {
-    rec: NamedInstrProfRecord
+    rec: NamedInstrProfRecord,
 }
-
 
 /// Metadata about an instrumentation point.  This is used to map the instrumentation point to a source file, and can
 /// have more specific information (probably in the future) like the function name.
@@ -161,13 +153,14 @@ pub fn sentinel_function() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::env::current_exe;
     use super::*;
+    use std::env::current_exe;
 
     #[test]
     fn load_binary() {
         let mut lib = CoverageLibrary::new();
-         lib.load_binary(&current_exe().expect("current_exe()")).expect("failed to load binary");
+        lib.load_binary(&current_exe().expect("current_exe()"))
+            .expect("failed to load binary");
     }
 
     /// This is a sentinel test that doesn't reach outside of this module, and should only have this file (eg.

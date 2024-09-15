@@ -1,4 +1,7 @@
-use std::{env, path::{Path, PathBuf}};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 pub struct ChangeWorkingDirectory {
     current_dir: PathBuf,

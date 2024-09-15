@@ -1,6 +1,9 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf};
-use std::hash::Hash;
 use serde::{Deserialize, Serialize};
+use std::hash::Hash;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct RustTestIdentifier {
@@ -98,10 +101,13 @@ impl CoverageData {
     pub fn calculate_statistics(&self) -> TestFileStatistics {
         // Calculate a lowest, highest, and median test file -- take the file_to_test_map hashmap and create a version that
         // is sorted by the length of its tests so that we can just pull the first, middle, and last one:
-        let mut sorted_file_to_test_map: Vec<(&PathBuf, &HashSet<RustTestIdentifier>)> = self.file_to_test_map().iter().collect();
+        let mut sorted_file_to_test_map: Vec<(&PathBuf, &HashSet<RustTestIdentifier>)> =
+            self.file_to_test_map().iter().collect();
         sorted_file_to_test_map.sort_by_key(|(_, tests)| tests.len());
 
-        let by_file_min_tests_affected_by_change = sorted_file_to_test_map.first().map(|(file, tests)| ((*file).clone(), tests.len()));
+        let by_file_min_tests_affected_by_change = sorted_file_to_test_map
+            .first()
+            .map(|(file, tests)| ((*file).clone(), tests.len()));
         let by_file_median_tests_affected_by_change = if !sorted_file_to_test_map.is_empty() {
             let middle_index = sorted_file_to_test_map.len() / 2;
             let (file, tests) = &sorted_file_to_test_map[middle_index];
@@ -109,26 +115,40 @@ impl CoverageData {
         } else {
             None
         };
-        let by_file_max_tests_affected_by_change = sorted_file_to_test_map.last().map(|(file, tests)| ((*file).clone(), tests.len()));
+        let by_file_max_tests_affected_by_change = sorted_file_to_test_map
+            .last()
+            .map(|(file, tests)| ((*file).clone(), tests.len()));
 
-        let input_file_total_tests_affected = sorted_file_to_test_map.iter().map(|(_, tests)| tests.len()).sum();
+        let input_file_total_tests_affected = sorted_file_to_test_map
+            .iter()
+            .map(|(_, tests)| tests.len())
+            .sum();
         let input_file_count = sorted_file_to_test_map.len();
 
         // Repeat stats calculation by function
-        let mut sorted_function_to_test_map: Vec<(&String, &HashSet<RustTestIdentifier>)> = self.function_to_test_map().iter().collect();
+        let mut sorted_function_to_test_map: Vec<(&String, &HashSet<RustTestIdentifier>)> =
+            self.function_to_test_map().iter().collect();
         sorted_function_to_test_map.sort_by_key(|(_, tests)| tests.len());
 
-        let by_function_min_tests_affected_by_change = sorted_function_to_test_map.first().map(|(function, tests)| ((*function).to_string(), tests.len()));
-        let by_function_median_tests_affected_by_change = if !sorted_function_to_test_map.is_empty() {
+        let by_function_min_tests_affected_by_change = sorted_function_to_test_map
+            .first()
+            .map(|(function, tests)| ((*function).to_string(), tests.len()));
+        let by_function_median_tests_affected_by_change = if !sorted_function_to_test_map.is_empty()
+        {
             let middle_index = sorted_function_to_test_map.len() / 2;
             let (function, tests) = &sorted_function_to_test_map[middle_index];
             Some(((*function).to_string(), tests.len()))
         } else {
             None
         };
-        let by_function_max_tests_affected_by_change = sorted_function_to_test_map.last().map(|(function, tests)| ((*function).to_string(), tests.len()));
+        let by_function_max_tests_affected_by_change = sorted_function_to_test_map
+            .last()
+            .map(|(function, tests)| ((*function).to_string(), tests.len()));
 
-        let input_function_total_tests_affected = sorted_function_to_test_map.iter().map(|(_, tests)| tests.len()).sum();
+        let input_function_total_tests_affected = sorted_function_to_test_map
+            .iter()
+            .map(|(_, tests)| tests.len())
+            .sum();
         let input_function_count = sorted_function_to_test_map.len();
 
         TestFileStatistics {
@@ -154,13 +174,22 @@ mod tests {
 
     lazy_static! {
         static ref test1: RustTestIdentifier = {
-            RustTestIdentifier { test_src_path: PathBuf::from("src/lib.rs"), test_name: "test1".to_string() }
+            RustTestIdentifier {
+                test_src_path: PathBuf::from("src/lib.rs"),
+                test_name: "test1".to_string(),
+            }
         };
         static ref test2: RustTestIdentifier = {
-            RustTestIdentifier { test_src_path: PathBuf::from("src/lib.rs"), test_name: "test2".to_string() }
+            RustTestIdentifier {
+                test_src_path: PathBuf::from("src/lib.rs"),
+                test_name: "test2".to_string(),
+            }
         };
         static ref test3: RustTestIdentifier = {
-            RustTestIdentifier { test_src_path: PathBuf::from("sub_module/src/lib.rs"), test_name: "test1".to_string() }
+            RustTestIdentifier {
+                test_src_path: PathBuf::from("sub_module/src/lib.rs"),
+                test_name: "test1".to_string(),
+            }
         };
     }
 
@@ -199,11 +228,37 @@ mod tests {
         });
 
         assert_eq!(coverage_data.file_to_test_map().len(), 2);
-        assert_eq!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().len(), 2);
-        assert_eq!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().len(), 1);
-        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains(&test1));
-        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file1.rs")).unwrap().contains(&test2));
-        assert!(coverage_data.file_to_test_map().get(&PathBuf::from("file2.rs")).unwrap().contains(&test1));
+        assert_eq!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file1.rs"))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file2.rs"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test1));
+        assert!(coverage_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test2));
+        assert!(coverage_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file2.rs"))
+            .unwrap()
+            .contains(&test1));
     }
 
     #[test]
@@ -223,11 +278,37 @@ mod tests {
         });
 
         assert_eq!(coverage_data.function_to_test_map().len(), 2);
-        assert_eq!(coverage_data.function_to_test_map().get("func1").unwrap().len(), 2);
-        assert_eq!(coverage_data.function_to_test_map().get("func2").unwrap().len(), 1);
-        assert!(coverage_data.function_to_test_map().get("func1").unwrap().contains(&test1));
-        assert!(coverage_data.function_to_test_map().get("func1").unwrap().contains(&test2));
-        assert!(coverage_data.function_to_test_map().get("func2").unwrap().contains(&test1));
+        assert_eq!(
+            coverage_data
+                .function_to_test_map()
+                .get("func1")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            coverage_data
+                .function_to_test_map()
+                .get("func2")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test1));
+        assert!(coverage_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test2));
+        assert!(coverage_data
+            .function_to_test_map()
+            .get("func2")
+            .unwrap()
+            .contains(&test1));
     }
 
     #[test]
@@ -288,9 +369,18 @@ mod tests {
 
         assert_eq!(stats.input_file_count, 3);
         assert_eq!(stats.input_file_total_tests_affected, 6);
-        assert_eq!(stats.by_file_min_tests_affected_by_change, Some((PathBuf::from("file3.rs"), 1)));
-        assert_eq!(stats.by_file_median_tests_affected_by_change, Some((PathBuf::from("file2.rs"), 2)));
-        assert_eq!(stats.by_file_max_tests_affected_by_change, Some((PathBuf::from("file1.rs"), 3)));
+        assert_eq!(
+            stats.by_file_min_tests_affected_by_change,
+            Some((PathBuf::from("file3.rs"), 1))
+        );
+        assert_eq!(
+            stats.by_file_median_tests_affected_by_change,
+            Some((PathBuf::from("file2.rs"), 2))
+        );
+        assert_eq!(
+            stats.by_file_max_tests_affected_by_change,
+            Some((PathBuf::from("file1.rs"), 3))
+        );
     }
 
     #[test]
@@ -333,8 +423,17 @@ mod tests {
 
         assert_eq!(stats.input_function_count, 3);
         assert_eq!(stats.input_function_total_tests_affected, 6);
-        assert_eq!(stats.by_function_min_tests_affected_by_change, Some(("function3".to_string(), 1)));
-        assert_eq!(stats.by_function_median_tests_affected_by_change, Some(("function2".to_string(), 2)));
-        assert_eq!(stats.by_function_max_tests_affected_by_change, Some(("function1".to_string(), 3)));
+        assert_eq!(
+            stats.by_function_min_tests_affected_by_change,
+            Some(("function3".to_string(), 1))
+        );
+        assert_eq!(
+            stats.by_function_median_tests_affected_by_change,
+            Some(("function2".to_string(), 2))
+        );
+        assert_eq!(
+            stats.by_function_max_tests_affected_by_change,
+            Some(("function1".to_string(), 3))
+        );
     }
 }

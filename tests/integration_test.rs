@@ -1,22 +1,24 @@
+use crate::util::ChangeWorkingDirectory;
 use anyhow::{Context, Result};
-use testtrim::{process_command, Cli, Commands};
-use testtrim::coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
-use testtrim::rust_llvm::{CoverageLibrary, ProfilingData};
 use serde_json::Value;
-use std::{env, fs, io};
 use std::collections::HashSet;
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{env, fs, io};
 use tempdir::TempDir;
+use testtrim::coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
+use testtrim::rust_llvm::{CoverageLibrary, ProfilingData};
+use testtrim::{process_command, Cli, Commands};
 use thiserror::Error;
-use crate::util::ChangeWorkingDirectory;
 
 mod util;
 
 #[derive(Error, Debug)]
 pub enum TestError {
-    #[error("test sub-command '{command:?}' failed with exit code {status:?} and stderr {stderr:?})")]
+    #[error(
+        "test sub-command '{command:?}' failed with exit code {status:?} and stderr {stderr:?})"
+    )]
     SubcommandFailed {
         command: String,
         status: std::process::ExitStatus,
@@ -36,15 +38,15 @@ fn git_clone() -> Result<()> {
     // the required auth.
     let auth_token = env::var("RUST_COVERAGE_SPECIMEN_PAT").ok();
     let repo_url = match auth_token {
-        Some(token) => format!("https://:{}@forgejo.kainnef.com/mfenniak/rust-coverage-specimen.git", token),
+        Some(token) => format!(
+            "https://:{}@forgejo.kainnef.com/mfenniak/rust-coverage-specimen.git",
+            token
+        ),
         None => "forgejo@ssh.forgejo.kainnef.com:mfenniak/rust-coverage-specimen.git".to_string(),
     };
 
     let output = Command::new("git")
-        .args(&[
-            "clone",
-            &repo_url,
-        ])
+        .args(&["clone", &repo_url])
         .output()
         .expect("Failed to execute cargo test command");
 
@@ -54,7 +56,8 @@ fn git_clone() -> Result<()> {
             command: "git clone".to_string(),
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }.into());
+        }
+        .into());
     }
 
     Ok(())
@@ -62,10 +65,7 @@ fn git_clone() -> Result<()> {
 
 fn git_checkout(commit: &str) -> Result<()> {
     let output = Command::new("git")
-        .args(&[
-            "checkout",
-            commit,
-        ])
+        .args(&["checkout", commit])
         .output()
         .expect("Failed to execute cargo test command");
 
@@ -75,7 +75,8 @@ fn git_checkout(commit: &str) -> Result<()> {
             command: "git checkout".to_string(),
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }.into());
+        }
+        .into());
     }
 
     Ok(())
@@ -114,7 +115,8 @@ fn find_test_binaries() -> Result<HashSet<TestBinary>> {
             command: "cargo test --no-run".to_string(),
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }.into());
+        }
+        .into());
     }
 
     let stdout = String::from_utf8(output.stdout)?;
@@ -125,8 +127,9 @@ fn find_test_binaries() -> Result<HashSet<TestBinary>> {
         match json_value {
             Ok(json_value) => {
                 // FIXME: Cleanup unwraps and any other non-error-checking items here... maybe best to use a struct rather than a serde_json Value
-                if json_value["reason"] == "compiler-artifact" && json_value["target"]["test"] == true {
-
+                if json_value["reason"] == "compiler-artifact"
+                    && json_value["target"]["test"] == true
+                {
                     // src_path will be the source file for the binary that contains this test, but will be an absolute
                     // path, eg. "/home/user/Dev/rust-coverage-specimen/src/lib.rs".  We want to translate that into a
                     // relative path from the root of the repo, eg. "src/lib.rs", which will be stable from coverage run
@@ -139,13 +142,14 @@ fn find_test_binaries() -> Result<HashSet<TestBinary>> {
                         executable_path: PathBuf::from(json_value["executable"].as_str().unwrap()),
                     });
                 }
-            },
+            }
             Err(err) => {
                 return Err(TestError::SubcommandOutputParseFailed {
                     command: "cargo test --no-run".to_string(),
                     error: err.to_string(),
                     output: stdout.clone(),
-                }.into());
+                }
+                .into());
             }
         }
     }
@@ -167,7 +171,8 @@ fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet<Tes
                 command: format!("{:?} --list", binary).to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }.into());
+            }
+            .into());
         }
 
         let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
@@ -200,7 +205,8 @@ fn analyze_base() {
 }
 
 fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
-    where I: IntoIterator<Item = &'a TestCase>
+where
+    I: IntoIterator<Item = &'a TestCase>,
 {
     let mut coverage_library = CoverageLibrary::new();
     let mut coverage_data = CoverageData::new();
@@ -210,13 +216,22 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
         coverage_data.add_test(test_case.test_identifier.clone());
 
         if binaries.insert(&test_case.test_binary.executable_path) {
-            println!("New binary {:?}; loading instrumentation data...", test_case.test_binary);
+            println!(
+                "New binary {:?}; loading instrumentation data...",
+                test_case.test_binary
+            );
             coverage_library.load_binary(&test_case.test_binary.executable_path)?;
         }
 
         // println!("Execute test case {:?}...", test_case);
 
-        let coverage_dir = Path::new("coverage-output").join(&test_case.test_binary.executable_path.file_name().expect("file_name must be present"));
+        let coverage_dir = Path::new("coverage-output").join(
+            &test_case
+                .test_binary
+                .executable_path
+                .file_name()
+                .expect("file_name must be present"),
+        );
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
             .or_else(|e| {
@@ -228,7 +243,9 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
             })
             .context("Failed to create coverage directory")?;
 
-        let profile_file = coverage_dir.join(&test_case.test_identifier.test_name).with_extension("profraw"); // ")format!("{}/{}.profraw", coverage_dir, test);
+        let profile_file = coverage_dir
+            .join(&test_case.test_identifier.test_name)
+            .with_extension("profraw"); // ")format!("{}/{}.profraw", coverage_dir, test);
 
         let output = Command::new(&test_case.test_binary.executable_path)
             .arg("--exact")
@@ -240,10 +257,15 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
 
         if !output.status.success() {
             return Err(TestError::SubcommandFailed {
-                command: format!("{:?} --exact {:?}", test_case.test_binary, test_case.test_identifier.test_name).to_string(),
+                command: format!(
+                    "{:?} --exact {:?}",
+                    test_case.test_binary, test_case.test_identifier.test_name
+                )
+                .to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }.into());
+            }
+            .into());
         }
         // FIXME: do something with test failure?
 
@@ -251,7 +273,8 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
         // println!("Profile file: {:?}", profile_file);
 
         let reader = fs::File::open(&profile_file).context("Failed to open profile file")?;
-        let profiling_data = ProfilingData::new_from_profraw_reader(reader).expect("new_from_profraw_reader");
+        let profiling_data =
+            ProfilingData::new_from_profraw_reader(reader).expect("new_from_profraw_reader");
 
         for point in profiling_data.get_hit_instrumentation_points() {
             println!("found point... {point:?}");
@@ -263,19 +286,15 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
                 // println!("metadata: {:?}", metadata);
 
                 for file in metadata.file_paths {
-                    coverage_data.add_file_to_test(
-                        FileCoverage {
-                            file_name: file,
-                            test_identifier: test_case.test_identifier.clone(),
-                        }
-                    );
-                }
-                coverage_data.add_function_to_test(
-                    FunctionCoverage {
-                        function_name: metadata.function_name,
+                    coverage_data.add_file_to_test(FileCoverage {
+                        file_name: file,
                         test_identifier: test_case.test_identifier.clone(),
-                    }
-                );
+                    });
+                }
+                coverage_data.add_function_to_test(FunctionCoverage {
+                    function_name: metadata.function_name,
+                    test_identifier: test_case.test_identifier.clone(),
+                });
             }
         }
 
@@ -323,14 +342,46 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 2, "unexpected count of all tests in base commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            2,
+            "unexpected count of all tests in base commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
 
         let relevant_test_cases = all_test_cases; // all_test_cases.into_iter(); // FIXME: add "filter" here, but this commit has no base data to work off
-        assert_eq!(relevant_test_cases.iter().count(), 2, "unexpected count of tests-to-run in base commit");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            2,
+            "unexpected count of tests-to-run in base commit"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
 
         run_tests(&relevant_test_cases)?
     };
@@ -341,19 +392,51 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 3, "unexpected count of all tests in check-1 commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            3,
+            "unexpected count of all tests in check-1 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
 
         let relevant_test_cases = compute_relevant_test_cases(
             &all_test_cases,
             &get_changed_files("check-1")?,
-            vec![ &base_coverage_data ],
+            vec![&base_coverage_data],
             &test_binaries,
         );
-        assert_eq!(relevant_test_cases.iter().count(), 1, "unexpected count of tests-to-run in check-1 commit");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            1,
+            "unexpected count of tests-to-run in check-1 commit"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
 
         run_tests(&relevant_test_cases)?
     };
@@ -364,25 +447,93 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 5, "unexpected count of all tests in check-2 commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            5,
+            "unexpected count of all tests in check-2 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
 
         let relevant_test_cases = compute_relevant_test_cases(
             &all_test_cases,
             &get_changed_files("check-2")?,
-            vec![ &check1_coverage_data, &base_coverage_data, ],
+            vec![&check1_coverage_data, &base_coverage_data],
             &test_binaries,
         );
-        assert_eq!(relevant_test_cases.iter().count(), 5, "unexpected count of tests-to-run in check-2 commit; {relevant_test_cases:?}");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1); // changed basic_ops.rs
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1); // changed basic_ops.rs
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1); // new
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1); // new
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1); // because sequence->basic_ops.rs
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            5,
+            "unexpected count of tests-to-run in check-2 commit; {relevant_test_cases:?}"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        ); // changed basic_ops.rs
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        ); // changed basic_ops.rs
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        ); // new
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        ); // new
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        ); // because sequence->basic_ops.rs
 
         run_tests(&relevant_test_cases)?
     };
@@ -393,23 +544,83 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 6, "unexpected count of all tests in check-3 commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            6,
+            "unexpected count of all tests in check-3 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
 
         let relevant_test_cases = compute_relevant_test_cases(
             &all_test_cases,
             &get_changed_files("check-3")?,
-            vec![ &check2_coverage_data, &check1_coverage_data, &base_coverage_data, ],
+            vec![
+                &check2_coverage_data,
+                &check1_coverage_data,
+                &base_coverage_data,
+            ],
             &test_binaries,
         );
-        assert_eq!(relevant_test_cases.iter().count(), 2, "unexpected count of tests-to-run in check-3 commit; {relevant_test_cases:?}");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            2,
+            "unexpected count of tests-to-run in check-3 commit; {relevant_test_cases:?}"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
 
         run_tests(&relevant_test_cases)?
     };
@@ -420,24 +631,85 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 7, "unexpected count of all tests in check-4 commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            7,
+            "unexpected count of all tests in check-4 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
         assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci_memo").count(), 1);
 
         let relevant_test_cases = compute_relevant_test_cases(
             &all_test_cases,
             &get_changed_files("check-4")?,
-            vec![ &check3_coverage_data, &check2_coverage_data, &check1_coverage_data, &base_coverage_data, ],
+            vec![
+                &check3_coverage_data,
+                &check2_coverage_data,
+                &check1_coverage_data,
+                &base_coverage_data,
+            ],
             &test_binaries,
         );
-        assert_eq!(relevant_test_cases.iter().count(), 3, "unexpected count of tests-to-run in check-4 commit; {relevant_test_cases:?}");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            3,
+            "unexpected count of tests-to-run in check-4 commit; {relevant_test_cases:?}"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
         assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci_memo").count(), 1);
 
         run_tests(&relevant_test_cases)?
@@ -449,30 +721,128 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 8, "unexpected count of all tests in check-5 commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            8,
+            "unexpected count of all tests in check-5 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
         assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci_memo").count(), 1);
 
         let relevant_test_cases = compute_relevant_test_cases(
             &all_test_cases,
             &get_changed_files("check-5")?,
-            vec![ &check4_coverage_data, &check3_coverage_data, &check2_coverage_data, &check1_coverage_data, &base_coverage_data, ],
+            vec![
+                &check4_coverage_data,
+                &check3_coverage_data,
+                &check2_coverage_data,
+                &check1_coverage_data,
+                &base_coverage_data,
+            ],
             &test_binaries,
         );
-        assert_eq!(relevant_test_cases.iter().count(), 8, "unexpected count of tests-to-run in check-5 commit; {relevant_test_cases:?}");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            8,
+            "unexpected count of tests-to-run in check-5 commit; {relevant_test_cases:?}"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
         assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci_memo").count(), 1);
 
         run_tests(&relevant_test_cases)?
@@ -484,25 +854,94 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         let test_binaries = find_test_binaries()?;
 
         let all_test_cases = get_all_test_cases(&test_binaries)?;
-        assert_eq!(all_test_cases.iter().count(), 8, "unexpected count of all tests in check-6 commit");
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            all_test_cases.iter().count(),
+            8,
+            "unexpected count of all tests in check-6 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
         assert_eq!(all_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci_memo").count(), 1);
 
         let relevant_test_cases = compute_relevant_test_cases(
             &all_test_cases,
             &get_changed_files("check-6")?,
-            vec![ &check5_coverage_data, &check4_coverage_data, &check3_coverage_data, &check2_coverage_data, &check1_coverage_data, &base_coverage_data, ],
+            vec![
+                &check5_coverage_data,
+                &check4_coverage_data,
+                &check3_coverage_data,
+                &check2_coverage_data,
+                &check1_coverage_data,
+                &base_coverage_data,
+            ],
             &test_binaries,
         );
-        assert_eq!(relevant_test_cases.iter().count(), 3, "unexpected count of tests-to-run in check-6 commit; {relevant_test_cases:?}");
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci").count(), 1);
-        assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial").count(), 1);
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            3,
+            "unexpected count of tests-to-run in check-6 commit; {relevant_test_cases:?}"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
         assert_eq!(relevant_test_cases.iter().filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci_memo").count(), 1);
 
         run_tests(&relevant_test_cases)?
@@ -521,7 +960,8 @@ fn get_changed_files(commit: &str) -> Result<HashSet<PathBuf>> {
             command: format!("git diff --name-only {commit}^ {commit}").to_string(),
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }.into());
+        }
+        .into());
     }
     // FIXME: this doesn't seem like it will handle platform-specific file name encodings correctly
     let stdout = String::from_utf8(output.stdout)?;

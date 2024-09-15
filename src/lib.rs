@@ -1,9 +1,9 @@
-use clap::{Parser, Subcommand, Args};
+use clap::{Args, Parser, Subcommand};
 
 // FIXME: these modules probably shouldn't be private, but it's convenient as I'm writing code in the integration tests
 // that probably later needs to be moved into this library/binary
-pub mod rust_llvm;
 pub mod coverage_map;
+pub mod rust_llvm;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -16,7 +16,6 @@ pub struct Cli {
 pub enum Commands {
     /// Temporary no-operation command
     Noop,
-
     // /// Print stats on the coverage
     // PrintStats(CoverageSource),
 
@@ -71,7 +70,7 @@ pub struct CoverageSource {
 
 pub fn process_command(cli: Cli) {
     match &cli.command {
-        Commands::Noop => {},
+        Commands::Noop => {}
         // Commands::PrintStats(coverage_source) => {
         //     let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
         //         let coverage_dir = Path::new(dir);
