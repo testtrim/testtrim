@@ -16,7 +16,11 @@ jobs:
       # understand. So we replace github.com in the access-token field of the nix.conf file.
       - run: sed -i 's/github.com/forgejo.kainnef.com/' /etc/nix/nix.conf
       - run: nix develop .# --command cargo build
-      - run: nix develop .# --command cargo test
+      - name: run tests
+        run: nix develop .# --command cargo test
         env:
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
-      - run: nix develop .# --command cargo clippy -- -D warnings
+      - name: verify clippy warning-free
+        run: nix develop .# --command cargo clippy -- -D warnings
+      - name: verify rust format correct
+        run: nix develop .# --command cargo fmt --all -- --check

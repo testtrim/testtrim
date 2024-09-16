@@ -71,71 +71,73 @@ pub struct CoverageSource {
 pub fn process_command(cli: Cli) {
     match &cli.command {
         Commands::Noop => {}
-        // Commands::PrintStats(coverage_source) => {
-        //     let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
-        //         let coverage_dir = Path::new(dir);
-        //         process_coverage_files(coverage_dir)
-        //     } else if let Some(archive) = &coverage_source.coverage_archive {
-        //         let archive_path = Path::new(archive);
-        //         process_coverage_archive(archive_path)
-        //     } else {
-        //         unreachable!("Either coverage_dir or coverage_archive must be provided")
-        //     };
-
-        //     print_analysis_results(&coverage_data);
-        // },
-        // Commands::AnalyzeTests { coverage_source, diff_file, repository_root } => {
-        //     let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
-        //         let coverage_dir = Path::new(dir);
-        //         process_coverage_files(coverage_dir)
-        //     } else if let Some(archive) = &coverage_source.coverage_archive {
-        //         let archive_path = Path::new(archive);
-        //         process_coverage_archive(archive_path)
-        //     } else {
-        //         unreachable!("Either coverage_dir or coverage_archive must be provided")
-        //     };
-
-        //     process_diff_file(&coverage_data, diff_file, repository_root);
-        // },
-        // Commands::PrintStats2 { coverage_source, binaries } => {
-        //     let mut coverage_library = CoverageLibrary::new();
-        //     for binary in binaries {
-        //         println!("Loading binary ...");
-        //         let binary_path = Path::new(binary);
-        //         coverage_library.load_binary(binary_path).expect("load_binary");
-        //     }
-        //     let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
-        //         let coverage_dir = Path::new(dir);
-        //         process_profraw_coverage_files(&coverage_library, coverage_dir)
-        //     } else if let Some(archive) = &coverage_source.coverage_archive {
-        //         let archive_path = Path::new(archive);
-        //         process_profraw_coverage_archive(&coverage_library, archive_path)
-        //     } else {
-        //         unreachable!("Either coverage_dir or coverage_archive must be provided")
-        //     };
-
-        //     print_analysis_results(&coverage_data);
-        // },
-        // Commands::AnalyzeTests2 { coverage_source, diff_file, repository_root, binaries } => {
-        //     let mut coverage_library = CoverageLibrary::new();
-        //     for binary in binaries {
-        //         println!("Loading binary ...");
-        //         let binary_path = Path::new(binary);
-        //         coverage_library.load_binary(binary_path).expect("load_binary");
-        //     }
-        //     let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
-        //         let coverage_dir = Path::new(dir);
-        //         process_profraw_coverage_files(&coverage_library, coverage_dir)
-        //     } else if let Some(archive) = &coverage_source.coverage_archive {
-        //         let archive_path = Path::new(archive);
-        //         process_profraw_coverage_archive(&coverage_library, archive_path)
-        //     } else {
-        //         unreachable!("Either coverage_dir or coverage_archive must be provided")
-        //     };
-
-        //     process_diff_file(&coverage_data, diff_file, repository_root);
-        // },
     }
+    /*
+    Commands::PrintStats(coverage_source) => {
+        let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+            let coverage_dir = Path::new(dir);
+            process_coverage_files(coverage_dir)
+        } else if let Some(archive) = &coverage_source.coverage_archive {
+            let archive_path = Path::new(archive);
+            process_coverage_archive(archive_path)
+        } else {
+            unreachable!("Either coverage_dir or coverage_archive must be provided")
+        };
+
+        print_analysis_results(&coverage_data);
+    },
+    Commands::AnalyzeTests { coverage_source, diff_file, repository_root } => {
+        let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+            let coverage_dir = Path::new(dir);
+            process_coverage_files(coverage_dir)
+        } else if let Some(archive) = &coverage_source.coverage_archive {
+            let archive_path = Path::new(archive);
+            process_coverage_archive(archive_path)
+        } else {
+            unreachable!("Either coverage_dir or coverage_archive must be provided")
+        };
+
+        process_diff_file(&coverage_data, diff_file, repository_root);
+    },
+    Commands::PrintStats2 { coverage_source, binaries } => {
+        let mut coverage_library = CoverageLibrary::new();
+        for binary in binaries {
+            println!("Loading binary ...");
+            let binary_path = Path::new(binary);
+            coverage_library.load_binary(binary_path).expect("load_binary");
+        }
+        let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+            let coverage_dir = Path::new(dir);
+            process_profraw_coverage_files(&coverage_library, coverage_dir)
+        } else if let Some(archive) = &coverage_source.coverage_archive {
+            let archive_path = Path::new(archive);
+            process_profraw_coverage_archive(&coverage_library, archive_path)
+        } else {
+            unreachable!("Either coverage_dir or coverage_archive must be provided")
+        };
+
+        print_analysis_results(&coverage_data);
+    },
+    Commands::AnalyzeTests2 { coverage_source, diff_file, repository_root, binaries } => {
+        let mut coverage_library = CoverageLibrary::new();
+        for binary in binaries {
+            println!("Loading binary ...");
+            let binary_path = Path::new(binary);
+            coverage_library.load_binary(binary_path).expect("load_binary");
+        }
+        let coverage_data = if let Some(dir) = &coverage_source.coverage_dir {
+            let coverage_dir = Path::new(dir);
+            process_profraw_coverage_files(&coverage_library, coverage_dir)
+        } else if let Some(archive) = &coverage_source.coverage_archive {
+            let archive_path = Path::new(archive);
+            process_profraw_coverage_archive(&coverage_library, archive_path)
+        } else {
+            unreachable!("Either coverage_dir or coverage_archive must be provided")
+        };
+
+        process_diff_file(&coverage_data, diff_file, repository_root);
+    },
+    */
 }
 
 // fn process_diff_file(coverage_data: &CoverageData, diff_file: &str, repository_root: &str) {
