@@ -362,7 +362,12 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             1
         );
 
-        let relevant_test_cases = all_test_cases; // all_test_cases.into_iter(); // FIXME: add "filter" here, but this commit has no base data to work off
+        let relevant_test_cases = compute_relevant_test_cases(
+            &all_test_cases,
+            &get_changed_files("base")?,
+            vec![],
+            &test_binaries,
+        );
         assert_eq!(
             relevant_test_cases.iter().count(),
             2,
@@ -1049,9 +1054,23 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
 
 // run `git diff` to fetch all the file names changed in a specific commit; eg. git diff --name-only some-commit^ some-commit
 fn get_changed_files(commit: &str) -> Result<HashSet<PathBuf>> {
-    let output = Command::new("git")
+    let mut output = Command::new("git")
         .args(&["diff", "--name-only", &format!("{commit}^"), commit])
         .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("^': unknown revision or path not in the working tree") {
+            // Couldn't find the parent commit ({str}^) for the commit ({str}).  That's a valid case if it's the first
+            // commit in the repository.  In that case, replace the base commit with the well-known sha1 of the root git
+            // commit, giving us all the changes in the original commit.
+            let repo_root = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+            output = Command::new("git")
+                .args(&["diff", "--name-only", repo_root, commit])
+                .output()?;
+        }
+    }
+
     if !output.status.success() {
         return Err(TestError::SubcommandFailed {
             command: format!("git diff --name-only {commit}^ {commit}").to_string(),
@@ -1060,6 +1079,7 @@ fn get_changed_files(commit: &str) -> Result<HashSet<PathBuf>> {
         }
         .into());
     }
+
     // FIXME: this doesn't seem like it will handle platform-specific file name encodings correctly
     let stdout = String::from_utf8(output.stdout)?;
     Ok(stdout.lines().map(|s| PathBuf::from(s)).collect())
