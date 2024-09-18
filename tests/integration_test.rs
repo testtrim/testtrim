@@ -848,7 +848,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         run_tests(&relevant_test_cases)?
     };
 
-    {
+    let check6_coverage_data = {
         git_checkout("check-6")?;
 
         let test_binaries = find_test_binaries()?;
@@ -947,6 +947,103 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         run_tests(&relevant_test_cases)?
     };
 
+    {
+        git_checkout("check-7")?;
+
+        let test_binaries = find_test_binaries()?;
+
+        let all_test_cases = get_all_test_cases(&test_binaries)?;
+        assert_eq!(
+            all_test_cases.iter().count(),
+            7,
+            "unexpected count of all tests in check-7 commit"
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_sub")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_mul")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_div")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "basic_ops::tests::test_power")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            all_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
+
+        let relevant_test_cases = compute_relevant_test_cases(
+            &all_test_cases,
+            &get_changed_files("check-7")?,
+            vec![
+                &check6_coverage_data,
+                &check5_coverage_data,
+                &check4_coverage_data,
+                &check3_coverage_data,
+                &check2_coverage_data,
+                &check1_coverage_data,
+                &base_coverage_data,
+            ],
+            &test_binaries,
+        );
+        assert_eq!(
+            relevant_test_cases.iter().count(),
+            2,
+            "unexpected count of tests-to-run in check-7 commit; {relevant_test_cases:?}"
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_fibonacci")
+                .count(),
+            1
+        );
+        assert_eq!(
+            relevant_test_cases
+                .iter()
+                .filter(|tc| tc.test_identifier.test_name == "sequences::tests::test_factorial")
+                .count(),
+            1
+        );
+
+        run_tests(&relevant_test_cases)?
+    };
     Ok(())
 }
 
@@ -1004,10 +1101,18 @@ fn compute_relevant_test_cases(
                     let mut found_test_binary = false;
                     for test_binary in all_test_binaries {
                         if test_binary.rel_src_path == test.test_src_path {
-                            retval.insert(TestCase {
+                            let new_test_case = TestCase {
                                 test_identifier: test.clone(),
                                 test_binary: test_binary.clone(),
-                            });
+                            };
+
+                            // If the test case we've found isn't part of the commit's test cases, then ignore it --
+                            // this would happen if a test case is removed, for example.  It would still show up in the
+                            // last coverage map but it isn't relevant to try to run anymore.
+                            if new_commit_test_cases.contains(&new_test_case) {
+                                retval.insert(new_test_case);
+                            }
+
                             found_test_binary = true;
                         }
                     }
