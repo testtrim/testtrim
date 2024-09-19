@@ -1,12 +1,12 @@
+use crate::git::get_revision_sha;
+use crate::subcommand::SubcommandErrors;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
-use diesel::prelude::*;
-use diesel::{Connection, QueryDsl, RunQueryDsl, SqliteConnection};
+use db::{read_coverage_data, save_coverage_data};
+use git::{get_changed_files, get_previous_commits};
 use log::{debug, error, info, trace, warn};
-use models::CoverageDataModel;
 use rust_llvm::{CoverageLibrary, ProfilingData};
-use schema::coverage_data::{self};
 use serde_json::Value;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::collections::HashSet;
@@ -14,14 +14,16 @@ use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
-use thiserror::Error;
 
 // FIXME: these modules probably shouldn't be private, but it's convenient as I'm writing code in the integration tests
 // that probably later needs to be moved into this library/binary
 pub mod coverage_map;
+mod db;
+pub mod git;
 mod models;
 pub mod rust_llvm;
 mod schema;
+mod subcommand;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)] // FIXME: are there things that should be customized here?
@@ -258,60 +260,6 @@ fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
     Ok(())
 }
 
-fn save_coverage_data(coverage_data: &CoverageData, commit_sha: &str) -> Result<()> {
-    // FIXME: centralized & flexible database access/storage
-    let mut conn = SqliteConnection::establish("test.db")?;
-
-    let model = CoverageDataModel {
-        commit_sha: String::from(commit_sha),
-        raw_coverage_data: serde_json::to_string(&coverage_data)?,
-    };
-
-    diesel::insert_into(coverage_data::table)
-        .values(&model)
-        .on_conflict(coverage_data::commit_sha)
-        .do_update()
-        .set(&model)
-        .execute(&mut conn)?;
-
-    Ok(())
-}
-
-fn read_coverage_data(commit_sha: &str) -> Result<Option<CoverageData>> {
-    // FIXME: centralized & flexible database access/storage
-    let mut conn = SqliteConnection::establish("test.db")?;
-
-    let results = coverage_data::dsl::coverage_data
-        .find(commit_sha)
-        .select(CoverageDataModel::as_select())
-        .first(&mut conn)
-        .optional()?;
-
-    Ok(match results {
-        Some(model) => serde_json::from_str(&model.raw_coverage_data)?,
-        None => None,
-    })
-}
-
-#[derive(Error, Debug)]
-pub enum SubcommandErrors {
-    #[error(
-        "test sub-command '{command:?}' failed with exit code {status:?} and stderr {stderr:?})"
-    )]
-    SubcommandFailed {
-        command: String,
-        status: std::process::ExitStatus,
-        stderr: String,
-    },
-
-    #[error("test sub-command '{command:?}' had unparseable output; error: {error:?} output: {output:?})")]
-    SubcommandOutputParseFailed {
-        command: String,
-        error: String,
-        output: String,
-    },
-}
-
 // FIXME: remove 'pub' after integration test is changed to use CLI
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TestBinary {
@@ -435,86 +383,6 @@ pub fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet
     }
 
     Ok(result)
-}
-
-// FIXME: move into a git module
-// FIXME: reimplement in a way that doesn't use a git subcommand; shouldn't really be necessary
-// FIXME: remove 'pub' after integration test is changed to use CLI
-// run `git diff` to fetch all the file names changed in a specific commit; eg. git diff --name-only some-commit^ some-commit
-pub fn get_changed_files(commit: &str) -> Result<HashSet<PathBuf>> {
-    let mut output = Command::new("git")
-        .args(["diff", "--name-only", &format!("{commit}^"), commit])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("^': unknown revision or path not in the working tree") {
-            // Couldn't find the parent commit ({str}^) for the commit ({str}).  That's a valid case if it's the first
-            // commit in the repository.  In that case, replace the base commit with the well-known sha1 of the root git
-            // commit, giving us all the changes in the original commit.
-            // FIXME: this hard-codes the usage of a sha1 git repo
-            let repo_root = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-            output = Command::new("git")
-                .args(["diff", "--name-only", repo_root, commit])
-                .output()?;
-        }
-    }
-
-    if !output.status.success() {
-        return Err(SubcommandErrors::SubcommandFailed {
-            command: format!("git diff --name-only {commit}^ {commit}").to_string(),
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }
-        .into());
-    }
-
-    // FIXME: this doesn't seem like it will handle platform-specific file name encodings correctly
-    let stdout = String::from_utf8(output.stdout)?;
-    Ok(stdout.lines().map(PathBuf::from).collect())
-}
-
-// FIXME: move into a git module
-// FIXME: reimplement in a way that doesn't use a git subcommand; shouldn't really be necessary
-pub fn get_revision_sha(commit: &str) -> Result<String> {
-    let output = Command::new("git").args(["rev-parse", commit]).output()?;
-
-    if !output.status.success() {
-        return Err(SubcommandErrors::SubcommandFailed {
-            command: format!("git rev-parse {commit}").to_string(),
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }
-        .into());
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    Ok(String::from(stdout.trim()))
-}
-
-// FIXME: move into a git module
-// FIXME: reimplement in a way that doesn't use a git subcommand; shouldn't really be necessary
-// FIXME: this has no logic that relats to non-linear commit histories; ie. merges
-pub fn get_previous_commits() -> Result<Vec<String>> {
-    let output = Command::new("git")
-        .args(["log", "--pretty=oneline"])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(SubcommandErrors::SubcommandFailed {
-            command: "git log --pretty=oneline".to_string(),
-            status: output.status,
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }
-        .into());
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    Ok(stdout
-        .lines()
-        .map(|s| s.split(" ").next().unwrap())
-        .map(String::from)
-        .collect())
 }
 
 // FIXME: remove 'pub' after integration test is changed to use CLI

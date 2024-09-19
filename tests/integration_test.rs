@@ -4,7 +4,7 @@ use std::env;
 use std::process::Command;
 use tempdir::TempDir;
 use testtrim::{
-    compute_relevant_test_cases, find_test_binaries, get_all_test_cases, get_changed_files,
+    compute_relevant_test_cases, find_test_binaries, get_all_test_cases, git::get_changed_files,
     process_command, run_tests, Cli, Commands,
 };
 use thiserror::Error;
