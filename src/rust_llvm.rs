@@ -4,6 +4,7 @@ use llvm_profparser::{
     instrumentation_profile::types::{InstrumentationProfile, NamedInstrProfRecord},
     CoverageMappingInfo,
 };
+use log::trace;
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -68,7 +69,7 @@ impl CoverageLibrary {
                                     }));
                                 }
                                 None => {
-                                    println!("\t\tNo file found for function");
+                                    trace!("\t\tNo file found for function");
                                 }
                             }
                         }

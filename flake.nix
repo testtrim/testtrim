@@ -38,6 +38,9 @@
             # and llvm-cov...
             # $ cargo cov -- show -Xdemangler=rustfilt target/debug/testtrim -instr-profile=default.profdata -show-line-counts-or-regions -show-instantiations
             cargo-binutils
+
+            diesel-cli
+            sqlite
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
@@ -46,6 +49,7 @@
             export RUSTFLAGS="-C instrument-coverage"
             export LLVM_PROFILE_FILE="default.profraw"
             export RUST_BACKTRACE=full
+            export DATABASE_URL=file:test.db
           '';
         };
     });

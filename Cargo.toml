@@ -13,8 +13,12 @@ llvm_profparser = "*"
 anyhow = "*"
 thiserror = "*"
 serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+diesel = { version = "*", features = ["sqlite"] }
+simplelog = "*"
+clap-verbosity-flag = "*"
+log = "*"
 
 [dev-dependencies]
-serde_json = "*"
 tempdir = "*"
 lazy_static = "*"

@@ -4,3 +4,4 @@
 *.profdata
 *.lcov
 output.txt
+test.db
