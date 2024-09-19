@@ -210,7 +210,6 @@ pub fn process_command(cli: Cli) {
 }
 
 fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCase>> {
-    // FIXME: constant 'match'es here are a sign that we need a subfunction w/ Result<T>, but, it can probably wait until this isn't just a testing command
     let test_binaries = find_test_binaries()?;
     trace!("test_binaries: {:?}", test_binaries);
 
@@ -223,7 +222,7 @@ fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCas
 
     // FIXME: it's likely that different options will be required here, like using diff from index->HEAD, or some base branch
     let changed_files = get_changed_files("HEAD")?;
-    trace!("changed files: {:?}", changed_files); // FIXME: debug/verbose output
+    trace!("changed files: {:?}", changed_files);
 
     let mut previous_coverage_data = vec![];
     for previous_commit in get_previous_commits()? {
