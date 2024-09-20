@@ -1,12 +1,18 @@
 use crate::coverage_map::CoverageData;
 use crate::models::CoverageDataModel;
 use crate::schema::coverage_data::{self};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use diesel::prelude::*;
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 
 pub fn save_coverage_data(coverage_data: &CoverageData, commit_sha: &str) -> Result<()> {
     // FIXME: centralized & flexible database access/storage
     let mut conn = SqliteConnection::establish("test.db")?;
+
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
 
     let model = CoverageDataModel {
         commit_sha: String::from(commit_sha),
@@ -26,6 +32,9 @@ pub fn save_coverage_data(coverage_data: &CoverageData, commit_sha: &str) -> Res
 pub fn read_coverage_data(commit_sha: &str) -> Result<Option<CoverageData>> {
     // FIXME: centralized & flexible database access/storage
     let mut conn = SqliteConnection::establish("test.db")?;
+
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
 
     let results = coverage_data::dsl::coverage_data
         .find(commit_sha)

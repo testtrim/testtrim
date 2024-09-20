@@ -15,13 +15,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
 
-// FIXME: these modules probably shouldn't be private, but it's convenient as I'm writing code in the integration tests
-// that probably later needs to be moved into this library/binary
-pub mod coverage_map;
+mod coverage_map;
 mod db;
-pub mod git;
+mod git;
 mod models;
-pub mod rust_llvm;
+mod rust_llvm;
 mod schema;
 mod subcommand;
 
@@ -211,7 +209,7 @@ pub fn process_command(cli: Cli) {
     */
 }
 
-fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCase>> {
+pub fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCase>> {
     let test_binaries = find_test_binaries()?;
     trace!("test_binaries: {:?}", test_binaries);
 
@@ -240,7 +238,7 @@ fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCas
     let relevant_test_cases = compute_relevant_test_cases(
         &all_test_cases,
         &changed_files,
-        previous_coverage_data.iter().collect(),
+        &previous_coverage_data,
         &test_binaries,
     );
     trace!("relevant_test_cases: {:?}", relevant_test_cases);
@@ -248,7 +246,7 @@ fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCas
     Ok(relevant_test_cases)
 }
 
-fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
+pub fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
     let test_cases = get_target_test_cases(mode)?;
     let coverage_data = run_tests(&test_cases)?;
     info!("successfully ran tests");
@@ -260,17 +258,13 @@ fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
     Ok(())
 }
 
-// FIXME: remove 'pub' after integration test is changed to use CLI
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TestBinary {
-    // FIXME: remove 'pub' after integration test is changed to use CLI
     pub rel_src_path: PathBuf,
-    // FIXME: remove 'pub' after integration test is changed to use CLI
     pub executable_path: PathBuf,
 }
 
-// FIXME: remove 'pub' after integration test is changed to use CLI
-pub fn find_test_binaries() -> Result<HashSet<TestBinary>> {
+fn find_test_binaries() -> Result<HashSet<TestBinary>> {
     let repo_root = current_dir()?;
 
     let output = Command::new("cargo")
@@ -337,18 +331,16 @@ pub fn find_test_binaries() -> Result<HashSet<TestBinary>> {
     Ok(test_binaries)
 }
 
-// FIXME: remove 'pub' after integration test is changed to use CLI
-// FIXME: name is horrible... this is more like a "concrete" version of a RustTestIdentifier, w/ specific knowledge required to execute this test, rather than the abstract system-to-system reusable test identifier that RustTestIdentifier is
+// FIXME: name is horrible... this is more like a "concrete" version of a RustTestIdentifier, w/ specific knowledge
+// required to execute this test, rather than the abstract system-to-system reusable test identifier that
+// RustTestIdentifier is
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub struct TestCase {
-    // FIXME: remove 'pub' after integration test is changed to use CLI
     pub test_binary: TestBinary,
-    // FIXME: remove 'pub' after integration test is changed to use CLI
     pub test_identifier: RustTestIdentifier,
 }
 
-// FIXME: remove 'pub' after integration test is changed to use CLI
-pub fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet<TestCase>> {
+fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet<TestCase>> {
     let mut result: HashSet<TestCase> = HashSet::new();
 
     for binary in test_binaries {
@@ -385,11 +377,10 @@ pub fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet
     Ok(result)
 }
 
-// FIXME: remove 'pub' after integration test is changed to use CLI
-pub fn compute_relevant_test_cases(
+fn compute_relevant_test_cases(
     new_commit_test_cases: &HashSet<TestCase>,
     files_changed: &HashSet<PathBuf>,
-    base_coverage_data: Vec<&CoverageData>,
+    base_coverage_data: &[CoverageData],
     all_test_binaries: &HashSet<TestBinary>,
 ) -> HashSet<TestCase> {
     let mut retval = HashSet::new();
@@ -471,8 +462,7 @@ pub fn compute_relevant_test_cases(
     retval
 }
 
-// FIXME: remove 'pub' after integration test is changed to use CLI
-pub fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
+fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
 where
     I: IntoIterator<Item = &'a TestCase>,
 {

@@ -18,6 +18,7 @@ diesel = { version = "*", features = ["sqlite"] }
 simplelog = "*"
 clap-verbosity-flag = "*"
 log = "*"
+diesel_migrations = "*"
 
 [dev-dependencies]
 tempdir = "*"
