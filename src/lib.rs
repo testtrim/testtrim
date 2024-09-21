@@ -225,8 +225,8 @@ pub fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<Tes
     trace!("changed files: {:?}", changed_files);
 
     let mut previous_coverage_data = vec![];
-    for previous_commit in get_previous_commits()? {
-        if let Some(coverage_data) = read_coverage_data(&previous_commit)? {
+    for previous_commit in get_previous_commits() {
+        if let Some(coverage_data) = read_coverage_data(&previous_commit?)? {
             previous_coverage_data.push(coverage_data);
         }
     }
