@@ -242,6 +242,12 @@ pub fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<Tes
         &test_binaries,
     );
     trace!("relevant_test_cases: {:?}", relevant_test_cases);
+    println!(
+        "relevant test cases are {} of {}, {}%",
+        relevant_test_cases.len(),
+        all_test_cases.len(),
+        100 * relevant_test_cases.len() / all_test_cases.len(),
+    );
 
     Ok(relevant_test_cases)
 }
