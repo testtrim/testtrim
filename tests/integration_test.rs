@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use std::process::Command;
 use std::{env, sync::Mutex};
 use tempdir::TempDir;
+use testtrim::scm_git::GitScm;
 use testtrim::{get_target_test_cases, run_tests_subcommand, GetTestIdentifierMode};
 use thiserror::Error;
 
@@ -229,7 +230,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
     fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {
         git_checkout(commit_test_data.test_commit)?;
 
-        let all_test_cases = get_target_test_cases(&GetTestIdentifierMode::All)?;
+        let all_test_cases = get_target_test_cases(&GetTestIdentifierMode::All, GitScm {})?;
         assert_eq!(
             all_test_cases.iter().count(),
             commit_test_data.all_test_cases.len(),
@@ -246,7 +247,8 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             );
         }
 
-        let relevant_test_cases = get_target_test_cases(&GetTestIdentifierMode::Relevant)?;
+        let relevant_test_cases =
+            get_target_test_cases(&GetTestIdentifierMode::Relevant, GitScm {})?;
         assert_eq!(
             relevant_test_cases.iter().count(),
             commit_test_data.relevant_test_cases.len(),

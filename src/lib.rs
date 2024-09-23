@@ -1,10 +1,10 @@
-use crate::git::get_revision_sha;
+use crate::scm::Scm;
+use crate::scm_git::GitScm;
 use crate::subcommand::SubcommandErrors;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
 use db::{read_coverage_data, save_coverage_data};
-use git::{get_changed_files, get_previous_commits};
 use log::{debug, error, info, trace, warn};
 use rust_llvm::{CoverageLibrary, ProfilingData};
 use serde_json::Value;
@@ -17,10 +17,11 @@ use std::{fs, io};
 
 mod coverage_map;
 mod db;
-mod git;
 mod models;
 mod rust_llvm;
 mod schema;
+mod scm;
+pub mod scm_git;
 mod subcommand;
 
 #[derive(Parser)]
@@ -122,7 +123,7 @@ pub fn process_command(cli: Cli) {
     match &cli.command {
         Commands::Noop => {}
         Commands::GetTestIdentifiers { mode } => {
-            let test_cases = match get_target_test_cases(mode) {
+            let test_cases = match get_target_test_cases(mode, GitScm {}) {
                 Ok(test_cases) => test_cases,
                 Err(err) => {
                     error!("error occurred in get_target_test_cases: {:?}", err);
@@ -209,7 +210,10 @@ pub fn process_command(cli: Cli) {
     */
 }
 
-pub fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<TestCase>> {
+pub fn get_target_test_cases(
+    mode: &GetTestIdentifierMode,
+    scm: impl Scm,
+) -> Result<HashSet<TestCase>> {
     let test_binaries = find_test_binaries()?;
     trace!("test_binaries: {:?}", test_binaries);
 
@@ -221,11 +225,11 @@ pub fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<Tes
     }
 
     // FIXME: it's likely that different options will be required here, like using diff from index->HEAD, or some base branch
-    let changed_files = get_changed_files("HEAD")?;
+    let changed_files = scm.get_changed_files("HEAD")?;
     trace!("changed files: {:?}", changed_files);
 
     let mut previous_coverage_data = vec![];
-    for previous_commit in get_previous_commits() {
+    for previous_commit in scm.get_previous_commits() {
         if let Some(coverage_data) = read_coverage_data(&previous_commit?)? {
             previous_coverage_data.push(coverage_data);
         }
@@ -253,12 +257,12 @@ pub fn get_target_test_cases(mode: &GetTestIdentifierMode) -> Result<HashSet<Tes
 }
 
 pub fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
-    let test_cases = get_target_test_cases(mode)?;
+    let test_cases = get_target_test_cases(mode, GitScm {})?;
     let coverage_data = run_tests(&test_cases)?;
     info!("successfully ran tests");
 
     // FIXME: "HEAD" is obviously wrong when the local directory is dirty... just ignoring this for the moment.
-    let commit_sha = get_revision_sha("HEAD")?;
+    let commit_sha = (GitScm {}).get_revision_sha("HEAD")?;
     save_coverage_data(&coverage_data, &commit_sha)?;
 
     Ok(())
