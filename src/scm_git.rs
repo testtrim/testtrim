@@ -1,4 +1,4 @@
-use crate::scm::Scm;
+use crate::scm::{Scm, ScmCommit};
 use crate::SubcommandErrors;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -6,9 +6,15 @@ use std::iter;
 use std::path::PathBuf;
 use std::process::Command;
 
+pub struct GitScmCommit {
+    sha: String,
+}
+
+impl ScmCommit for GitScmCommit {}
+
 pub struct GitScm;
 
-impl Scm for GitScm {
+impl Scm<GitScmCommit> for GitScm {
     // FIXME: reimplement in a way that doesn't use a git subcommand; shouldn't really be necessary
     // FIXME: remove 'pub' after integration test is changed to use CLI
     // run `git diff` to fetch all the file names changed in a specific commit; eg. git diff --name-only some-commit^ some-commit
@@ -66,6 +72,78 @@ impl Scm for GitScm {
     // FIXME: this has no logic that relats to non-linear commit histories; ie. merges
     fn get_previous_commits(&self) -> impl Iterator<Item = Result<String>> {
         get_previous_commits_internal(&CommandLineGitLogBatchFetcher {})
+    }
+
+    fn get_head_commit(&self) -> Result<GitScmCommit> {
+        Ok(GitScmCommit {
+            sha: self.get_revision_sha("HEAD")?,
+        })
+    }
+
+    fn get_commit_identifier(&self, commit: &GitScmCommit) -> String {
+        commit.sha.clone()
+    }
+
+    fn get_commit_parents(&self, commit: &GitScmCommit) -> Result<Vec<GitScmCommit>> {
+        let output = Command::new("git")
+            .args(["rev-list", "--parents", "-n", "1", &commit.sha])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!("git rev-list --parents -n 1 {}", commit.sha).to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut parents = stdout.split_whitespace().collect::<Vec<_>>();
+        let first_commit = parents.remove(0);
+        if first_commit != commit.sha {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!("git rev-list --parents -n 1 {}", commit.sha).to_string(),
+                status: output.status,
+                stderr: format!(
+                    "Expected first commit to be {:?}, but got {first_commit:?}",
+                    commit.sha
+                ),
+            }
+            .into());
+        }
+
+        Ok(parents
+            .into_iter()
+            .map(|sha| GitScmCommit {
+                sha: String::from(sha),
+            })
+            .collect())
+    }
+
+    fn get_best_common_ancestor(&self, commits: &[GitScmCommit]) -> Result<Option<GitScmCommit>> {
+        let mut args = vec!["merge-base"];
+        for c in commits {
+            args.push(c.sha.as_str());
+        }
+
+        let output = Command::new("git").args(&args).output()?;
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!("git merge-base ({} commits)", args.len() - 1).to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+
+        let stdout = String::from_utf8(output.stdout)?;
+        // FIXME: it's probably possible for this to return no common base, which would be the Ok(None) case, but this
+        // code isn't detecting that case
+        Ok(Some(GitScmCommit {
+            sha: String::from(stdout.trim()),
+        }))
     }
 }
 

@@ -4,9 +4,10 @@ use crate::subcommand::SubcommandErrors;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use coverage_map::{CoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier};
-use db::{read_coverage_data, save_coverage_data};
+use db::{CoverageDatabase, DieselCoverageDatabase};
 use log::{debug, error, info, trace, warn};
 use rust_llvm::{CoverageLibrary, ProfilingData};
+use scm::ScmCommit;
 use serde_json::Value;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::collections::HashSet;
@@ -130,7 +131,7 @@ pub fn process_command(cli: Cli) {
                     return;
                 }
             };
-            for test_case in test_cases {
+            for test_case in test_cases.target_test_cases {
                 info!("{:?}", test_case.test_identifier);
             }
         }
@@ -210,60 +211,74 @@ pub fn process_command(cli: Cli) {
     */
 }
 
-pub fn get_target_test_cases(
+pub struct TargetTestCases {
+    pub all_test_cases: HashSet<TestCase>,
+    pub target_test_cases: HashSet<TestCase>,
+}
+
+pub fn get_target_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
     mode: &GetTestIdentifierMode,
-    scm: impl Scm,
-) -> Result<HashSet<TestCase>> {
+    scm: MyScm,
+) -> Result<TargetTestCases> {
     let test_binaries = find_test_binaries()?;
     trace!("test_binaries: {:?}", test_binaries);
 
     let all_test_cases = get_all_test_cases(&test_binaries)?;
-    trace!("all_test_cases: {:?}", test_binaries);
+    trace!("all_test_cases: {:?}", all_test_cases);
 
     if *mode == GetTestIdentifierMode::All {
-        return Ok(all_test_cases);
+        return Ok(TargetTestCases {
+            all_test_cases: all_test_cases.clone(),
+            target_test_cases: all_test_cases,
+        });
     }
 
     // FIXME: it's likely that different options will be required here, like using diff from index->HEAD, or some base branch
     let changed_files = scm.get_changed_files("HEAD")?;
     trace!("changed files: {:?}", changed_files);
 
-    let mut previous_coverage_data = vec![];
-    for previous_commit in scm.get_previous_commits() {
-        if let Some(coverage_data) = read_coverage_data(&previous_commit?)? {
-            previous_coverage_data.push(coverage_data);
-        }
-    }
-    trace!(
-        "found {} previous commits coverage data to analyze...",
-        previous_coverage_data.len()
-    );
-
+    let total_test_case_count = all_test_cases.len();
     let relevant_test_cases = compute_relevant_test_cases(
-        &all_test_cases,
+        &all_test_cases
+            .iter()
+            .map(|tc| tc.test_identifier.clone())
+            .collect(),
         &changed_files,
-        &previous_coverage_data,
-        &test_binaries,
-    );
+        &scm,
+        &(DieselCoverageDatabase {}),
+    )?;
+
     trace!("relevant_test_cases: {:?}", relevant_test_cases);
     println!(
         "relevant test cases are {} of {}, {}%",
         relevant_test_cases.len(),
-        all_test_cases.len(),
-        100 * relevant_test_cases.len() / all_test_cases.len(),
+        total_test_case_count,
+        100 * relevant_test_cases.len() / total_test_case_count,
     );
 
-    Ok(relevant_test_cases)
+    Ok(TargetTestCases {
+        all_test_cases,
+        target_test_cases: HashSet::from_iter(
+            relevant_test_cases
+                .into_iter()
+                .filter_map(|ti| map_rust_test_identifier_to_test_case(ti, &test_binaries)),
+        ),
+    })
 }
 
 pub fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
     let test_cases = get_target_test_cases(mode, GitScm {})?;
-    let coverage_data = run_tests(&test_cases)?;
+
+    let mut coverage_data = run_tests(&test_cases.target_test_cases)?;
+    for tc in test_cases.all_test_cases {
+        coverage_data.add_existing_test(tc.test_identifier);
+    }
+
     info!("successfully ran tests");
 
     // FIXME: "HEAD" is obviously wrong when the local directory is dirty... just ignoring this for the moment.
     let commit_sha = (GitScm {}).get_revision_sha("HEAD")?;
-    save_coverage_data(&coverage_data, &commit_sha)?;
+    (DieselCoverageDatabase {}).save_coverage_data(&coverage_data, &commit_sha)?;
 
     Ok(())
 }
@@ -387,89 +402,198 @@ fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet<Tes
     Ok(result)
 }
 
-fn compute_relevant_test_cases(
-    new_commit_test_cases: &HashSet<TestCase>,
-    files_changed: &HashSet<PathBuf>,
-    base_coverage_data: &[CoverageData],
-    all_test_binaries: &HashSet<TestBinary>,
-) -> HashSet<TestCase> {
+/// Compute which test cases need to be run based upon what changes are being made, and stored coverage data from
+/// previous test runs.  The SCM (eg. git) is used to identify what coverage data is relevant.
+///
+/// Concept for relevant test cases:
+///
+/// - All test cases that have never been seen before are relevant to be run.  As we store in the coverage data a
+///   complete record of test cases, whether they were run or not, we can determine what test cases haven't been seen
+///   before by finding the most recent commit with coverage data.
+///
+///   Note that as we search for "most recent commit", we will skip over any branching sections of the history.  If a
+///   commit is a merge commit (has multiple parents), then after checking if the merge commit has coverage data, we
+///   will proceed to the most recent common ancestor of the N parents of that merge. Basically we'll skip the
+///   non-linear history because any test runs on those may have been invalidated by the merge commit.  If no commits
+///   can be found that have coverage data, then we will have to default to running all tests and abort any further
+///   computation.
+///
+/// - It's much more difficult to figure out what tests are impacted by the changed files.  Because each commit could
+///   run just a subset of the tests (that's kinda the point), the coverage data for any given commit will be
+///   incomplete, preventing us from looking inside of it to determine what tests to run based upon what changes are
+///   made.  The solution I have in mind for this is to constantly merge coverage data output from different test runs
+///   -- after the base run (all tests), when we have a new commit that runs 1% of the tests, we'll actually merge the
+///   full coverage data from the base run and the partial coverage from the second run so that we always have a
+///   complete coverage map.
+///
+///   As a *temporary* implementation until that merged implementation is complete, we'll iterate through every prior
+///   commit (that isn't on a branch -- skipping the multiple parents of a merge commit by going to the common
+///   ancestor), and query for their coverage data.  This is terrible for large repositories with a long commit history
+///   but it should work until the coverage data merging solution is implemented.
+fn compute_relevant_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+    eval_target_test_cases: &HashSet<RustTestIdentifier>,
+    eval_target_changed_files: &HashSet<PathBuf>,
+    scm: &MyScm,
+    coverage_db: &impl CoverageDatabase,
+) -> Result<HashSet<RustTestIdentifier>> {
     let mut retval = HashSet::new();
 
-    // Find all the new tests in new_commit_test_cases that aren't in base_coverage_data...
-    for new_test_case in new_commit_test_cases {
-        // FIXME: If a test existed at some point, and then was deleted, and then was readded, then this logic would not
-        // find it as a test that needs to be run unless the coverage data was hit from the previous time the test
-        // existed by this name.  That kinda sucks...
+    compute_all_new_test_cases(eval_target_test_cases, scm, coverage_db, &mut retval)?;
+    trace!(
+        "relevant test cases after searching for new tests: {:?}",
+        retval
+    );
 
-        let mut found_test_case = false;
-        for base in base_coverage_data.iter() {
-            if base.test_set().contains(&new_test_case.test_identifier) {
-                found_test_case = true;
-                break;
+    // If retval already contains all the test cases, then we're done -- we don't need to start digging into the
+    // modified files because we're already running all tests.
+    if retval.len() == eval_target_test_cases.len() {
+        return Ok(retval);
+    }
+
+    compute_changed_file_test_cases(
+        eval_target_test_cases,
+        eval_target_changed_files,
+        scm,
+        coverage_db,
+        &mut retval,
+    )?;
+    trace!(
+        "relevant test cases after searching for file changes: {:?}",
+        retval
+    );
+
+    Ok(retval)
+}
+
+fn compute_all_new_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+    eval_target_test_cases: &HashSet<RustTestIdentifier>,
+    scm: &MyScm,
+    coverage_db: &impl CoverageDatabase,
+    retval: &mut HashSet<RustTestIdentifier>,
+) -> Result<()> {
+    // Search for a commit with coverage data.  All coverage data includes a list of all the test cases that were
+    // present for that commit, and we can use that to figure out any new test cases.
+    let mut commit = scm.get_head_commit()?;
+    let commit_identifier = scm.get_commit_identifier(&commit);
+    let mut coverage_data = coverage_db.read_coverage_data(&commit_identifier)?;
+    trace!(
+        "commit id {} had coverage data? {:}",
+        commit_identifier,
+        coverage_data.is_some()
+    );
+
+    while coverage_data.is_none() {
+        let mut parents = scm.get_commit_parents(&commit)?;
+        trace!("checking parents; {} parents found", parents.len());
+
+        if parents.is_empty() {
+            warn!("Commit {} had no parents; unable to identify a base set of test cases that has already been run.  All test cases will be run.", scm.get_commit_identifier(&commit));
+            break;
+        } else if parents.len() > 1 {
+            // If the commit had multiple parents, try to find their common ancestor and continue looking for coverage
+            // data at that point.
+            match scm.get_best_common_ancestor(&parents)? {
+                Some(common_ancestor) => {
+                    commit = common_ancestor;
+                }
+                None => {
+                    warn!("Commit {} had multiple parents, and those parents didn't have a common ancestor; unable to identify a base set of test cases that has already been run.  All test cases will be run.", scm.get_commit_identifier(&commit));
+                    break;
+                }
             }
+        } else {
+            commit = parents.remove(0);
         }
-        if !found_test_case {
-            trace!(
-                "test case {:?} is considered relevant because it's new",
-                new_test_case
-            );
-            retval.insert((*new_test_case).clone());
+        let commit_identifier = scm.get_commit_identifier(&commit);
+        coverage_data = coverage_db.read_coverage_data(&commit_identifier)?;
+        trace!(
+            "commit id {} had coverage data? {:}",
+            commit_identifier,
+            coverage_data.is_some()
+        );
+    }
+
+    for tc in eval_target_test_cases {
+        match coverage_data {
+            Some(ref coverage_data) => {
+                if !coverage_data.existing_test_set().contains(tc) {
+                    trace!("test case {:?} was not found in parent coverage data and so will be run as a new test", tc);
+                    retval.insert(tc.clone());
+                }
+            }
+            None => {
+                trace!("test case {:?} was not found in (ABSENT) parent coverage data and so will be run as a new test", tc);
+                retval.insert(tc.clone());
+            }
         }
     }
 
-    // Then find all the tests that should be re-run based upon the files changed in the commit...
-    for file_changed in files_changed {
-        trace!(
-            "digging up test cases affected by the file {:?}",
-            file_changed
-        );
+    Ok(())
+}
 
-        for base in base_coverage_data.iter() {
-            if let Some(tests) = base.file_to_test_map().get(file_changed) {
-                trace!(
-                    "found possible relevant tests affected by that file: {:?}",
-                    tests
-                );
+fn compute_changed_file_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+    eval_target_test_cases: &HashSet<RustTestIdentifier>,
+    eval_target_changed_files: &HashSet<PathBuf>,
+    scm: &MyScm,
+    coverage_db: &impl CoverageDatabase,
+    retval: &mut HashSet<RustTestIdentifier>,
+) -> Result<()> {
+    let mut commit = scm.get_head_commit()?;
 
-                for test in tests {
-                    // Lookup test binary from all_test_binaries based upon the test_src_path of the test...
-                    // FIXME: At larger scale this should be done with a better data structure.
-                    let mut found_test_binary = false;
-                    for test_binary in all_test_binaries {
-                        if test_binary.rel_src_path == test.test_src_path {
-                            let new_test_case = TestCase {
-                                test_identifier: test.clone(),
-                                test_binary: test_binary.clone(),
-                            };
-
-                            // If the test case we've found isn't part of the commit's test cases, then ignore it --
-                            // this would happen if a test case is removed, for example.  It would still show up in the
-                            // last coverage map but it isn't relevant to try to run anymore.
-                            if new_commit_test_cases.contains(&new_test_case) {
-                                trace!("marking test case {:?} as relevant", new_test_case);
-                                retval.insert(new_test_case);
-                            }
-
-                            found_test_binary = true;
+    loop {
+        let coverage_data = coverage_db.read_coverage_data(&scm.get_commit_identifier(&commit))?;
+        if let Some(coverage_data) = coverage_data {
+            for changed_file in eval_target_changed_files {
+                if let Some(tests) = coverage_data.file_to_test_map().get(changed_file) {
+                    for test in tests {
+                        // Even if this test covered this file in the past, if the test doesn't exist in the current eval
+                        // target then we can't run it anymore; typically happens when a test case is removed.
+                        if eval_target_test_cases.contains(test) {
+                            retval.insert(test.clone());
                         }
                     }
-
-                    if !found_test_binary {
-                        // Hm... we changed a file in this commit.  Previously that file was covered by a test, `test`,
-                        // but now we can't find the test project which included that test.  This could be a result of a
-                        // code change where that sub-project was removed or renamed, in which case this is fine.  But
-                        // it seems worth raising a warning or something?
-                        warn!("Unable to find test binary for test; skipped: {test:?}");
-                    }
                 }
-            } else {
-                // FIXME: change to verbose output
-                trace!("found no tests in that file");
             }
+        }
+
+        let mut parents = scm.get_commit_parents(&commit)?;
+        if parents.is_empty() {
+            break;
+        } else if parents.len() > 1 {
+            // If the commit had multiple parents, try to find their common ancestor and continue looking for coverage
+            // data at that point.
+            match scm.get_best_common_ancestor(&parents)? {
+                Some(common_ancestor) => {
+                    commit = common_ancestor;
+                }
+                None => {
+                    break;
+                }
+            }
+        } else {
+            commit = parents.remove(0);
         }
     }
 
-    retval
+    Ok(())
+}
+
+fn map_rust_test_identifier_to_test_case(
+    test_identifier: RustTestIdentifier,
+    all_test_binaries: &HashSet<TestBinary>,
+) -> Option<TestCase> {
+    for test_binary in all_test_binaries {
+        if test_binary.rel_src_path == test_identifier.test_src_path {
+            let new_test_case = TestCase {
+                test_identifier: test_identifier.clone(),
+                test_binary: test_binary.clone(),
+            };
+            return Some(new_test_case);
+        }
+    }
+
+    warn!("Unable to find test binary for test: {test_identifier:?}");
+    None
 }
 
 fn run_tests<'a, I>(test_cases: I) -> Result<CoverageData>
@@ -483,7 +607,7 @@ where
     for test_case in test_cases {
         trace!("preparing for test case {:?}", test_case);
 
-        coverage_data.add_test(test_case.test_identifier.clone());
+        coverage_data.add_executed_test(test_case.test_identifier.clone());
 
         if binaries.insert(&test_case.test_binary.executable_path) {
             trace!(
@@ -999,7 +1123,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::rust_llvm::sentinel_function;
+    use crate::{
+        compute_relevant_test_cases,
+        coverage_map::{CoverageData, FileCoverage, RustTestIdentifier},
+        db::CoverageDatabase,
+        rust_llvm::sentinel_function,
+        scm::Scm,
+        TestBinary, TestCase,
+    };
+    use lazy_static::lazy_static;
+    use std::{
+        collections::{HashMap, HashSet},
+        iter,
+        path::PathBuf,
+    };
 
     /// This is a sentinel test that doesn't reach outside of this project, but does go from main.rs -> rust_llvm.rs.
     /// As a result, this test should be considered for re-run if rust_llvm.rs changes or main.rs changes, but nothing
@@ -1008,5 +1145,566 @@ mod tests {
     fn sentinel_internal_file() {
         let x = sentinel_function();
         assert_eq!(x, 2);
+    }
+
+    lazy_static! {
+        static ref test1: RustTestIdentifier = {
+            RustTestIdentifier {
+                test_src_path: PathBuf::from("src/lib.rs"),
+                test_name: "test1".to_string(),
+            }
+        };
+        static ref test2: RustTestIdentifier = {
+            RustTestIdentifier {
+                test_src_path: PathBuf::from("src/lib.rs"),
+                test_name: "test2".to_string(),
+            }
+        };
+        static ref test3: RustTestIdentifier = {
+            RustTestIdentifier {
+                test_src_path: PathBuf::from("sub_module/src/lib.rs"),
+                test_name: "test1".to_string(),
+            }
+        };
+        static ref sample_test_case_1: TestCase = {
+            TestCase {
+                test_binary: TestBinary {
+                    rel_src_path: PathBuf::from("src/lib.rs"),
+                    executable_path: PathBuf::from("target/crate/debug/crate-test"),
+                },
+                test_identifier: test1.clone(),
+            }
+        };
+        static ref sample_test_case_2: TestCase = {
+            TestCase {
+                test_binary: TestBinary {
+                    rel_src_path: PathBuf::from("src/lib.rs"),
+                    executable_path: PathBuf::from("target/crate/debug/crate-test"),
+                },
+                test_identifier: test2.clone(),
+            }
+        };
+    }
+
+    #[derive(Clone, Default)]
+    struct MockScmCommit {
+        id: String,
+        parents: Vec<String>,
+        best_common_ancestor: Option<String>,
+    }
+
+    impl crate::scm::ScmCommit for MockScmCommit {}
+
+    struct MockScm {
+        head_commit: String,
+        commits: Vec<MockScmCommit>,
+    }
+
+    impl MockScm {
+        fn get_commit(&self, commit_id: &String) -> Option<MockScmCommit> {
+            for commit in self.commits.iter() {
+                if self.get_commit_identifier(&commit) == *commit_id {
+                    return Some(commit.clone());
+                }
+            }
+            None
+        }
+    }
+
+    impl crate::scm::Scm<MockScmCommit> for MockScm {
+        fn get_changed_files(
+            &self,
+            _commit: &str,
+        ) -> anyhow::Result<std::collections::HashSet<std::path::PathBuf>> {
+            unreachable!() // not required for these tests
+        }
+
+        fn get_previous_commits(&self) -> impl Iterator<Item = anyhow::Result<String>> {
+            // not required for these tests
+            iter::from_fn(|| unreachable!())
+        }
+
+        fn get_revision_sha(&self, _commit: &str) -> anyhow::Result<String> {
+            // not required for these tests
+            unreachable!()
+        }
+
+        fn get_head_commit(&self) -> anyhow::Result<MockScmCommit> {
+            match self.get_commit(&self.head_commit) {
+                Some(commit) => Ok(commit),
+                None => Err(anyhow::anyhow!("test error: no head commit found")),
+            }
+            // for commit in self.commits.iter() {
+            //     if self.get_commit_identifier(&commit) == self.head_commit {
+            //         return Ok(commit.clone());
+            //     }
+            // }
+            // Err(anyhow::anyhow!("test error: no head commit found"))
+        }
+
+        fn get_commit_identifier(&self, commit: &MockScmCommit) -> String {
+            commit.id.clone()
+        }
+
+        fn get_commit_parents(&self, commit: &MockScmCommit) -> anyhow::Result<Vec<MockScmCommit>> {
+            let mut retval = vec![];
+            for parent in commit.parents.iter() {
+                match self.get_commit(&parent) {
+                    Some(commit) => retval.push(commit),
+                    None => return Err(anyhow::anyhow!("test error: no parent commit found")),
+                }
+            }
+            Ok(retval)
+        }
+
+        fn get_best_common_ancestor(
+            &self,
+            commits: &[MockScmCommit],
+        ) -> anyhow::Result<Option<MockScmCommit>> {
+            // best common ancestor will just be stored on the commits for mock testing; we'll just sanity check that the mock data isn't broken
+            let bce: Option<String> = commits[0].best_common_ancestor.clone();
+            for commit in commits[1..].iter() {
+                if commit.best_common_ancestor != bce {
+                    return Err(anyhow::anyhow!("test error: best common ancestor mismatch"));
+                }
+            }
+            Ok(bce.map(|bce| self.get_commit(&bce).unwrap()))
+        }
+    }
+
+    struct MockCoverageDatabase {
+        commit_data: HashMap<String, CoverageData>,
+    }
+
+    impl CoverageDatabase for MockCoverageDatabase {
+        fn save_coverage_data(
+            &self,
+            _coverage_data: &CoverageData,
+            _commit_sha: &str,
+        ) -> anyhow::Result<()> {
+            // save_coverage_data should never be used on this mock
+            unreachable!()
+        }
+
+        fn read_coverage_data(&self, commit_sha: &str) -> anyhow::Result<Option<CoverageData>> {
+            match self.commit_data.get(commit_sha) {
+                Some(data) => Ok(Some(data.clone())),
+                None => Ok(None),
+            }
+            // Ok(self.commit_data.get(commit_sha).cloned())
+            // todo!()
+        }
+    }
+
+    #[test]
+    fn compute_empty_case() {
+        let result = compute_relevant_test_cases(
+            &HashSet::new(),
+            &HashSet::new(),
+            &MockScm {
+                head_commit: String::from("abc"),
+                commits: vec![MockScmCommit {
+                    id: String::from("abc"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::new(),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn compute_all_new_cases_empty_dbs() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &HashSet::new(),
+            &MockScm {
+                head_commit: String::from("abc"),
+                commits: vec![MockScmCommit {
+                    id: String::from("abc"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::new(),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test1));
+    }
+
+    #[test]
+    fn compute_all_new_cases_are_in_previous_commit() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &HashSet::new(),
+            &MockScm {
+                head_commit: String::from("abc"),
+                commits: vec![MockScmCommit {
+                    id: String::from("abc"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("abc"), previous_coverage_data)]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn compute_some_new_cases_are_in_previous_commit() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(test2.clone());
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &HashSet::new(),
+            &MockScm {
+                head_commit: String::from("abc"),
+                commits: vec![MockScmCommit {
+                    id: String::from("abc"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("abc"), previous_coverage_data)]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test2));
+    }
+
+    #[test]
+    fn compute_some_new_cases_are_in_parent_commit() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(test2.clone());
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &HashSet::new(),
+            &MockScm {
+                head_commit: String::from("head"),
+                commits: vec![
+                    MockScmCommit {
+                        id: String::from("head"),
+                        parents: vec![String::from("parent")],
+                        ..Default::default()
+                    },
+                    MockScmCommit {
+                        id: String::from("parent"),
+                        parents: vec![],
+                        ..Default::default()
+                    },
+                ],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("parent"), previous_coverage_data)]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test2));
+    }
+
+    #[test]
+    fn compute_all_new_cases_are_past_merge_commit() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(test2.clone());
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &HashSet::new(),
+            &MockScm {
+                head_commit: String::from("head"),
+                commits: vec![
+                    MockScmCommit {
+                        id: String::from("head"),
+                        parents: vec![String::from("parent")],
+                        ..Default::default()
+                    },
+                    MockScmCommit {
+                        id: String::from("parent"),
+                        parents: vec![String::from("branch-1"), String::from("branch-1")],
+                        ..Default::default()
+                    },
+                    MockScmCommit {
+                        id: String::from("branch-1"),
+                        parents: vec![String::from("common-root")],
+                        best_common_ancestor: Some(String::from("common-root")),
+                    },
+                    MockScmCommit {
+                        id: String::from("branch-2"),
+                        parents: vec![String::from("common-root")],
+                        best_common_ancestor: Some(String::from("common-root")),
+                    },
+                    MockScmCommit {
+                        id: String::from("common-root"),
+                        parents: vec![],
+                        ..Default::default()
+                    },
+                ],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("common-root"), previous_coverage_data)]),
+            },
+        );
+
+        // Compute should go past the branch to the "common-root", which has coverage data that includes test1, leaving
+        // just test2 as a new case.
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test2));
+    }
+
+    #[test]
+    fn compute_no_new_cases_one_file_changed() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+
+        let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
+        eval_target_changed_files.insert(PathBuf::from("src/lib.rs"));
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/lib.rs"),
+            test_identifier: test1.clone(),
+        });
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &eval_target_changed_files,
+            &MockScm {
+                head_commit: String::from("fake-head"),
+                commits: vec![MockScmCommit {
+                    id: String::from("fake-head"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("fake-head"), previous_coverage_data)]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test1));
+    }
+
+    #[test]
+    fn compute_no_new_cases_one_file_changed_w_outdated_test() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+
+        let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
+        eval_target_changed_files.insert(PathBuf::from("src/lib.rs"));
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_existing_test(test2.clone()); // test2 doesn't exist in current set, but does exist in historical data
+        previous_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/lib.rs"),
+            test_identifier: test1.clone(),
+        });
+        previous_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/lib.rs"),
+            test_identifier: test2.clone(),
+        });
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &eval_target_changed_files,
+            &MockScm {
+                head_commit: String::from("fake-head"),
+                commits: vec![MockScmCommit {
+                    id: String::from("fake-head"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("fake-head"), previous_coverage_data)]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test1));
+    }
+
+    #[test]
+    fn compute_no_new_cases_one_file_changed_another_not() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(test2.clone());
+
+        let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
+        eval_target_changed_files.insert(PathBuf::from("src/file2.rs"));
+
+        let mut previous_coverage_data = CoverageData::new();
+        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_existing_test(test2.clone());
+        previous_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/file1.rs"),
+            test_identifier: test1.clone(),
+        });
+        previous_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/file2.rs"),
+            test_identifier: test2.clone(),
+        });
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &eval_target_changed_files,
+            &MockScm {
+                head_commit: String::from("fake-head"),
+                commits: vec![MockScmCommit {
+                    id: String::from("fake-head"),
+                    parents: vec![],
+                    ..Default::default()
+                }],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([(String::from("fake-head"), previous_coverage_data)]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&test2));
+    }
+
+    #[test]
+    fn compute_no_new_cases_one_file_changed_multiple_histories() {
+        let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
+        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(test2.clone());
+        eval_target_test_cases.insert(test3.clone());
+
+        let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
+        eval_target_changed_files.insert(PathBuf::from("src/lib.rs"));
+
+        let mut merge_coverage_data = CoverageData::new();
+        merge_coverage_data.add_existing_test(test1.clone());
+        merge_coverage_data.add_existing_test(test2.clone());
+        merge_coverage_data.add_existing_test(test3.clone());
+        merge_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/lib.rs"),
+            test_identifier: test1.clone(),
+        });
+
+        let mut branch_coverage_data = CoverageData::new();
+        branch_coverage_data.add_existing_test(test1.clone());
+        branch_coverage_data.add_existing_test(test2.clone());
+        branch_coverage_data.add_existing_test(test3.clone());
+        branch_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/lib.rs"),
+            test_identifier: test2.clone(),
+        });
+
+        let mut ancestor_coverage_data = CoverageData::new();
+        ancestor_coverage_data.add_existing_test(test1.clone());
+        ancestor_coverage_data.add_existing_test(test2.clone());
+        ancestor_coverage_data.add_existing_test(test3.clone());
+        ancestor_coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("src/lib.rs"),
+            test_identifier: test3.clone(),
+        });
+
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &eval_target_changed_files,
+            &MockScm {
+                head_commit: String::from("fake-head"),
+                commits: vec![
+                    MockScmCommit {
+                        id: String::from("fake-head"),
+                        parents: vec![String::from("merge")],
+                        ..Default::default()
+                    },
+                    MockScmCommit {
+                        id: String::from("merge"),
+                        parents: vec![String::from("branch-a"), String::from("branch-b")],
+                        ..Default::default()
+                    },
+                    MockScmCommit {
+                        id: String::from("branch-a"),
+                        parents: vec![String::from("ancestor")],
+                        best_common_ancestor: Some(String::from("ancestor")),
+                    },
+                    MockScmCommit {
+                        id: String::from("branch-b"),
+                        parents: vec![String::from("ancestor")],
+                        best_common_ancestor: Some(String::from("ancestor")),
+                    },
+                    MockScmCommit {
+                        id: String::from("ancestor"),
+                        parents: vec![],
+                        ..Default::default()
+                    },
+                ],
+            },
+            &MockCoverageDatabase {
+                commit_data: HashMap::from([
+                    (String::from("merge"), merge_coverage_data),
+                    (String::from("branch-a"), branch_coverage_data),
+                    (String::from("ancestor"), ancestor_coverage_data),
+                ]),
+            },
+        );
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&test1)); // from 'merge' commit
+                                          // not present, test2, from 'branch-a' commit's coverage data; omited because it was a branch
+        assert!(result.contains(&test3)); // from 'ancestor' commit
     }
 }

@@ -1,6 +1,7 @@
 use crate::util::ChangeWorkingDirectory;
 use anyhow::Result;
 use lazy_static::lazy_static;
+use log::info;
 use std::process::Command;
 use std::{env, sync::Mutex};
 use tempdir::TempDir;
@@ -87,6 +88,8 @@ fn git_checkout(commit: &str) -> Result<()> {
 
 #[test]
 fn rust_linearcommits_filecoverage() -> Result<()> {
+    // simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())?;
+
     let _cwd_mutex = CWD_MUTEX.lock();
 
     let tmp_dir = TempDir::new("testtrim-test")?;
@@ -228,9 +231,11 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
     ];
 
     fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {
+        info!("checking out {}", commit_test_data.test_commit);
         git_checkout(commit_test_data.test_commit)?;
 
-        let all_test_cases = get_target_test_cases(&GetTestIdentifierMode::All, GitScm {})?;
+        let all_test_cases =
+            get_target_test_cases(&GetTestIdentifierMode::All, GitScm {})?.target_test_cases;
         assert_eq!(
             all_test_cases.iter().count(),
             commit_test_data.all_test_cases.len(),
@@ -248,7 +253,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         }
 
         let relevant_test_cases =
-            get_target_test_cases(&GetTestIdentifierMode::Relevant, GitScm {})?;
+            get_target_test_cases(&GetTestIdentifierMode::Relevant, GitScm {})?.target_test_cases;
         assert_eq!(
             relevant_test_cases.iter().count(),
             commit_test_data.relevant_test_cases.len(),

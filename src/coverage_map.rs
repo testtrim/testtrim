@@ -14,11 +14,12 @@ pub struct RustTestIdentifier {
     pub test_name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CoverageData {
     // FIXME: RustTestIdentifier is specific to Rust -- in the future this structure probably becomes generic over
     // different types of test identifier storage.
-    test_set: HashSet<RustTestIdentifier>,
+    all_existing_test_set: HashSet<RustTestIdentifier>,
+    executed_test_set: HashSet<RustTestIdentifier>,
     file_to_test_map: HashMap<PathBuf, HashSet<RustTestIdentifier>>,
     function_to_test_map: HashMap<String, HashSet<RustTestIdentifier>>,
 }
@@ -42,14 +43,19 @@ impl Default for CoverageData {
 impl CoverageData {
     pub fn new() -> Self {
         CoverageData {
-            test_set: HashSet::new(),
+            all_existing_test_set: HashSet::new(),
+            executed_test_set: HashSet::new(),
             file_to_test_map: HashMap::new(),
             function_to_test_map: HashMap::new(),
         }
     }
 
-    pub fn test_set(&self) -> &HashSet<RustTestIdentifier> {
-        &self.test_set
+    pub fn existing_test_set(&self) -> &HashSet<RustTestIdentifier> {
+        &self.all_existing_test_set
+    }
+
+    pub fn executed_test_set(&self) -> &HashSet<RustTestIdentifier> {
+        &self.executed_test_set
     }
 
     pub fn file_to_test_map(&self) -> &HashMap<PathBuf, HashSet<RustTestIdentifier>> {
@@ -60,8 +66,12 @@ impl CoverageData {
         &self.function_to_test_map
     }
 
-    pub fn add_test(&mut self, test_identifier: RustTestIdentifier) {
-        self.test_set.insert(test_identifier);
+    pub fn add_existing_test(&mut self, test_identifier: RustTestIdentifier) {
+        self.all_existing_test_set.insert(test_identifier);
+    }
+
+    pub fn add_executed_test(&mut self, test_identifier: RustTestIdentifier) {
+        self.executed_test_set.insert(test_identifier);
     }
 
     pub fn add_file_to_test(&mut self, coverage: FileCoverage) {
@@ -196,19 +206,29 @@ mod tests {
     #[test]
     fn test_new_coverage_data() {
         let coverage_data = CoverageData::new();
-        assert!(coverage_data.test_set().is_empty());
+        assert!(coverage_data.executed_test_set().is_empty());
         assert!(coverage_data.file_to_test_map().is_empty());
         assert!(coverage_data.function_to_test_map().is_empty());
     }
 
     #[test]
-    fn test_add_test() {
+    fn test_add_executed_test() {
         let mut coverage_data = CoverageData::new();
-        coverage_data.add_test(test1.clone());
-        coverage_data.add_test(test2.clone());
-        assert_eq!(coverage_data.test_set().len(), 2);
-        assert!(coverage_data.test_set().contains(&test1));
-        assert!(coverage_data.test_set().contains(&test2));
+        coverage_data.add_executed_test(test1.clone());
+        coverage_data.add_executed_test(test2.clone());
+        assert_eq!(coverage_data.executed_test_set().len(), 2);
+        assert!(coverage_data.executed_test_set().contains(&test1));
+        assert!(coverage_data.executed_test_set().contains(&test2));
+    }
+
+    #[test]
+    fn test_add_existing_test() {
+        let mut coverage_data = CoverageData::new();
+        coverage_data.add_existing_test(test1.clone());
+        coverage_data.add_existing_test(test2.clone());
+        assert_eq!(coverage_data.existing_test_set().len(), 2);
+        assert!(coverage_data.existing_test_set().contains(&test1));
+        assert!(coverage_data.existing_test_set().contains(&test2));
     }
 
     #[test]
