@@ -4,21 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-lcov = "*"
-clap = { version = "*", features = ["derive"] }
-tar = "*"
-bzip2 = "*"
-sevenz-rust = "*"
-llvm_profparser = "*"
 anyhow = "*"
-thiserror = "*"
+clap = { version = "*", features = ["derive"] }
+clap-verbosity-flag = "*"
+diesel = { version = "*", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "uuid", "time"] }
+diesel_migrations = "*"
+llvm_profparser = "*"
+log = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
-diesel = { version = "*", features = ["sqlite"] }
 simplelog = "*"
-clap-verbosity-flag = "*"
-log = "*"
-diesel_migrations = "*"
+thiserror = "*"
+uuid = { version = "*", features = ["v4"] }
 
 [dev-dependencies]
 tempdir = "*"

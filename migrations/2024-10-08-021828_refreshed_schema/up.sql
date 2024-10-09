@@ -1,0 +1,85 @@
+-- Note: no effort is made to retain data during this migration.
+
+
+-- Normalized data representing a testtrim run on a commit...
+
+CREATE TABLE project (
+    id TEXT PRIMARY KEY NOT NULL -- ideally should be UUID
+);
+
+CREATE TABLE scm_commit (
+    id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
+    project_id TEXT REFERENCES project (id) NOT NULL, -- ideally should be UUID
+    ancestor_scm_commit_id TEXT REFERENCES scm_commit (id) NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    scm_identifier TEXT NOT NULL
+);
+
+CREATE TABLE test_case (
+    id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
+    project_id TEXT REFERENCES project (id) NOT NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    test_identifier TEXT NOT NULL,
+    UNIQUE (project_id, test_identifier)
+);
+
+CREATE TABLE commit_test_case (
+    scm_commit_id TEXT REFERENCES scm_commit (id) NOT NULL, -- ideally should be UUID
+    test_case_id TEXT REFERENCES test_case (id) NOT NULL, -- ideally should be UUID
+    PRIMARY KEY (scm_commit_id, test_case_id)
+);
+
+CREATE TABLE test_case_execution (
+    id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
+    test_case_id TEXT REFERENCES test_case (id) NOT NULL, -- ideally should be UUID
+    scm_commit_id TEXT REFERENCES scm_commit (id) NOT NULL -- ideally should be UUID
+);
+
+CREATE TABLE test_case_file_covered (
+    test_case_execution_id TEXT REFERENCES test_case_execution (id) NOT NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    file_identifier TEXT NOT NULL,
+    PRIMARY KEY (test_case_execution_id, file_identifier)
+);
+
+CREATE TABLE test_case_function_covered (
+    test_case_execution_id TEXT REFERENCES test_case_execution (id) NOT NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    function_identifier TEXT NOT NULL,
+    PRIMARY KEY (test_case_execution_id, function_identifier)
+);
+
+
+-- Denormalized data allowing for the quick and (hopefully) efficient lookup of test cases that need to be run...
+
+CREATE TABLE denormalized_coverage_map (
+    id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
+    scm_commit_id TEXT REFERENCES scm_commit (id) NOT NULL UNIQUE, -- ideally should be UUID
+    last_read_timestamp TEXT NULL -- ISO8601 YYYY-MM-DD HH:MM:SS.SSS in UTC
+);
+
+CREATE TABLE denormalized_coverage_map_test_case (
+    id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
+    denormalized_coverage_map_id TEXT REFERENCES denormalized_coverage_map (id) NOT NULL, -- ideally should be UUID
+    test_case_id TEXT REFERENCES test_case (id) NOT NULL, -- ideally should be UUID
+    UNIQUE (denormalized_coverage_map_id, test_case_id)
+);
+
+CREATE TABLE denormalized_coverage_map_test_case_file_covered (
+    denormalized_coverage_map_test_case_id TEXT REFERENCES denormalized_coverage_map_test_case (id) NOT NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    file_identifier TEXT NOT NULL,
+    PRIMARY KEY (denormalized_coverage_map_test_case_id, file_identifier)
+);
+
+CREATE TABLE denormalized_coverage_map_test_case_function_covered (
+    denormalized_coverage_map_test_case_id TEXT REFERENCES denormalized_coverage_map_test_case (id) NOT NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    function_identifier TEXT NOT NULL,
+    PRIMARY KEY (denormalized_coverage_map_test_case_id, function_identifier)
+);
+
+
+-- Drop old serde-based table
+
+DROP TABLE coverage_data;
