@@ -176,10 +176,13 @@ impl CoverageDatabase for DieselCoverageDatabase {
                             test_case_file_covered::dsl::file_identifier.eq(tc.to_string_lossy()), // FIXME: lossy?
                         ))
                     }
-                    diesel::insert_into(test_case_file_covered::dsl::test_case_file_covered)
-                        .values(tuples)
-                        .execute(conn)
-                        .context("bulk insert into test_case_file_covered")?;
+                    for chunk in tuples.chunks(1000) {
+                        // HACK: avoid "too many SQL variables"
+                        diesel::insert_into(test_case_file_covered::dsl::test_case_file_covered)
+                            .values(chunk)
+                            .execute(conn)
+                            .context("bulk insert into test_case_file_covered")?;
+                    }
                 }
 
                 if let Some(functions_covered) =
@@ -193,12 +196,15 @@ impl CoverageDatabase for DieselCoverageDatabase {
                             test_case_function_covered::dsl::function_identifier.eq(tc),
                         ))
                     }
-                    diesel::insert_into(
-                        test_case_function_covered::dsl::test_case_function_covered,
-                    )
-                    .values(tuples)
-                    .execute(conn)
-                    .context("bulk insert into test_case_function_covered")?;
+                    for chunk in tuples.chunks(1000) {
+                        // HACK: avoid "too many SQL variables"
+                        diesel::insert_into(
+                            test_case_function_covered::dsl::test_case_function_covered,
+                        )
+                        .values(chunk)
+                        .execute(conn)
+                        .context("bulk insert into test_case_function_covered")?;
+                    }
                 }
             }
         }
@@ -346,12 +352,15 @@ impl CoverageDatabase for DieselCoverageDatabase {
                 ),
             ))
         }
-        diesel::insert_into(
-            denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case,
-        )
-        .values(&denormalized_coverage_map_test_case_values)
-        .execute(conn)
-        .context("insert into denormalized_coverage_map_test_case")?;
+        for chunk in denormalized_coverage_map_test_case_values.chunks(1000) {
+            // HACK: avoid "too many SQL variables"
+            diesel::insert_into(
+                denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case,
+            )
+            .values(chunk)
+            .execute(conn)
+            .context("insert into denormalized_coverage_map_test_case")?;
+        }
 
         let mut denormalized_coverage_map_test_case_file_covered_values = vec![];
         for (test_case_id, file_identifier) in ancestor_file_covered {
@@ -366,12 +375,15 @@ impl CoverageDatabase for DieselCoverageDatabase {
                     .eq(file_identifier),
             ))
         }
-        diesel::insert_into(
-            denormalized_coverage_map_test_case_file_covered::dsl::denormalized_coverage_map_test_case_file_covered,
-        )
-        .values(&denormalized_coverage_map_test_case_file_covered_values)
-        .execute(conn)
-        .context("insert into denormalized_coverage_map_test_case_file_covered")?;
+        for chunk in denormalized_coverage_map_test_case_file_covered_values.chunks(1000) {
+            // HACK: avoid "too many SQL variables"
+            diesel::insert_into(
+                denormalized_coverage_map_test_case_file_covered::dsl::denormalized_coverage_map_test_case_file_covered,
+            )
+            .values(chunk)
+            .execute(conn)
+            .context("insert into denormalized_coverage_map_test_case_file_covered")?;
+        }
 
         let mut denormalized_coverage_map_test_case_function_covered_values = vec![];
         for (test_case_id, function_identifier) in ancestor_function_covered {
@@ -386,12 +398,15 @@ impl CoverageDatabase for DieselCoverageDatabase {
                     .eq(function_identifier),
             ))
         }
-        diesel::insert_into(
-            denormalized_coverage_map_test_case_function_covered::dsl::denormalized_coverage_map_test_case_function_covered,
-        )
-        .values(&denormalized_coverage_map_test_case_function_covered_values)
-        .execute(conn)
-        .context("insert into denormalized_coverage_map_test_case_function_covered")?;
+        for chunk in denormalized_coverage_map_test_case_function_covered_values.chunks(1000) {
+            // HACK: avoid "too many SQL variables"
+            diesel::insert_into(
+                denormalized_coverage_map_test_case_function_covered::dsl::denormalized_coverage_map_test_case_function_covered,
+            )
+            .values(chunk)
+            .execute(conn)
+            .context("insert into denormalized_coverage_map_test_case_function_covered")?;
+        }
 
         Ok(())
     }
