@@ -14,7 +14,7 @@ use scm::ScmCommit;
 use serde_json::Value;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::collections::HashSet;
-use std::env::current_dir;
+use std::env::{self, current_dir};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
@@ -517,12 +517,15 @@ where
             coverage_library.load_binary(&test_case.test_binary.executable_path)?;
         }
 
-        let coverage_dir = Path::new("coverage-output").join(
-            test_case
-                .test_binary
-                .executable_path
-                .file_name()
-                .expect("file_name must be present"),
+        // FIXME: use a tmp dir rather than cwd, so that we don't dirty the repo up
+        let coverage_dir = env::current_dir().unwrap().join(
+            Path::new("coverage-output").join(
+                test_case
+                    .test_binary
+                    .executable_path
+                    .file_name()
+                    .expect("file_name must be present"),
+            ),
         );
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
@@ -548,6 +551,8 @@ where
             .arg(&test_case.test_identifier.test_name)
             .env("LLVM_PROFILE_FILE", &profile_file)
             .env("RUSTFLAGS", "-C instrument-coverage")
+            // Match `cargo test` behavior by moving CWD into the root of the module
+            .current_dir(test_case.test_binary.rel_src_path.parent().unwrap())
             .output()
             .expect("Failed to execute test");
 
