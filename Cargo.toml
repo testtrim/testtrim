@@ -16,6 +16,7 @@ serde_json = "*"
 simplelog = "*"
 thiserror = "*"
 uuid = { version = "*", features = ["v4"] }
+time = "*"
 
 [dev-dependencies]
 tempdir = "*"

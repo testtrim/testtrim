@@ -55,7 +55,7 @@ CREATE TABLE test_case_function_covered (
 CREATE TABLE denormalized_coverage_map (
     id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
     scm_commit_id TEXT REFERENCES scm_commit (id) NOT NULL UNIQUE, -- ideally should be UUID
-    last_read_timestamp TEXT NULL -- ISO8601 YYYY-MM-DD HH:MM:SS.SSS in UTC
+    last_read_timestamp TIMESTAMP NULL -- unix epoch time
 );
 
 CREATE TABLE denormalized_coverage_map_test_case (

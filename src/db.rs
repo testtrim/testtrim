@@ -1,5 +1,3 @@
-use std::{collections::HashMap, path::PathBuf};
-
 use crate::{
     commit_coverage_data::{
         CommitCoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier,
@@ -10,6 +8,8 @@ use anyhow::{anyhow, Context, Result};
 use diesel::{connection::Instrumentation, prelude::*};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use log::trace;
+use std::{collections::HashMap, path::PathBuf};
+use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::{uuid, Uuid};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
@@ -407,6 +407,28 @@ impl CoverageDatabase for DieselCoverageDatabase {
 
         let project_id = DEFAULT_PROJECT_ID;
 
+        let denormalized_coverage_map_id =
+            denormalized_coverage_map::dsl::denormalized_coverage_map
+                .inner_join(scm_commit::dsl::scm_commit)
+                .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+                .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+                .select(denormalized_coverage_map::dsl::id)
+                .get_result::<String>(conn)
+                .optional()
+                .context("loading denormalized_coverage_map_id")?;
+        if denormalized_coverage_map_id.is_none() {
+            // This commit doesn't have any data.
+            return Ok(None);
+        }
+
+        let now = OffsetDateTime::now_utc();
+        let now = PrimitiveDateTime::new(now.date(), now.time());
+        diesel::update(denormalized_coverage_map::dsl::denormalized_coverage_map)
+            .set(denormalized_coverage_map::dsl::last_read_timestamp.eq(now))
+            .filter(denormalized_coverage_map::dsl::id.eq(denormalized_coverage_map_id.unwrap()))
+            .execute(conn)
+            .context("update denormalized_coverage_map.last_read_timestamp")?;
+
         // FIXME: typing isn't helping us; this type is (test_case_id, test_identifier)
         let all_test_cases = denormalized_coverage_map::dsl::denormalized_coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
@@ -420,11 +442,13 @@ impl CoverageDatabase for DieselCoverageDatabase {
             .get_results::<(String, String)>(conn)
             .context("loading test cases from denormalized_coverage_map for commit_sha")?;
 
+        let mut coverage_data = FullCoverageData::new();
+
         if all_test_cases.is_empty() {
-            return Ok(None);
+            // The denormalized coverage data was saved but was empty -- there were no test cases at all.
+            return Ok(Some(coverage_data));
         }
 
-        let mut coverage_data = FullCoverageData::new();
         let mut test_case_id_to_test_identifier_map = HashMap::new();
         for (test_case_id, test_identifier) in all_test_cases {
             let test_identifier: RustTestIdentifier = serde_json::from_str(&test_identifier)?;
@@ -526,6 +550,58 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_updates_last_read_timestamp() {
+        use crate::schema::*;
+
+        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+
+        let saved_data = CommitCoverageData::new();
+        let result = db.save_coverage_data(&saved_data, "c1", None);
+        assert!(result.is_ok());
+
+        {
+            let conn = db.get_connection().unwrap();
+
+            let data = denormalized_coverage_map::dsl::denormalized_coverage_map
+                .inner_join(scm_commit::dsl::scm_commit)
+                .select((
+                    denormalized_coverage_map::dsl::id,
+                    denormalized_coverage_map::dsl::last_read_timestamp,
+                ))
+                .get_result::<(String, Option<PrimitiveDateTime>)>(conn)
+                .optional();
+            assert!(data.is_ok());
+            let data = data.unwrap();
+            assert!(data.is_some());
+            let data = data.unwrap();
+            assert!(data.1.is_none());
+        }
+
+        let result = db.read_coverage_data("c1");
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.is_some());
+
+        {
+            let conn = db.get_connection().unwrap();
+
+            let data = denormalized_coverage_map::dsl::denormalized_coverage_map
+                .inner_join(scm_commit::dsl::scm_commit)
+                .select((
+                    denormalized_coverage_map::dsl::id,
+                    denormalized_coverage_map::dsl::last_read_timestamp,
+                ))
+                .get_result::<(String, Option<PrimitiveDateTime>)>(conn)
+                .optional();
+            assert!(data.is_ok());
+            let data = data.unwrap();
+            assert!(data.is_some());
+            let data = data.unwrap();
+            assert!(data.1.is_some());
+        }
     }
 
     #[test]

@@ -11,7 +11,7 @@ diesel::table! {
     denormalized_coverage_map (id) {
         id -> Text,
         scm_commit_id -> Text,
-        last_read_timestamp -> Nullable<Text>,
+        last_read_timestamp -> Nullable<Timestamp>,
     }
 }
 
