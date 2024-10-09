@@ -340,8 +340,9 @@ fn find_ancestor_commit_with_coverage_data<Commit: ScmCommit, MyScm: Scm<Commit>
     head: Commit,
     coverage_db: &mut impl CoverageDatabase,
 ) -> Result<Option<(Commit, FullCoverageData)>> {
-    // FIXME: shortcut searching all git commits in the history *if* the coverage database is empty, allowing a faster
-    // startup time for a new project
+    if !coverage_db.has_any_coverage_data()? {
+        return Ok(None);
+    }
 
     let mut commit = head;
     let commit_identifier = scm.get_commit_identifier(&commit);
@@ -362,12 +363,15 @@ fn find_ancestor_commit_with_coverage_data<Commit: ScmCommit, MyScm: Scm<Commit>
         } else if parents.len() > 1 {
             // If the commit had multiple parents, try to find their common ancestor and continue looking for coverage
             // data at that point.
-            match scm.get_best_common_ancestor(&parents)? {
-                Some(common_ancestor) => {
+            match scm.get_best_common_ancestor(&parents) {
+                Ok(Some(common_ancestor)) => {
                     commit = common_ancestor;
                 }
-                None => {
-                    warn!("Commit {} had multiple parents, and those parents didn't have a common ancestor; unable to identify a base set of test cases that has already been run.  All test cases will be run.", scm.get_commit_identifier(&commit));
+                Err(_) | Ok(None) => {
+                    warn!(
+                        "unable to identify common ancestor for parent commits of {}",
+                        scm.get_commit_identifier(&commit)
+                    );
                     return Ok(None);
                 }
             }
@@ -767,6 +771,11 @@ mod tests {
             }
             // Ok(self.commit_data.get(commit_sha).cloned())
             // todo!()
+        }
+
+        fn has_any_coverage_data(&mut self) -> anyhow::Result<bool> {
+            // has_any_coverage_data not currently used
+            Ok(!self.commit_data.is_empty())
         }
     }
 

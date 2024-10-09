@@ -25,6 +25,7 @@ pub trait CoverageDatabase {
         ancestor_commit_sha: Option<&str>,
     ) -> Result<()>;
     fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData>>;
+    fn has_any_coverage_data(&mut self) -> Result<bool>;
 }
 
 struct DbLogger;
@@ -506,6 +507,28 @@ impl CoverageDatabase for DieselCoverageDatabase {
 
         Ok(Some(coverage_data))
     }
+
+    fn has_any_coverage_data(&mut self) -> Result<bool> {
+        use crate::schema::*;
+
+        let conn = self.get_connection()?;
+
+        conn.run_pending_migrations(MIGRATIONS)
+            .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+
+        let project_id = DEFAULT_PROJECT_ID;
+        let denormalized_coverage_map_id =
+            denormalized_coverage_map::dsl::denormalized_coverage_map
+                .inner_join(scm_commit::dsl::scm_commit)
+                .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+                .select(denormalized_coverage_map::dsl::id)
+                .limit(1)
+                .first::<String>(conn)
+                .optional()
+                .context("loading denormalized_coverage_map_id")?;
+
+        Ok(denormalized_coverage_map_id.is_some())
+    }
 }
 
 #[cfg(test)]
@@ -536,11 +559,32 @@ mod tests {
     }
 
     #[test]
+    fn has_any_coverage_data_false() {
+        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let result = db.has_any_coverage_data();
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result, false);
+    }
+
+    #[test]
     fn save_empty() {
         let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
         let data1 = CommitCoverageData::new();
         let result = db.save_coverage_data(&data1, "c1", None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn has_any_coverage_data_true() {
+        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let data1 = CommitCoverageData::new();
+        let result = db.save_coverage_data(&data1, "c1", None);
+        assert!(result.is_ok());
+        let result = db.has_any_coverage_data();
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result, true);
     }
 
     #[test]
