@@ -212,10 +212,12 @@ pub fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
     Ok(())
 }
 
+// FIXME: this struct is very specific to rust and belongs internal to some platform abstraction layer in the future
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TestBinary {
     pub rel_src_path: PathBuf,
     pub executable_path: PathBuf,
+    pub manifest_path: PathBuf,
 }
 
 fn find_test_binaries() -> Result<HashSet<TestBinary>> {
@@ -265,6 +267,7 @@ fn find_test_binaries() -> Result<HashSet<TestBinary>> {
                     test_binaries.insert(TestBinary {
                         rel_src_path: rel_src_path.to_path_buf(),
                         executable_path: PathBuf::from(json_value["executable"].as_str().unwrap()),
+                        manifest_path: PathBuf::from(json_value["manifest_path"].as_str().unwrap()),
                     });
                 }
             }
@@ -542,17 +545,18 @@ where
             .join(&test_case.test_identifier.test_name)
             .with_extension("profraw");
 
+        // Match `cargo test` behavior by moving CWD into the root of the module
+        let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
         debug!(
-            "Execute test case {:?} into {:?}...",
-            test_case, profile_file
+            "Execute test case {:?} into {:?} from working-dir {:?}...",
+            test_case, profile_file, test_wd
         );
         let output = Command::new(&test_case.test_binary.executable_path)
             .arg("--exact")
             .arg(&test_case.test_identifier.test_name)
             .env("LLVM_PROFILE_FILE", &profile_file)
             .env("RUSTFLAGS", "-C instrument-coverage")
-            // Match `cargo test` behavior by moving CWD into the root of the module
-            .current_dir(test_case.test_binary.rel_src_path.parent().unwrap())
+            .current_dir(test_wd)
             .output()
             .expect("Failed to execute test");
 
@@ -650,6 +654,7 @@ mod tests {
                 test_binary: TestBinary {
                     rel_src_path: PathBuf::from("src/lib.rs"),
                     executable_path: PathBuf::from("target/crate/debug/crate-test"),
+                    manifest_path: PathBuf::from("Cargo.toml"),
                 },
                 test_identifier: test1.clone(),
             }
@@ -659,6 +664,7 @@ mod tests {
                 test_binary: TestBinary {
                     rel_src_path: PathBuf::from("src/lib.rs"),
                     executable_path: PathBuf::from("target/crate/debug/crate-test"),
+                    manifest_path: PathBuf::from("Cargo.toml"),
                 },
                 test_identifier: test2.clone(),
             }
