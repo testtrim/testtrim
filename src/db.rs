@@ -53,8 +53,9 @@ impl DieselCoverageDatabase {
         // Check if the connection already exists
         if self.connection.is_none() {
             // Create a new connection if it doesn't exist
-            let connection = SqliteConnection::establish(&self.database_url)
+            let mut connection = SqliteConnection::establish(&self.database_url)
                 .context("connecting to the database")?;
+            connection.set_instrumentation(DbLogger {});
             self.connection = Some(connection);
         }
 
@@ -74,8 +75,6 @@ impl CoverageDatabase for DieselCoverageDatabase {
 
         let conn = self.get_connection()?;
         // FIXME: PRAGMA foreign_keys = ON;
-
-        conn.set_instrumentation(DbLogger {});
 
         conn.run_pending_migrations(MIGRATIONS)
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
