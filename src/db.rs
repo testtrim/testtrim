@@ -125,6 +125,7 @@ impl CoverageDatabase for DieselCoverageDatabase {
 
         let mut test_case_to_test_case_id_map = HashMap::new();
         let mut test_case_id_to_test_case_map = HashMap::new();
+        let mut test_case_to_test_case_execution_id_map = HashMap::new();
         for tc in coverage_data.existing_test_set() {
             let test_case_id: String = diesel::insert_into(test_case::dsl::test_case)
                 .values((
@@ -145,8 +146,8 @@ impl CoverageDatabase for DieselCoverageDatabase {
                 .returning(test_case::dsl::id)
                 .get_result(conn)
                 .context("upsert into test_case")?;
-            test_case_to_test_case_id_map.insert(tc, test_case_id.clone());
-            test_case_id_to_test_case_map.insert(test_case_id.clone(), tc);
+            test_case_to_test_case_id_map.insert(tc, Uuid::parse_str(&test_case_id)?);
+            test_case_id_to_test_case_map.insert(Uuid::parse_str(&test_case_id)?, tc);
 
             diesel::insert_into(commit_test_case::dsl::commit_test_case)
                 .values((
@@ -158,14 +159,24 @@ impl CoverageDatabase for DieselCoverageDatabase {
 
             if coverage_data.executed_test_set().contains(tc) {
                 let test_case_execution_id = Uuid::new_v4();
+                test_case_to_test_case_execution_id_map.insert(tc, test_case_execution_id);
                 diesel::insert_into(test_case_execution::dsl::test_case_execution)
                     .values((
                         test_case_execution::dsl::id.eq(test_case_execution_id.to_string()),
-                        test_case_execution::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+                        // test_case_execution::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
                         test_case_execution::dsl::test_case_id.eq(&test_case_id),
                     ))
                     .execute(conn)
                     .context("insert into test_case_execution")?;
+
+                diesel::insert_into(commit_test_case_executed::dsl::commit_test_case_executed)
+                    .values((
+                        commit_test_case_executed::dsl::test_case_execution_id
+                            .eq(test_case_execution_id.to_string()),
+                        commit_test_case_executed::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+                    ))
+                    .execute(conn)
+                    .context("insert into commit_test_case_executed")?;
 
                 if let Some(files_covered) = coverage_data.executed_test_to_files_map().get(tc) {
                     let mut tuples = vec![];
@@ -209,14 +220,10 @@ impl CoverageDatabase for DieselCoverageDatabase {
             }
         }
 
-        // Now we build a comprehensive full test map by reading the previous commit's test map and overwriting it,
-        // test-by-test, with the test map from the commit we just ran.  If there was no previous commit test map, then
-        // our current test suite should-be/must-be complete.
-        //
-        // - copy all the TestCaseExecution from the earlier commit
-        // - remove all of those that have the same TestCase as were run in the second commit (could be merged by
-        //   avoiding copying as an optimization)
-        // - copy in the TestCaseExecution from the second commit
+        // Now we build a comprehensive full test map by reading the ancestor commit's coverage_map_test_case_executed,
+        // and replacing any test cases in it from the commit that we just ran.  If there was no ancestor commit test
+        // map, then our current test suite should-be/must-be complete and we use that for
+        // coverage_map_test_case_executed.
         //
         // Hypothetically this entire operation could be done DB-side with a few commands, but:
         // - SQLite doesn't have a server-side UUID generate function, preventing this from working with creating new
@@ -224,188 +231,76 @@ impl CoverageDatabase for DieselCoverageDatabase {
         // - It's moderately complex to do in SQL, and when operating through the wet-noodle of a query builder it's
         //   even more complex
 
-        // FIXME: eventually this will be "too large" to do entirely in-memory like this; it should probably be done
-        // DB-side... but then again our strategy in the short-term is also to load this entire map into memory so I
-        // guess this is a general scaling problem for the future.
-
-        let denormalized_coverage_map_id = Uuid::new_v4();
-        diesel::insert_into(denormalized_coverage_map::dsl::denormalized_coverage_map)
+        let coverage_map_id = Uuid::new_v4();
+        diesel::insert_into(coverage_map::dsl::coverage_map)
             .values((
-                denormalized_coverage_map::dsl::id.eq(denormalized_coverage_map_id.to_string()),
-                denormalized_coverage_map::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+                coverage_map::dsl::id.eq(coverage_map_id.to_string()),
+                coverage_map::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
             ))
             .execute(conn)
-            .context("insert into denormalized_coverage_map")?;
+            .context("insert into coverage_map")?;
 
-        // FIXME: typing isn't helping us; this type is (denormalized_coverage_map_test_case_id, test_case_id)
-        // FIXME: I think denormalized_coverage_map_test_case_id isn't really needed as a return from this?
+        // FIXME: typing isn't helping us; this type is (test_case_execution_id, test_case_id)
         let ancestor_test_cases: Option<Vec<(String, String)>> = match ancesor_scm_commit_id {
             Some(ref ancesor_scm_commit_id) => {
-                let scm_commit_id =
-                    denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case
-                        .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
-                        .filter(
-                            denormalized_coverage_map::dsl::scm_commit_id
-                                .eq(&ancesor_scm_commit_id),
-                        )
-                        .select((
-                            denormalized_coverage_map_test_case::dsl::id,
-                            denormalized_coverage_map_test_case::dsl::test_case_id,
-                        ))
-                        .get_results::<(String, String)>(conn)
-                        .context("loading denormalized_map_test_case from ancestor_commit_sha")?;
+                let scm_commit_id = coverage_map::dsl::coverage_map
+                    .inner_join(
+                        coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
+                            .inner_join(test_case_execution::dsl::test_case_execution),
+                    )
+                    // .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
+                    .filter(coverage_map::dsl::scm_commit_id.eq(&ancesor_scm_commit_id))
+                    .select((
+                        test_case_execution::dsl::id,
+                        test_case_execution::dsl::test_case_id,
+                    ))
+                    .get_results::<(String, String)>(conn)
+                    .context("loading coverage_map_test_case_executed from ancestor_commit_sha")?;
                 Some(scm_commit_id)
             }
             None => None,
         };
         let ancestor_test_cases = ancestor_test_cases.unwrap_or_default();
 
-        // FIXME: typing isn't helping us; this type is (test_case_id, file_identifier)
-        let ancestor_file_covered: Option<Vec<(String, String)>> = match ancesor_scm_commit_id {
-            Some(ref ancesor_scm_commit_id) => {
-                let scm_commit_id = denormalized_coverage_map_test_case_file_covered::dsl::denormalized_coverage_map_test_case_file_covered
-                        .inner_join(
-                            denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case
-                            .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
-                        )
-                        .filter(denormalized_coverage_map::dsl::scm_commit_id.eq(&ancesor_scm_commit_id))
-                        .select((
-                            denormalized_coverage_map_test_case::dsl::test_case_id,
-                            denormalized_coverage_map_test_case_file_covered::dsl::file_identifier
-                        ))
-                        .get_results::<(String, String)>(conn)
-                        .context("loading denormalized_coverage_map_test_case_file_covered from ancestor_commit_sha")?;
-                Some(scm_commit_id)
-            }
-            None => None,
-        };
-        let mut ancestor_file_covered = ancestor_file_covered.unwrap_or_default();
-
-        // FIXME: typing isn't helping us; this type is (test_case_id, function_identifier)
-        let ancestor_function_covered: Option<Vec<(String, String)>> = match ancesor_scm_commit_id {
-            Some(ref ancesor_scm_commit_id) => {
-                let scm_commit_id = denormalized_coverage_map_test_case_function_covered::dsl::denormalized_coverage_map_test_case_function_covered
-                    .inner_join(
-                        denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case
-                        .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
-                    )
-                    .filter(denormalized_coverage_map::dsl::scm_commit_id.eq(&ancesor_scm_commit_id))
-                    .select((
-                        denormalized_coverage_map_test_case::dsl::test_case_id,
-                        denormalized_coverage_map_test_case_function_covered::dsl::function_identifier
-                    ))
-                    .get_results::<(String, String)>(conn)
-                    .context("loading denormalized_coverage_map_test_case_function_covered from ancestor_commit_sha")?;
-                Some(scm_commit_id)
-            }
-            None => None,
-        };
-        let mut ancestor_function_covered = ancestor_function_covered.unwrap_or_default();
-
-        // Remove test cases that aren't valid anymore.
-        for (_denormalized_coverage_map_test_case_id, test_case_id) in ancestor_test_cases {
-            if !test_case_id_to_test_case_map.contains_key(&test_case_id) {
-                // Ancestor had a test case that no longer exists in "all existing test set"; typically this indicates
-                // that a test case was removed from the code base.  We don't want to copy that forward forever in the
-                // denormalized data -- so trim it out.
-                ancestor_file_covered.retain(|(tc_id2, _)| *tc_id2 != test_case_id);
-                ancestor_function_covered.retain(|(tc_id2, _)| *tc_id2 != test_case_id);
+        let mut coverage_map_test_case_executed = HashMap::new();
+        // Insert all the ancestor test executions.
+        for (test_case_execution_id, test_case_id) in ancestor_test_cases {
+            // Even if it's part of the ancestor commit, if it doesn't exist anymore in this commit let's not copy it
+            // forward; this indicates a test case removed since the ancestor.
+            if test_case_id_to_test_case_map.contains_key(&Uuid::parse_str(&test_case_id)?) {
+                coverage_map_test_case_executed.insert(test_case_id, test_case_execution_id);
             }
         }
-
-        // Remove test cases that were executed in coverage_data.
-        // Add in the newly covered data.
+        // Overwrite with all the test executions that we stored in this commit.
         for tc in coverage_data.executed_test_set() {
-            let tc_id = test_case_to_test_case_id_map
+            let test_case_id = test_case_to_test_case_id_map
                 .get(tc)
-                .expect("must have been populated in earlier iteration");
-            ancestor_file_covered.retain(|(tc_id2, _)| tc_id2 != tc_id);
-            ancestor_function_covered.retain(|(tc_id2, _)| tc_id2 != tc_id);
-
-            if let Some(files_covered) = coverage_data.executed_test_to_files_map().get(tc) {
-                for file in files_covered {
-                    ancestor_file_covered.push((tc_id.clone(), file.to_string_lossy().to_string()));
-                    // FIXME: lossy?
-                }
-            }
-            if let Some(functions_covered) = coverage_data.executed_test_to_functions_map().get(tc)
-            {
-                for func in functions_covered {
-                    ancestor_function_covered.push((tc_id.clone(), func.clone()));
-                }
-            }
+                .expect("populated earlier");
+            let test_case_execution_id = test_case_to_test_case_execution_id_map
+                .get(&tc)
+                .expect("populated earlier");
+            coverage_map_test_case_executed
+                .insert(test_case_id.to_string(), test_case_execution_id.to_string());
         }
 
-        let mut test_case_to_denormalized_id_map = HashMap::new();
-        let mut denormalized_coverage_map_test_case_values = vec![];
-        for tc in coverage_data.existing_test_set() {
-            let id = Uuid::new_v4();
-            test_case_to_denormalized_id_map.insert(tc, id);
-            denormalized_coverage_map_test_case_values.push((
-                denormalized_coverage_map_test_case::dsl::id.eq(id.to_string()),
-                denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_id
-                    .eq(denormalized_coverage_map_id.to_string()),
-                denormalized_coverage_map_test_case::dsl::test_case_id.eq(
-                    test_case_to_test_case_id_map
-                        .get(tc)
-                        .expect("must have been populated in earlier iteration"),
-                ),
-            ))
+        let mut insertables = vec![];
+        for (_, test_case_execution_id) in coverage_map_test_case_executed.iter() {
+            insertables.push((
+                coverage_map_test_case_executed::dsl::coverage_map_id
+                    .eq(coverage_map_id.to_string()),
+                coverage_map_test_case_executed::dsl::test_case_execution_id
+                    .eq(test_case_execution_id),
+            ));
         }
-        for chunk in denormalized_coverage_map_test_case_values.chunks(1000) {
+
+        for chunk in insertables.chunks(1000) {
             // HACK: avoid "too many SQL variables"
             diesel::insert_into(
-                denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case,
+                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed,
             )
             .values(chunk)
             .execute(conn)
-            .context("insert into denormalized_coverage_map_test_case")?;
-        }
-
-        let mut denormalized_coverage_map_test_case_file_covered_values = vec![];
-        for (test_case_id, file_identifier) in ancestor_file_covered {
-            let test_case = test_case_id_to_test_case_map
-                .get(&test_case_id)
-                .expect("test_case_id_to_test_case_map");
-            denormalized_coverage_map_test_case_file_covered_values.push((
-                denormalized_coverage_map_test_case_file_covered::dsl::denormalized_coverage_map_test_case_id.eq(
-                    test_case_to_denormalized_id_map.get(test_case).expect("must have been populated in earlier iteration")
-                    .to_string()),
-                denormalized_coverage_map_test_case_file_covered::dsl::file_identifier
-                    .eq(file_identifier),
-            ))
-        }
-        for chunk in denormalized_coverage_map_test_case_file_covered_values.chunks(1000) {
-            // HACK: avoid "too many SQL variables"
-            diesel::insert_into(
-                denormalized_coverage_map_test_case_file_covered::dsl::denormalized_coverage_map_test_case_file_covered,
-            )
-            .values(chunk)
-            .execute(conn)
-            .context("insert into denormalized_coverage_map_test_case_file_covered")?;
-        }
-
-        let mut denormalized_coverage_map_test_case_function_covered_values = vec![];
-        for (test_case_id, function_identifier) in ancestor_function_covered {
-            let test_case = test_case_id_to_test_case_map
-                .get(&test_case_id)
-                .expect("test_case_id_to_test_case_map");
-            denormalized_coverage_map_test_case_function_covered_values.push((
-                denormalized_coverage_map_test_case_function_covered::dsl::denormalized_coverage_map_test_case_id.eq(
-                    test_case_to_denormalized_id_map.get(test_case).expect("must have been populated in earlier iteration")
-                    .to_string()),
-                denormalized_coverage_map_test_case_function_covered::dsl::function_identifier
-                    .eq(function_identifier),
-            ))
-        }
-        for chunk in denormalized_coverage_map_test_case_function_covered_values.chunks(1000) {
-            // HACK: avoid "too many SQL variables"
-            diesel::insert_into(
-                denormalized_coverage_map_test_case_function_covered::dsl::denormalized_coverage_map_test_case_function_covered,
-            )
-            .values(chunk)
-            .execute(conn)
-            .context("insert into denormalized_coverage_map_test_case_function_covered")?;
+            .context("insert into coverage_map_test_case_executed")?;
         }
 
         Ok(())
@@ -419,44 +314,43 @@ impl CoverageDatabase for DieselCoverageDatabase {
         conn.run_pending_migrations(MIGRATIONS)
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
 
-        // FIXME: bump/populate last_read_timestamp in denormalized_coverage_map
-
         let project_id = DEFAULT_PROJECT_ID;
 
-        let denormalized_coverage_map_id =
-            denormalized_coverage_map::dsl::denormalized_coverage_map
-                .inner_join(scm_commit::dsl::scm_commit)
-                .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-                .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
-                .select(denormalized_coverage_map::dsl::id)
-                .get_result::<String>(conn)
-                .optional()
-                .context("loading denormalized_coverage_map_id")?;
-        if denormalized_coverage_map_id.is_none() {
+        let coverage_map_id = coverage_map::dsl::coverage_map
+            .inner_join(scm_commit::dsl::scm_commit)
+            .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .select(coverage_map::dsl::id)
+            .get_result::<String>(conn)
+            .optional()
+            .context("loading coverage_map_id")?;
+        if coverage_map_id.is_none() {
             // This commit doesn't have any data.
             return Ok(None);
         }
 
         let now = OffsetDateTime::now_utc();
         let now = PrimitiveDateTime::new(now.date(), now.time());
-        diesel::update(denormalized_coverage_map::dsl::denormalized_coverage_map)
-            .set(denormalized_coverage_map::dsl::last_read_timestamp.eq(now))
-            .filter(denormalized_coverage_map::dsl::id.eq(denormalized_coverage_map_id.unwrap()))
+        diesel::update(coverage_map::dsl::coverage_map)
+            .set(coverage_map::dsl::last_read_timestamp.eq(now))
+            .filter(coverage_map::dsl::id.eq(coverage_map_id.unwrap()))
             .execute(conn)
-            .context("update denormalized_coverage_map.last_read_timestamp")?;
+            .context("update coverage_map.last_read_timestamp")?;
 
         // FIXME: typing isn't helping us; this type is (test_case_id, test_identifier)
-        let all_test_cases = denormalized_coverage_map::dsl::denormalized_coverage_map
+        let all_test_cases = coverage_map::dsl::coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
             .inner_join(
-                denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case
-                    .inner_join(test_case::dsl::test_case),
+                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed.inner_join(
+                    test_case_execution::dsl::test_case_execution
+                        .inner_join(test_case::dsl::test_case),
+                ),
             )
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
             .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
             .select((test_case::dsl::id, test_case::dsl::test_identifier))
             .get_results::<(String, String)>(conn)
-            .context("loading test cases from denormalized_coverage_map for commit_sha")?;
+            .context("loading test cases from coverage_map for commit_sha")?;
 
         let mut coverage_data = FullCoverageData::new();
 
@@ -473,19 +367,20 @@ impl CoverageDatabase for DieselCoverageDatabase {
         }
 
         // FIXME: typing isn't helping us; this type is (test_case_id, file_identifier)
-        let all_files_by_test_case = denormalized_coverage_map_test_case_file_covered::dsl::denormalized_coverage_map_test_case_file_covered
-            .inner_join(
-                denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case
-                .inner_join(
-                    denormalized_coverage_map::dsl::denormalized_coverage_map
-                    .inner_join(scm_commit::dsl::scm_commit)
-                )
-            )
+        let all_files_by_test_case = test_case_file_covered::dsl::test_case_file_covered
+            .inner_join(test_case_execution::dsl::test_case_execution.inner_join(
+                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed.inner_join(
+                    coverage_map::dsl::coverage_map.inner_join(scm_commit::dsl::scm_commit),
+                ),
+            ))
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
             .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
-            .select((denormalized_coverage_map_test_case::dsl::test_case_id, denormalized_coverage_map_test_case_file_covered::dsl::file_identifier))
+            .select((
+                test_case_execution::dsl::test_case_id,
+                test_case_file_covered::dsl::file_identifier,
+            ))
             .get_results::<(String, String)>(conn)
-            .context("loading from denormalized_coverage_map_test_case_file_covered for commit_sha")?;
+            .context("loading from test_case_file_covered for commit_sha via coverage_map")?;
         for (test_case_id, file_identifier) in all_files_by_test_case {
             coverage_data.add_file_to_test(FileCoverage {
                 test_identifier: test_case_id_to_test_identifier_map
@@ -497,19 +392,20 @@ impl CoverageDatabase for DieselCoverageDatabase {
         }
 
         // FIXME: typing isn't helping us; this type is (test_case_id, function_identifier)
-        let all_files_by_test_case = denormalized_coverage_map_test_case_function_covered::dsl::denormalized_coverage_map_test_case_function_covered
-            .inner_join(
-                denormalized_coverage_map_test_case::dsl::denormalized_coverage_map_test_case
-                .inner_join(
-                    denormalized_coverage_map::dsl::denormalized_coverage_map
-                    .inner_join(scm_commit::dsl::scm_commit)
-                )
-            )
+        let all_files_by_test_case = test_case_function_covered::dsl::test_case_function_covered
+            .inner_join(test_case_execution::dsl::test_case_execution.inner_join(
+                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed.inner_join(
+                    coverage_map::dsl::coverage_map.inner_join(scm_commit::dsl::scm_commit),
+                ),
+            ))
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
             .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
-            .select((denormalized_coverage_map_test_case::dsl::test_case_id, denormalized_coverage_map_test_case_function_covered::dsl::function_identifier))
+            .select((
+                test_case_execution::dsl::test_case_id,
+                test_case_function_covered::dsl::function_identifier,
+            ))
             .get_results::<(String, String)>(conn)
-            .context("loading from denormalized_coverage_map_test_case_function_covered for commit_sha")?;
+            .context("loading from test_case_function_covered for commit_sha via coverage_map")?;
         for (test_case_id, function_identifier) in all_files_by_test_case {
             coverage_data.add_function_to_test(FunctionCoverage {
                 test_identifier: test_case_id_to_test_identifier_map
@@ -532,17 +428,16 @@ impl CoverageDatabase for DieselCoverageDatabase {
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
 
         let project_id = DEFAULT_PROJECT_ID;
-        let denormalized_coverage_map_id =
-            denormalized_coverage_map::dsl::denormalized_coverage_map
-                .inner_join(scm_commit::dsl::scm_commit)
-                .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-                .select(denormalized_coverage_map::dsl::id)
-                .limit(1)
-                .first::<String>(conn)
-                .optional()
-                .context("loading denormalized_coverage_map_id")?;
+        let coverage_map_id = coverage_map::dsl::coverage_map
+            .inner_join(scm_commit::dsl::scm_commit)
+            .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+            .select(coverage_map::dsl::id)
+            .limit(1)
+            .first::<String>(conn)
+            .optional()
+            .context("loading denormalized_coverage_map_id")?;
 
-        Ok(denormalized_coverage_map_id.is_some())
+        Ok(coverage_map_id.is_some())
     }
 }
 
@@ -624,11 +519,11 @@ mod tests {
         {
             let conn = db.get_connection().unwrap();
 
-            let data = denormalized_coverage_map::dsl::denormalized_coverage_map
+            let data = coverage_map::dsl::coverage_map
                 .inner_join(scm_commit::dsl::scm_commit)
                 .select((
-                    denormalized_coverage_map::dsl::id,
-                    denormalized_coverage_map::dsl::last_read_timestamp,
+                    coverage_map::dsl::id,
+                    coverage_map::dsl::last_read_timestamp,
                 ))
                 .get_result::<(String, Option<PrimitiveDateTime>)>(conn)
                 .optional();
@@ -647,11 +542,11 @@ mod tests {
         {
             let conn = db.get_connection().unwrap();
 
-            let data = denormalized_coverage_map::dsl::denormalized_coverage_map
+            let data = coverage_map::dsl::coverage_map
                 .inner_join(scm_commit::dsl::scm_commit)
                 .select((
-                    denormalized_coverage_map::dsl::id,
-                    denormalized_coverage_map::dsl::last_read_timestamp,
+                    coverage_map::dsl::id,
+                    coverage_map::dsl::last_read_timestamp,
                 ))
                 .get_result::<(String, Option<PrimitiveDateTime>)>(conn)
                 .optional();
@@ -668,8 +563,10 @@ mod tests {
         let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
 
         let mut saved_data = CommitCoverageData::new();
+        // note -- no ancestor, so the only case that makes sense is for all existing tests to be executed tests
         saved_data.add_executed_test(test1.clone());
         saved_data.add_executed_test(test2.clone());
+        saved_data.add_executed_test(test3.clone());
         saved_data.add_existing_test(test1.clone());
         saved_data.add_existing_test(test2.clone());
         saved_data.add_existing_test(test3.clone());
