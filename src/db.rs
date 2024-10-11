@@ -8,7 +8,10 @@ use anyhow::{anyhow, Context, Result};
 use diesel::{connection::Instrumentation, prelude::*};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use log::trace;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::{uuid, Uuid};
 
@@ -42,6 +45,18 @@ pub struct DieselCoverageDatabase {
 }
 
 impl DieselCoverageDatabase {
+    pub fn new_sqlite_from_default_path() -> DieselCoverageDatabase {
+        // FIXME: hard-coded... ideally this could be overriden by CLI and ENV var and use different DBs, but this is a stopgap
+        DieselCoverageDatabase::new_sqlite(
+            // FIXME: ~/testtrim.db is clearly a bad place
+            &Path::join(
+                Path::new(&std::env::var_os("HOME").expect("HOME env var")),
+                "testtrim.db",
+            )
+            .to_string_lossy(),
+        )
+    }
+
     pub fn new_sqlite(path: &str) -> DieselCoverageDatabase {
         DieselCoverageDatabase {
             database_url: String::from(path),

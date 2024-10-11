@@ -46,8 +46,6 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
 
           shellHook = ''
-            export RUSTFLAGS="-C instrument-coverage"
-            export LLVM_PROFILE_FILE="default.profraw"
             export RUST_BACKTRACE=1
             export DATABASE_URL=file:test.db
           '';

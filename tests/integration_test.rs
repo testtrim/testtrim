@@ -6,7 +6,10 @@ use std::process::Command;
 use std::{env, sync::Mutex};
 use tempdir::TempDir;
 use testtrim::scm_git::GitScm;
-use testtrim::{get_target_test_cases, run_tests_subcommand, GetTestIdentifierMode};
+use testtrim::{
+    get_target_test_cases, run_tests_subcommand, AncestorSearchMode, GetTestIdentifierMode,
+    SourceMode,
+};
 use thiserror::Error;
 
 mod util;
@@ -231,11 +234,17 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
     ];
 
     fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {
+        let scm = GitScm {};
+
         info!("checking out {}", commit_test_data.test_commit);
         git_checkout(commit_test_data.test_commit)?;
 
-        let all_test_cases =
-            get_target_test_cases(&GetTestIdentifierMode::All, GitScm {})?.target_test_cases;
+        let all_test_cases = get_target_test_cases(
+            &GetTestIdentifierMode::All,
+            &scm,
+            AncestorSearchMode::AllCommits,
+        )?
+        .target_test_cases;
         assert_eq!(
             all_test_cases.iter().count(),
             commit_test_data.all_test_cases.len(),
@@ -252,8 +261,12 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             );
         }
 
-        let relevant_test_cases =
-            get_target_test_cases(&GetTestIdentifierMode::Relevant, GitScm {})?.target_test_cases;
+        let relevant_test_cases = get_target_test_cases(
+            &GetTestIdentifierMode::Relevant,
+            &scm,
+            AncestorSearchMode::AllCommits,
+        )?
+        .target_test_cases;
         assert_eq!(
             relevant_test_cases.iter().count(),
             commit_test_data.relevant_test_cases.len(),
@@ -270,7 +283,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             );
         }
 
-        run_tests_subcommand(&GetTestIdentifierMode::Relevant)?;
+        run_tests_subcommand(&GetTestIdentifierMode::Relevant, &SourceMode::Automatic)?;
 
         Ok(())
     }

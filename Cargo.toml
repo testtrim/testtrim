@@ -14,10 +14,10 @@ log = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 simplelog = "*"
+tempdir = "*"
 thiserror = "*"
-uuid = { version = "*", features = ["v4"] }
 time = "*"
+uuid = { version = "*", features = ["v4"] }
 
 [dev-dependencies]
-tempdir = "*"
 lazy_static = "*"

@@ -1,6 +1,7 @@
 use crate::scm::Scm;
 use crate::scm_git::GitScm;
 use crate::subcommand::SubcommandErrors;
+
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use commit_coverage_data::{
@@ -14,10 +15,11 @@ use scm::ScmCommit;
 use serde_json::Value;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::collections::HashSet;
-use std::env::{self, current_dir};
+use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
+use tempdir::TempDir;
 
 mod commit_coverage_data;
 mod db;
@@ -45,8 +47,9 @@ pub enum Commands {
 
     /// List test identifiers in the target project
     GetTestIdentifiers {
+        /// Strategy for test selection
         #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
-        mode: GetTestIdentifierMode,
+        test_selection_mode: GetTestIdentifierMode,
     },
 
     /// Execute tests in the target project, recording per-test coverage data
@@ -54,15 +57,47 @@ pub enum Commands {
         // FIXME: there's probably some kind of sub-structure that could be used to make a common set of arguments
         // between GetTestIdentifiers & RunTests -- which will likely include test targeting, database access, target
         // project, etc.
+        /// Strategy for test selection
         #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
-        mode: GetTestIdentifierMode,
+        test_selection_mode: GetTestIdentifierMode,
+
+        /// Strategy for treating the working directory and coverage map storage
+        #[arg(value_enum, long, default_value_t = SourceMode::Automatic)]
+        source_mode: SourceMode,
     },
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum GetTestIdentifierMode {
+    /// All tests will be executed.
     All,
+    /// Coverage maps and diffs will be used to identify a subset of tests to run
     Relevant,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum SourceMode {
+    /// Automatically selects `CleanCommit` if the working tree is clean, and `WorkingTree` otherwise.
+    Automatic,
+    /// Tests run on the working tree, and a coverage map is saved under the HEAD commit; working tree must be clean.
+    ///
+    /// `CleanCommit` will fail if the current working tree is not clean, as that could indicate uncommited changes that
+    /// would then be saved into the coverage map for that commit, possibly corrupting the coverage data.  It is
+    /// recommended to use `CleanCommit` for continuous integration systems which are providing the coverage map, either
+    /// for other developers, or for future continuous integration runs -- the advantage it has over `Automatic` is that
+    /// it will never silently skip producing a coverage map.
+    CleanCommit,
+    /// Tests run on the working tree, and a coverage map is saved under the HEAD commit.
+    ///
+    /// This is similar to `CleanCommit` but overriding the check for a clean repository.  This is provided for
+    /// situations where a continuous integration system might expect to have a dirty working tree, but it's still the
+    /// correct functional implementation of the tests.
+    OverrideCleanCommit,
+    /// Tests will be run with the contents of the current working tree, and no coverage map will be saved.
+    ///
+    /// If available, a recent commit may still be used as a basis for identifying useful tests to run.  This mode is
+    /// recommended for developers working on braches or local trees before they are finalized.
+    WorkingTree,
 }
 
 #[derive(Args)]
@@ -87,8 +122,14 @@ pub fn process_command(cli: Cli) {
 
     match &cli.command {
         Commands::Noop => {}
-        Commands::GetTestIdentifiers { mode } => {
-            let test_cases = match get_target_test_cases(mode, GitScm {}) {
+        Commands::GetTestIdentifiers {
+            test_selection_mode,
+        } => {
+            let test_cases = match get_target_test_cases(
+                test_selection_mode,
+                &GitScm {},
+                AncestorSearchMode::AllCommits,
+            ) {
                 Ok(test_cases) => test_cases,
                 Err(err) => {
                     error!("error occurred in get_target_test_cases: {:?}", err);
@@ -99,7 +140,10 @@ pub fn process_command(cli: Cli) {
                 info!("{:?}", test_case.test_identifier);
             }
         }
-        Commands::RunTests { mode } => match run_tests_subcommand(mode) {
+        Commands::RunTests {
+            test_selection_mode,
+            source_mode,
+        } => match run_tests_subcommand(test_selection_mode, source_mode) {
             Ok(_) => {}
             Err(err) => {
                 error!("error occurred in run_tests_subcommand: {:?}", err)
@@ -114,9 +158,16 @@ pub struct TargetTestCases<Commit: ScmCommit> {
     pub ancestor_commit: Option<Commit>,
 }
 
+#[derive(Debug)]
+pub enum AncestorSearchMode {
+    SkipHeadCommit,
+    AllCommits,
+}
+
 pub fn get_target_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
     mode: &GetTestIdentifierMode,
-    scm: MyScm,
+    scm: &MyScm,
+    ancestor_search_mode: AncestorSearchMode,
 ) -> Result<TargetTestCases<Commit>> {
     let test_binaries = find_test_binaries()?;
     trace!("test_binaries: {:?}", test_binaries);
@@ -132,26 +183,35 @@ pub fn get_target_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
         });
     }
 
-    // FIXME: it's likely that different options will be required here, like using diff from index->HEAD, or some base branch
-    // FIXME: this should really figure out the ancestor branch first, and then diff from ancestor->HEAD (etc) since all those changes are are untested
-    let changed_files = scm.get_changed_files("HEAD")?;
-    trace!("changed files: {:?}", changed_files);
-
     let (ancestor_commit, coverage_data) = match find_ancestor_commit_with_coverage_data(
-        &scm,
-        scm.get_head_commit()?, // FIXME: same as above; need better handling of dirty workingdir and targets
-        &mut (DieselCoverageDatabase::new_sqlite("test.db")), // FIXME: hard-coded
+        scm,
+        scm.get_head_commit()?,
+        ancestor_search_mode,
+        &mut (DieselCoverageDatabase::new_sqlite_from_default_path()),
     )? {
         Some((a, b)) => (Some(a), Some(b)),
         None => (None, None),
     };
-    match ancestor_commit {
-        Some(ref ancestor_commit) => info!(
-            "relevant test cases will be computed base upon commit {:?}",
-            scm.get_commit_identifier(ancestor_commit)
-        ),
-        None => warn!("no base commit identified with coverage data to work from"),
-    }
+    let ancestor_commit = match ancestor_commit {
+        Some(ancestor_commit) => {
+            info!(
+                "relevant test cases will be computed base upon commit {:?}",
+                scm.get_commit_identifier(&ancestor_commit)
+            );
+            ancestor_commit
+        }
+        None => {
+            warn!("no base commit identified with coverage data to work from");
+            return Ok(TargetTestCases {
+                all_test_cases: all_test_cases.clone(),
+                target_test_cases: all_test_cases,
+                ancestor_commit: None,
+            });
+        }
+    };
+
+    let changed_files = scm.get_changed_files(&ancestor_commit)?;
+    trace!("changed files: {:?}", changed_files);
 
     let total_test_case_count = all_test_cases.len();
     let relevant_test_cases = compute_relevant_test_cases(
@@ -160,7 +220,7 @@ pub fn get_target_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
             .map(|tc| tc.test_identifier.clone())
             .collect(),
         &changed_files,
-        &coverage_data,
+        &coverage_data, // FIXME: seems there's no reason for this to be Option<FullCoverageData>; it should be always present since the ancestor commit was determined by its presence
     )?;
 
     trace!("relevant_test_cases: {:?}", relevant_test_cases);
@@ -178,12 +238,45 @@ pub fn get_target_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
                 .into_iter()
                 .filter_map(|ti| map_rust_test_identifier_to_test_case(ti, &test_binaries)),
         ),
-        ancestor_commit,
+        ancestor_commit: Some(ancestor_commit),
     })
 }
 
-pub fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
-    let test_cases = get_target_test_cases(mode, GitScm {})?;
+pub fn run_tests_subcommand(mode: &GetTestIdentifierMode, source_mode: &SourceMode) -> Result<()> {
+    let scm = GitScm {};
+
+    let save_coverage_data = match source_mode {
+        SourceMode::Automatic => scm.is_working_dir_clean()?,
+        SourceMode::CleanCommit => {
+            if scm.is_working_dir_clean()? {
+                panic!("Unable to proceed");
+            } else {
+                true
+            }
+        }
+        SourceMode::OverrideCleanCommit => true,
+        SourceMode::WorkingTree => false,
+    };
+
+    let ancestor_search_mode = match source_mode {
+        SourceMode::Automatic => {
+            if scm.is_working_dir_clean()? {
+                AncestorSearchMode::SkipHeadCommit
+            } else {
+                AncestorSearchMode::AllCommits
+            }
+        }
+        SourceMode::CleanCommit | SourceMode::OverrideCleanCommit => {
+            AncestorSearchMode::SkipHeadCommit
+        }
+        SourceMode::WorkingTree => AncestorSearchMode::AllCommits,
+    };
+    info!(
+        "source_mode: {:?}, save_coverage_data: {}, ancestor_search_mode: {:?}",
+        source_mode, save_coverage_data, ancestor_search_mode
+    );
+
+    let test_cases = get_target_test_cases(mode, &scm, ancestor_search_mode)?;
 
     let mut coverage_data = run_tests(&test_cases.target_test_cases)?;
     for tc in test_cases.all_test_cases {
@@ -192,22 +285,19 @@ pub fn run_tests_subcommand(mode: &GetTestIdentifierMode) -> Result<()> {
 
     info!("successfully ran tests");
 
-    let scm = GitScm {};
+    if save_coverage_data {
+        let commit_sha = scm.get_commit_identifier(&scm.get_head_commit()?);
 
-    // FIXME: "HEAD" is obviously wrong when the local directory is dirty... just ignoring this for the moment --
-    // probably the right behavior in the future is to have two modes of operation -- if we're on a clean checkout (or
-    // forced by a CLI option) then we are testing a commit (HEAD) and should be storing coverage data for that commit
-    // (and we should diff between ancestor commit and HEAD).  If we're not on a clean checkout (or if asked not to),
-    // we're testing a working directory, in which case we should (a) diff between ancestor commit -> working directory,
-    // and (b) not save coverage data.
-    let commit_sha = scm.get_revision_sha("HEAD")?;
+        let ancestor_commit_sha = test_cases
+            .ancestor_commit
+            .map(|c| scm.get_commit_identifier(&c));
 
-    let ancestor_commit_sha = test_cases
-        .ancestor_commit
-        .map(|c| scm.get_commit_identifier(&c));
-
-    (DieselCoverageDatabase::new_sqlite("test.db")) // FIXME: hard-coded
-        .save_coverage_data(&coverage_data, &commit_sha, ancestor_commit_sha.as_deref())?;
+        DieselCoverageDatabase::new_sqlite_from_default_path().save_coverage_data(
+            &coverage_data,
+            &commit_sha,
+            ancestor_commit_sha.as_deref(),
+        )?;
+    }
 
     Ok(())
 }
@@ -295,11 +385,16 @@ pub struct TestCase {
 }
 
 fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet<TestCase>> {
+    let tmp_dir = TempDir::new("testtrim")?;
     let mut result: HashSet<TestCase> = HashSet::new();
 
     for binary in test_binaries {
         let output = Command::new(&binary.executable_path)
             .arg("--list")
+            .env(
+                "LLVM_PROFILE_FILE",
+                Path::join(tmp_dir.path(), "get_all_test_cases_%m_%p.profraw"),
+            )
             .output()
             .expect("Failed to execute binary --list command");
 
@@ -341,6 +436,7 @@ fn get_all_test_cases(test_binaries: &HashSet<TestBinary>) -> Result<HashSet<Tes
 fn find_ancestor_commit_with_coverage_data<Commit: ScmCommit, MyScm: Scm<Commit>>(
     scm: &MyScm,
     head: Commit,
+    ancestor_search_mode: AncestorSearchMode,
     coverage_db: &mut impl CoverageDatabase,
 ) -> Result<Option<(Commit, FullCoverageData)>> {
     if !coverage_db.has_any_coverage_data()? {
@@ -349,12 +445,18 @@ fn find_ancestor_commit_with_coverage_data<Commit: ScmCommit, MyScm: Scm<Commit>
 
     let mut commit = head;
     let commit_identifier = scm.get_commit_identifier(&commit);
-    let mut coverage_data = coverage_db.read_coverage_data(&commit_identifier)?;
-    trace!(
-        "commit id {} had coverage data? {:}",
-        commit_identifier,
-        coverage_data.is_some()
-    );
+    let mut coverage_data = match ancestor_search_mode {
+        AncestorSearchMode::AllCommits => {
+            let coverage_data = coverage_db.read_coverage_data(&commit_identifier)?;
+            trace!(
+                "commit (HEAD) id {} had coverage data? {:}",
+                commit_identifier,
+                coverage_data.is_some()
+            );
+            coverage_data
+        }
+        AncestorSearchMode::SkipHeadCommit => None,
+    };
 
     while coverage_data.is_none() {
         let mut parents = scm.get_commit_parents(&commit)?;
@@ -503,6 +605,7 @@ fn run_tests<'a, I>(test_cases: I) -> Result<CommitCoverageData>
 where
     I: IntoIterator<Item = &'a TestCase>,
 {
+    let tmp_dir = TempDir::new("testtrim")?;
     let mut coverage_library = CoverageLibrary::new();
     let mut coverage_data = CommitCoverageData::new();
 
@@ -520,8 +623,7 @@ where
             coverage_library.load_binary(&test_case.test_binary.executable_path)?;
         }
 
-        // FIXME: use a tmp dir rather than cwd, so that we don't dirty the repo up
-        let coverage_dir = env::current_dir().unwrap().join(
+        let coverage_dir = tmp_dir.path().join(
             Path::new("coverage-output").join(
                 test_case
                     .test_binary
@@ -612,12 +714,11 @@ mod tests {
         full_coverage_data::FullCoverageData,
         rust_llvm::sentinel_function,
         scm::Scm,
-        TestBinary, TestCase,
+        AncestorSearchMode, TestBinary, TestCase,
     };
     use lazy_static::lazy_static;
     use std::{
         collections::{HashMap, HashSet},
-        iter,
         path::PathBuf,
     };
 
@@ -699,19 +800,9 @@ mod tests {
     impl crate::scm::Scm<MockScmCommit> for MockScm {
         fn get_changed_files(
             &self,
-            _commit: &str,
+            _commit: &MockScmCommit,
         ) -> anyhow::Result<std::collections::HashSet<std::path::PathBuf>> {
             unreachable!() // not required for these tests
-        }
-
-        fn get_previous_commits(&self) -> impl Iterator<Item = anyhow::Result<String>> {
-            // not required for these tests
-            iter::from_fn(|| unreachable!())
-        }
-
-        fn get_revision_sha(&self, _commit: &str) -> anyhow::Result<String> {
-            // not required for these tests
-            unreachable!()
         }
 
         fn get_head_commit(&self) -> anyhow::Result<MockScmCommit> {
@@ -719,12 +810,6 @@ mod tests {
                 Some(commit) => Ok(commit),
                 None => Err(anyhow::anyhow!("test error: no head commit found")),
             }
-            // for commit in self.commits.iter() {
-            //     if self.get_commit_identifier(&commit) == self.head_commit {
-            //         return Ok(commit.clone());
-            //     }
-            // }
-            // Err(anyhow::anyhow!("test error: no head commit found"))
         }
 
         fn get_commit_identifier(&self, commit: &MockScmCommit) -> String {
@@ -754,6 +839,10 @@ mod tests {
                 }
             }
             Ok(bce.map(|bce| self.get_commit(&bce).unwrap()))
+        }
+
+        fn is_working_dir_clean(&self) -> anyhow::Result<bool> {
+            unreachable!()
         }
     }
 
@@ -803,6 +892,7 @@ mod tests {
         let result = find_ancestor_commit_with_coverage_data(
             &scm,
             scm.get_head_commit().unwrap(),
+            AncestorSearchMode::AllCommits,
             &mut MockCoverageDatabase {
                 commit_data: HashMap::new(),
             },
@@ -835,6 +925,7 @@ mod tests {
         let result = find_ancestor_commit_with_coverage_data(
             &scm,
             scm.get_head_commit().unwrap(),
+            AncestorSearchMode::AllCommits,
             &mut MockCoverageDatabase {
                 commit_data: HashMap::from([(String::from("c2"), previous_coverage_data)]),
             },
@@ -893,6 +984,7 @@ mod tests {
         let result = find_ancestor_commit_with_coverage_data(
             &scm,
             scm.get_head_commit().unwrap(),
+            AncestorSearchMode::AllCommits,
             &mut MockCoverageDatabase {
                 commit_data: HashMap::from([
                     (String::from("branch-a"), branch_coverage_data),
