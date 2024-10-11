@@ -327,6 +327,7 @@ pub struct TestBinary {
 }
 
 fn find_test_binaries() -> Result<HashSet<TestBinary>> {
+    let tmp_dir = TempDir::new("testtrim")?;
     let repo_root = current_dir()?;
 
     let output = Command::new("cargo")
@@ -337,6 +338,12 @@ fn find_test_binaries() -> Result<HashSet<TestBinary>> {
             "--no-run",
             "--message-format=json",
         ])
+        // RUSTFLAGS is needed because we'll load these binaries for their profiling data later; and LLVM_PROFILE_FILE
+        // is set to avoid polluting the working-dir with default_*.profraw files during build process.
+        .env(
+            "LLVM_PROFILE_FILE",
+            tmp_dir.path().join("default_%m_%p.profraw"),
+        )
         .env("RUSTFLAGS", "-C instrument-coverage")
         .output()
         .expect("Failed to execute cargo test command");
