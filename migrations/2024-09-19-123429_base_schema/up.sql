@@ -52,6 +52,13 @@ CREATE TABLE test_case_function_covered (
     PRIMARY KEY (test_case_execution_id, function_identifier)
 );
 
+CREATE TABLE test_case_coverage_identifier_covered (
+    test_case_execution_id TEXT REFERENCES test_case_execution (id) NOT NULL, -- ideally should be UUID
+    -- Ideally this would be JSON -- support in Diesel incoming https://github.com/diesel-rs/diesel/blob/381be195688db339fe2927e49bc818ab86754dd9/CHANGELOG.md?plain=1#L23
+    coverage_identifier TEXT NOT NULL,
+    PRIMARY KEY (test_case_execution_id, coverage_identifier)
+);
+
 
 -- Denormalized data allowing for the quick and (hopefully) efficient lookup of test cases that need to be run...
 

@@ -231,6 +231,30 @@ impl CoverageDatabase for DieselCoverageDatabase {
                         .context("bulk insert into test_case_function_covered")?;
                     }
                 }
+
+                if let Some(coverage_identifiers) = coverage_data
+                    .executed_test_to_coverage_identifier_map()
+                    .get(tc)
+                {
+                    let mut tuples = vec![];
+                    for tc in coverage_identifiers {
+                        tuples.push((
+                            test_case_coverage_identifier_covered::dsl::test_case_execution_id
+                                .eq(test_case_execution_id.to_string()),
+                            test_case_coverage_identifier_covered::dsl::coverage_identifier
+                                .eq(serde_json::to_string(&tc)?),
+                        ))
+                    }
+                    for chunk in tuples.chunks(1000) {
+                        // HACK: avoid "too many SQL variables"
+                        diesel::insert_into(
+                            test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered,
+                        )
+                        .values(chunk)
+                        .execute(conn)
+                        .context("bulk insert into test_case_coverage_identifier_covered")?;
+                    }
+                }
             }
         }
 
@@ -406,7 +430,39 @@ impl CoverageDatabase for DieselCoverageDatabase {
         }
 
         // FIXME: typing isn't helping us; this type is (test_case_id, function_identifier)
-        let all_files_by_test_case = test_case_function_covered::dsl::test_case_function_covered
+        let all_functions_by_test_case =
+            test_case_function_covered::dsl::test_case_function_covered
+                .inner_join(
+                    test_case_execution::dsl::test_case_execution.inner_join(
+                        coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
+                            .inner_join(
+                                coverage_map::dsl::coverage_map
+                                    .inner_join(scm_commit::dsl::scm_commit),
+                            ),
+                    ),
+                )
+                .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+                .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+                .select((
+                    test_case_execution::dsl::test_case_id,
+                    test_case_function_covered::dsl::function_identifier,
+                ))
+                .get_results::<(String, String)>(conn)
+                .context(
+                    "loading from test_case_function_covered for commit_sha via coverage_map",
+                )?;
+        for (test_case_id, function_identifier) in all_functions_by_test_case {
+            coverage_data.add_function_to_test(FunctionCoverage {
+                test_identifier: test_case_id_to_test_identifier_map
+                    .get(&test_case_id)
+                    .expect("test_case_id_to_test_identifier_map lookup")
+                    .clone(),
+                function_name: function_identifier,
+            });
+        }
+
+        // FIXME: typing isn't helping us; this type is (test_case_id, function_identifier)
+        let all_coverage_identifiers_by_test_case = test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered
             .inner_join(test_case_execution::dsl::test_case_execution.inner_join(
                 coverage_map_test_case_executed::dsl::coverage_map_test_case_executed.inner_join(
                     coverage_map::dsl::coverage_map.inner_join(scm_commit::dsl::scm_commit),
@@ -416,18 +472,18 @@ impl CoverageDatabase for DieselCoverageDatabase {
             .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
             .select((
                 test_case_execution::dsl::test_case_id,
-                test_case_function_covered::dsl::function_identifier,
+                test_case_coverage_identifier_covered::dsl::coverage_identifier,
             ))
             .get_results::<(String, String)>(conn)
-            .context("loading from test_case_function_covered for commit_sha via coverage_map")?;
-        for (test_case_id, function_identifier) in all_files_by_test_case {
-            coverage_data.add_function_to_test(FunctionCoverage {
-                test_identifier: test_case_id_to_test_identifier_map
+            .context("loading from test_case_coverage_identifier_covered for commit_sha via coverage_map")?;
+        for (test_case_id, coverage_identifier) in all_coverage_identifiers_by_test_case {
+            coverage_data.add_heuristic_coverage_to_test(
+                test_case_id_to_test_identifier_map
                     .get(&test_case_id)
                     .expect("test_case_id_to_test_identifier_map lookup")
                     .clone(),
-                function_name: function_identifier,
-            });
+                serde_json::from_str(&coverage_identifier)?,
+            );
         }
 
         Ok(Some(coverage_data))
@@ -458,7 +514,9 @@ impl CoverageDatabase for DieselCoverageDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commit_coverage_data::CommitCoverageData;
+    use crate::commit_coverage_data::{
+        CommitCoverageData, HeuristicCoverage, RustCoverageIdentifier, RustExternalDependency,
+    };
     use lazy_static::lazy_static;
 
     lazy_static! {
@@ -577,6 +635,14 @@ mod tests {
         let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
 
         let mut saved_data = CommitCoverageData::new();
+        let thiserror = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+            package_name: String::from("thiserror"),
+            version: String::from("0.1"),
+        });
+        let regex = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+            package_name: String::from("regex"),
+            version: String::from("0.1"),
+        });
         // note -- no ancestor, so the only case that makes sense is for all existing tests to be executed tests
         saved_data.add_executed_test(test1.clone());
         saved_data.add_executed_test(test2.clone());
@@ -607,6 +673,18 @@ mod tests {
         saved_data.add_function_to_test(FunctionCoverage {
             function_name: "func2".to_string(),
             test_identifier: test1.clone(),
+        });
+        saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test1.clone(),
+            coverage_identifier: regex.clone(),
+        });
+        saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test2.clone(),
+            coverage_identifier: regex.clone(),
+        });
+        saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test1.clone(),
+            coverage_identifier: thiserror.clone(),
         });
 
         let result = db.save_coverage_data(&saved_data, "c1", None);
@@ -683,6 +761,38 @@ mod tests {
         assert!(loaded_data
             .function_to_test_map()
             .get("func1")
+            .unwrap()
+            .contains(&test2));
+        assert_eq!(loaded_data.coverage_identifier_to_test_map().len(), 2);
+        assert_eq!(
+            loaded_data
+                .coverage_identifier_to_test_map()
+                .get(&regex)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            loaded_data
+                .coverage_identifier_to_test_map()
+                .get(&thiserror)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&thiserror)
+            .unwrap()
+            .contains(&test1));
+        assert!(loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
+            .unwrap()
+            .contains(&test1));
+        assert!(loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
             .unwrap()
             .contains(&test2));
     }

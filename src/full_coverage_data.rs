@@ -4,7 +4,9 @@ use std::{
     path::PathBuf,
 };
 
-use crate::commit_coverage_data::{FileCoverage, FunctionCoverage, RustTestIdentifier};
+use crate::commit_coverage_data::{
+    FileCoverage, FunctionCoverage, RustCoverageIdentifier, RustTestIdentifier,
+};
 
 /// FullCoverageData represents coverage data that encompasses the entire project's test suite.  It will typically be
 /// coalesced and merged from multiple test runs over time.
@@ -15,6 +17,7 @@ pub struct FullCoverageData {
     all_tests: HashSet<RustTestIdentifier>,
     file_to_test_map: HashMap<PathBuf, HashSet<RustTestIdentifier>>,
     function_to_test_map: HashMap<String, HashSet<RustTestIdentifier>>,
+    coverage_identifier_to_test_map: HashMap<RustCoverageIdentifier, HashSet<RustTestIdentifier>>,
 }
 
 impl Default for FullCoverageData {
@@ -29,6 +32,7 @@ impl FullCoverageData {
             all_tests: HashSet::new(),
             file_to_test_map: HashMap::new(),
             function_to_test_map: HashMap::new(),
+            coverage_identifier_to_test_map: HashMap::new(),
         }
     }
 
@@ -42,6 +46,12 @@ impl FullCoverageData {
 
     pub fn function_to_test_map(&self) -> &HashMap<String, HashSet<RustTestIdentifier>> {
         &self.function_to_test_map
+    }
+
+    pub fn coverage_identifier_to_test_map(
+        &self,
+    ) -> &HashMap<RustCoverageIdentifier, HashSet<RustTestIdentifier>> {
+        &self.coverage_identifier_to_test_map
     }
 
     pub fn add_existing_test(&mut self, test_identifier: RustTestIdentifier) {
@@ -65,10 +75,25 @@ impl FullCoverageData {
             .or_default()
             .insert(coverage.test_identifier);
     }
+
+    pub fn add_heuristic_coverage_to_test(
+        &mut self,
+        test_identifier: RustTestIdentifier,
+        coverage: RustCoverageIdentifier,
+    ) {
+        // "FunctionCoverage" is slightly over engineered compared to just having two &str arguments, but it prevents
+        // the two strings from being passed in the wrong order by making them named.
+        self.coverage_identifier_to_test_map
+            .entry(coverage)
+            .or_default()
+            .insert(test_identifier);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::commit_coverage_data::RustExternalDependency;
+
     use super::*;
     use lazy_static::lazy_static;
 
@@ -207,6 +232,55 @@ mod tests {
         assert!(coverage_data
             .function_to_test_map()
             .get("func2")
+            .unwrap()
+            .contains(&test1));
+    }
+
+    #[test]
+    fn add_heuristic_coverage_to_test() {
+        let mut coverage_data = FullCoverageData::new();
+        let thiserror = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+            package_name: String::from("thiserror"),
+            version: String::from("0.1"),
+        });
+        let regex = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+            package_name: String::from("regex"),
+            version: String::from("0.1"),
+        });
+        coverage_data.add_heuristic_coverage_to_test(test1.clone(), regex.clone());
+        coverage_data.add_heuristic_coverage_to_test(test2.clone(), regex.clone());
+        coverage_data.add_heuristic_coverage_to_test(test1.clone(), thiserror.clone());
+
+        assert_eq!(coverage_data.coverage_identifier_to_test_map().len(), 2);
+        assert_eq!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&regex)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&thiserror)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
+            .unwrap()
+            .contains(&test1));
+        assert!(coverage_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
+            .unwrap()
+            .contains(&test2));
+        assert!(coverage_data
+            .coverage_identifier_to_test_map()
+            .get(&thiserror)
             .unwrap()
             .contains(&test1));
     }

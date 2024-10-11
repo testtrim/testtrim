@@ -5,12 +5,15 @@ edition = "2021"
 
 [dependencies]
 anyhow = "*"
+cargo-lock = "*"
 clap = { version = "*", features = ["derive"] }
 clap-verbosity-flag = "*"
 diesel = { version = "*", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "uuid", "time"] }
 diesel_migrations = "*"
+lazy_static = "*"
 llvm_profparser = "*"
 log = "*"
+regex = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 simplelog = "*"
@@ -18,6 +21,3 @@ tempdir = "*"
 thiserror = "*"
 time = "*"
 uuid = { version = "*", features = ["v4"] }
-
-[dev-dependencies]
-lazy_static = "*"

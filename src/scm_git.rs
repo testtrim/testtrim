@@ -157,4 +157,24 @@ impl Scm<GitScmCommit> for GitScm {
         let stdout = String::from_utf8(output.stdout)?;
         Ok(stdout.trim() == "")
     }
+
+    fn fetch_file_content(&self, commit: &GitScmCommit, path: &std::path::Path) -> Result<Vec<u8>> {
+        let output = Command::new("git")
+            .args([
+                "show",
+                &format!("{}:{}", &commit.sha, path.to_str().unwrap()),
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!("git show {}:{}", &commit.sha, path.to_str().unwrap()),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+
+        Ok(output.stdout)
+    }
 }

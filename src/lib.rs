@@ -1,23 +1,31 @@
+#![feature(let_chains)]
+
 use crate::scm::Scm;
 use crate::scm_git::GitScm;
 use crate::subcommand::SubcommandErrors;
 
 use anyhow::{Context, Result};
+use cargo_lock::Lockfile;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use commit_coverage_data::{
-    CommitCoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier,
+    CommitCoverageData, FileCoverage, FunctionCoverage, HeuristicCoverage, RustCoverageIdentifier,
+    RustExternalDependency, RustTestIdentifier,
 };
 use db::{CoverageDatabase, DieselCoverageDatabase};
 use full_coverage_data::FullCoverageData;
+use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
+use regex::Regex;
 use rust_llvm::{CoverageLibrary, ProfilingData};
 use scm::ScmCommit;
 use serde_json::Value;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env::current_dir;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str::FromStr as _;
 use std::{fs, io};
 use tempdir::TempDir;
 
@@ -209,19 +217,27 @@ pub fn get_target_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
             });
         }
     };
+    // FIXME: variable unwrapping here feels like we're not handling the match cases above well
+    let coverage_data = coverage_data.unwrap(); // must have been provided or we'd have exited in last match block
 
     let changed_files = scm.get_changed_files(&ancestor_commit)?;
     trace!("changed files: {:?}", changed_files);
 
     let total_test_case_count = all_test_cases.len();
-    let relevant_test_cases = compute_relevant_test_cases(
-        &all_test_cases
-            .iter()
-            .map(|tc| tc.test_identifier.clone())
-            .collect(),
+    let all_test_identifiers = all_test_cases
+        .iter()
+        .map(|tc| tc.test_identifier.clone())
+        .collect();
+    let mut relevant_test_cases =
+        compute_relevant_test_cases(&all_test_identifiers, &changed_files, &coverage_data)?;
+
+    relevant_test_cases.extend(platform_specific_relevant_test_cases(
+        &all_test_identifiers,
         &changed_files,
-        &coverage_data, // FIXME: seems there's no reason for this to be Option<FullCoverageData>; it should be always present since the ancestor commit was determined by its presence
-    )?;
+        scm,
+        &ancestor_commit,
+        &coverage_data,
+    )?);
 
     trace!("relevant_test_cases: {:?}", relevant_test_cases);
     println!(
@@ -510,7 +526,7 @@ fn find_ancestor_commit_with_coverage_data<Commit: ScmCommit, MyScm: Scm<Commit>
 fn compute_relevant_test_cases(
     eval_target_test_cases: &HashSet<RustTestIdentifier>,
     eval_target_changed_files: &HashSet<PathBuf>,
-    coverage_data: &Option<FullCoverageData>,
+    coverage_data: &FullCoverageData,
 ) -> Result<HashSet<RustTestIdentifier>> {
     let mut retval = HashSet::new();
 
@@ -542,21 +558,13 @@ fn compute_relevant_test_cases(
 
 fn compute_all_new_test_cases(
     eval_target_test_cases: &HashSet<RustTestIdentifier>,
-    coverage_data: &Option<FullCoverageData>,
+    coverage_data: &FullCoverageData,
     retval: &mut HashSet<RustTestIdentifier>,
 ) -> Result<()> {
     for tc in eval_target_test_cases {
-        match coverage_data {
-            Some(ref coverage_data) => {
-                if !coverage_data.all_tests().contains(tc) {
-                    trace!("test case {:?} was not found in parent coverage data and so will be run as a new test", tc);
-                    retval.insert(tc.clone());
-                }
-            }
-            None => {
-                trace!("test case {:?} was not found in (ABSENT) parent coverage data and so will be run as a new test", tc);
-                retval.insert(tc.clone());
-            }
+        if !coverage_data.all_tests().contains(tc) {
+            trace!("test case {:?} was not found in parent coverage data and so will be run as a new test", tc);
+            retval.insert(tc.clone());
         }
     }
     Ok(())
@@ -565,22 +573,126 @@ fn compute_all_new_test_cases(
 fn compute_changed_file_test_cases(
     eval_target_test_cases: &HashSet<RustTestIdentifier>,
     eval_target_changed_files: &HashSet<PathBuf>,
-    coverage_data: &Option<FullCoverageData>,
+    coverage_data: &FullCoverageData,
     retval: &mut HashSet<RustTestIdentifier>,
 ) -> Result<()> {
-    if let Some(coverage_data) = coverage_data {
-        for changed_file in eval_target_changed_files {
-            if let Some(tests) = coverage_data.file_to_test_map().get(changed_file) {
+    for changed_file in eval_target_changed_files {
+        if let Some(tests) = coverage_data.file_to_test_map().get(changed_file) {
+            for test in tests {
+                // Even if this test covered this file in the past, if the test doesn't exist in the current eval
+                // target then we can't run it anymore; typically happens when a test case is removed.
+                if eval_target_test_cases.contains(test) {
+                    retval.insert(test.clone());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn platform_specific_relevant_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+    eval_target_test_cases: &HashSet<RustTestIdentifier>,
+    eval_target_changed_files: &HashSet<PathBuf>,
+    scm: &MyScm,
+    ancestor_commit: &Commit,
+    coverage_data: &FullCoverageData,
+) -> Result<HashSet<RustTestIdentifier>> {
+    let mut test_cases = HashSet::new();
+
+    // FIXME: I'm not confident that this check is right -- could there be multiple lock files in a realistic repo?  But
+    // this is simple and seems pretty applicable for now.
+    if eval_target_changed_files.contains(Path::new("Cargo.lock")) {
+        rust_cargo_deps_test_cases(
+            eval_target_test_cases,
+            scm,
+            ancestor_commit,
+            coverage_data,
+            &mut test_cases,
+        )?;
+    }
+
+    Ok(test_cases)
+}
+
+fn rust_cargo_deps_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+    eval_target_test_cases: &HashSet<RustTestIdentifier>,
+    scm: &MyScm,
+    ancestor_commit: &Commit,
+    coverage_data: &FullCoverageData,
+    test_cases: &mut HashSet<RustTestIdentifier>,
+) -> Result<()> {
+    // I think there might be plausible cases where Cargo.lock loading from the previous commit would fail, but we
+    // wouldn't want to error out... for example, if Cargo.lock was added since the ancestor commit?.  But I'm not
+    // confident what those cases would be where we would actually have ancestor coverage data yet be discovering
+    // Cargo.lock wasn't present?  And what behavior we'd want.  So for now we'll treat that as an error and wait for
+    // the situation to appear.
+    let ancestor_lock = scm.fetch_file_content(ancestor_commit, Path::new("Cargo.lock"))?;
+    let ancestor_lock = String::from_utf8(ancestor_lock)?;
+    let ancestor_lock = Lockfile::from_str(&ancestor_lock)?;
+
+    // FIXME: This doesn't handle the fact that Cargo.lock could have multiple versions of the same dependency... not
+    // sure what to do in that case...
+    let current_lock = Lockfile::load("Cargo.lock")?;
+    let mut current_lock_map = HashMap::new();
+    for p in current_lock.packages {
+        current_lock_map.insert(String::from(p.name), p.version);
+    }
+
+    // Cases to consider:
+    // - Packages with same version in both: Ignore.
+    // - Packages that have changed from one version to another: search for coverage data based upon old version, add
+    //   tests.
+    // - Packages that have were present in ancestor_lock and aren't in current_lock: I think also search and add those
+    //   tests?
+    // - New packages in current_lock that aren't in ancestor_lock aren't relevant -- they wouldn't be part of the
+    //   ancestor's coverage data.
+
+    for old in ancestor_lock.packages {
+        let relevant_change = match current_lock_map.get(old.name.as_str()) {
+            Some(current_version) => {
+                if *current_version != old.version {
+                    trace!(
+                        "Cargo.lock package changed {}, old: {}, current: {}",
+                        old.name,
+                        old.version,
+                        current_version
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+            None => {
+                trace!("Cargo.lock package removed {}", old.name);
+                true
+            }
+        };
+
+        if relevant_change {
+            info!(
+                "Change to dependency {}; will run all tests that touched it",
+                old.name
+            );
+            let coverage_identifier =
+                RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+                    package_name: String::from(old.name.as_str()),
+                    version: old.version.to_string(),
+                });
+
+            if let Some(tests) = coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&coverage_identifier)
+            {
                 for test in tests {
-                    // Even if this test covered this file in the past, if the test doesn't exist in the current eval
-                    // target then we can't run it anymore; typically happens when a test case is removed.
                     if eval_target_test_cases.contains(test) {
-                        retval.insert(test.clone());
+                        debug!("test {test:?} needs rerun");
+                        test_cases.insert(test.clone());
                     }
                 }
             }
         }
     }
+
     Ok(())
 }
 
@@ -680,7 +792,7 @@ where
 
         let reader = fs::File::open(&profile_file).context("Failed to open profile file")?;
         let profiling_data =
-            ProfilingData::new_from_profraw_reader(reader).expect("new_from_profraw_reader");
+            ProfilingData::new_from_profraw_reader(reader).context("new_from_profraw_reader")?;
 
         for point in profiling_data.get_hit_instrumentation_points() {
             // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but the
@@ -688,6 +800,34 @@ where
             // test that hits this case and breaks
             if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
                 for file in metadata.file_paths {
+                    // detect a path like:
+                    // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
+                    // by identifying `.cargo/registry/src` section, and then extract the package name (regex-automata)
+                    // and version (0.4.7) from the path if present.
+                    let mut itr = file.components();
+                    while let Some(comp) = itr.next() {
+                        if let std::path::Component::Normal(path) = comp
+                            && path == ".cargo"
+                            && let Some(std::path::Component::Normal(path)) = itr.next()
+                            && path == "registry"
+                            && let Some(std::path::Component::Normal(path)) = itr.next()
+                            && path == "src"
+                            && let Some(std::path::Component::Normal(_registry_path)) = itr.next()
+                            && let Some(std::path::Component::Normal(package_path)) = itr.next()
+                            && let Some((package_name, version)) = parse_cargo_package(package_path)
+                        {
+                            trace!("Found package reference to {} / {}", package_name, version);
+                            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                                test_identifier: test_case.test_identifier.clone(),
+                                coverage_identifier: RustCoverageIdentifier::ExternalDependency(
+                                    RustExternalDependency {
+                                        package_name,
+                                        version,
+                                    },
+                                ),
+                            })
+                        }
+                    }
                     coverage_data.add_file_to_test(FileCoverage {
                         file_name: file,
                         test_identifier: test_case.test_identifier.clone(),
@@ -704,6 +844,32 @@ where
     Ok(coverage_data)
 }
 
+lazy_static! {
+    static ref parse_cargo_package_regex: Regex =
+        Regex::new(r"^(?<package_name>.+)-(?<package_version>[0-9]+\..*)$").unwrap();
+}
+
+/// Parse a path from .cargo/registry/src/*/... (eg. ws2_32-sys-0.2.1) and return the package name ("ws2_32") and
+/// version ("0.2.1") if they could be distinguished.
+///
+/// Some awkward examples:
+///   ws2_32-sys-0.2.1
+///   winit-0.29.1-beta
+///   yeslogic-fontconfig-sys-5.0.0
+///   wasi-0.11.0+wasi-snapshot-preview1
+fn parse_cargo_package(path: &OsStr) -> Option<(String, String)> {
+    // I think splitting on "-[0-9]\." is probably reasonably good.
+    match path.to_str() {
+        Some(path) => parse_cargo_package_regex.captures(path).map(|captures| {
+            (
+                String::from(&captures["package_name"]),
+                String::from(&captures["package_version"]),
+            )
+        }),
+        None => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -712,6 +878,7 @@ mod tests {
         db::CoverageDatabase,
         find_ancestor_commit_with_coverage_data,
         full_coverage_data::FullCoverageData,
+        parse_cargo_package,
         rust_llvm::sentinel_function,
         scm::Scm,
         AncestorSearchMode, TestBinary, TestCase,
@@ -719,6 +886,7 @@ mod tests {
     use lazy_static::lazy_static;
     use std::{
         collections::{HashMap, HashSet},
+        ffi::OsStr,
         path::PathBuf,
     };
 
@@ -842,6 +1010,14 @@ mod tests {
         }
 
         fn is_working_dir_clean(&self) -> anyhow::Result<bool> {
+            unreachable!()
+        }
+
+        fn fetch_file_content(
+            &self,
+            _commit: &MockScmCommit,
+            _path: &std::path::Path,
+        ) -> anyhow::Result<Vec<u8>> {
             unreachable!()
         }
     }
@@ -1003,7 +1179,8 @@ mod tests {
 
     #[test]
     fn compute_empty_case() {
-        let result = compute_relevant_test_cases(&HashSet::new(), &HashSet::new(), &None);
+        let result =
+            compute_relevant_test_cases(&HashSet::new(), &HashSet::new(), &FullCoverageData::new());
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 0);
@@ -1014,7 +1191,11 @@ mod tests {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
         eval_target_test_cases.insert(test1.clone());
 
-        let result = compute_relevant_test_cases(&eval_target_test_cases, &HashSet::new(), &None);
+        let result = compute_relevant_test_cases(
+            &eval_target_test_cases,
+            &HashSet::new(),
+            &FullCoverageData::new(),
+        );
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -1033,7 +1214,7 @@ mod tests {
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
             &HashSet::new(),
-            &Some(previous_coverage_data),
+            &previous_coverage_data,
         );
 
         assert!(result.is_ok());
@@ -1053,7 +1234,7 @@ mod tests {
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
             &HashSet::new(),
-            &Some(previous_coverage_data),
+            &previous_coverage_data,
         );
 
         assert!(result.is_ok());
@@ -1080,7 +1261,7 @@ mod tests {
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
             &eval_target_changed_files,
-            &Some(previous_coverage_data),
+            &previous_coverage_data,
         );
 
         assert!(result.is_ok());
@@ -1112,7 +1293,7 @@ mod tests {
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
             &eval_target_changed_files,
-            &Some(previous_coverage_data),
+            &previous_coverage_data,
         );
 
         assert!(result.is_ok());
@@ -1145,12 +1326,42 @@ mod tests {
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
             &eval_target_changed_files,
-            &Some(previous_coverage_data),
+            &previous_coverage_data,
         );
 
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
         assert!(result.contains(&test2));
+    }
+
+    #[test]
+    fn test_parse_cargo_package() {
+        assert_eq!(
+            parse_cargo_package(OsStr::new("regex-automata-0.4.7")),
+            Some((String::from("regex-automata"), String::from("0.4.7")))
+        );
+        assert_eq!(
+            parse_cargo_package(OsStr::new("ws2_32-sys-0.2.1")),
+            Some((String::from("ws2_32-sys"), String::from("0.2.1")))
+        );
+        assert_eq!(
+            parse_cargo_package(OsStr::new("winit-0.29.1-beta")),
+            Some((String::from("winit"), String::from("0.29.1-beta")))
+        );
+        assert_eq!(
+            parse_cargo_package(OsStr::new("yeslogic-fontconfig-sys-5.0.0")),
+            Some((
+                String::from("yeslogic-fontconfig-sys"),
+                String::from("5.0.0")
+            ))
+        );
+        assert_eq!(
+            parse_cargo_package(OsStr::new("wasi-0.11.0+wasi-snapshot-preview1")),
+            Some((
+                String::from("wasi"),
+                String::from("0.11.0+wasi-snapshot-preview1")
+            ))
+        );
     }
 }

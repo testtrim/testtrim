@@ -53,6 +53,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    test_case_coverage_identifier_covered (test_case_execution_id, coverage_identifier) {
+        test_case_execution_id -> Text,
+        coverage_identifier -> Text,
+    }
+}
+
+diesel::table! {
     test_case_execution (id) {
         id -> Text,
         test_case_id -> Text,
@@ -82,6 +89,7 @@ diesel::joinable!(coverage_map_test_case_executed -> coverage_map (coverage_map_
 diesel::joinable!(coverage_map_test_case_executed -> test_case_execution (test_case_execution_id));
 diesel::joinable!(scm_commit -> project (project_id));
 diesel::joinable!(test_case -> project (project_id));
+diesel::joinable!(test_case_coverage_identifier_covered -> test_case_execution (test_case_execution_id));
 diesel::joinable!(test_case_execution -> test_case (test_case_id));
 diesel::joinable!(test_case_file_covered -> test_case_execution (test_case_execution_id));
 diesel::joinable!(test_case_function_covered -> test_case_execution (test_case_execution_id));
@@ -94,6 +102,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     project,
     scm_commit,
     test_case,
+    test_case_coverage_identifier_covered,
     test_case_execution,
     test_case_file_covered,
     test_case_function_covered,

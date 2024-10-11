@@ -231,6 +231,43 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
                 "sequences::tests::test_factorial",
             ],
         },
+        CommitTestData {
+            test_commit: "check-8",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_factorial",
+            ],
+            relevant_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_factorial",
+            ],
+        },
+        CommitTestData {
+            test_commit: "check-9",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_factorial",
+            ],
+            relevant_test_cases: vec!["basic_ops::tests::test_add_decimal"],
+        },
     ];
 
     fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {

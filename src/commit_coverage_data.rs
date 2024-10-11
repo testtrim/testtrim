@@ -15,17 +15,33 @@ pub struct RustTestIdentifier {
     pub test_name: String,
 }
 
+// FIXME: move RustCoverageIdentifier to a rust-platform-specific module
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
+pub enum RustCoverageIdentifier {
+    ExternalDependency(RustExternalDependency),
+    // Future: information like the rust version used
+}
+
+// FIXME: move RustExternalDependency to a rust-platform-specific module
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
+pub struct RustExternalDependency {
+    pub package_name: String,
+    pub version: String,
+}
+
 /// CommitCoverageData represents the coverage data that could be collected from test execution on a single commit;
 /// importantly this may represent data from only a partial execution of tests that were appropriate to that commit,
 /// rather than a complete test run.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct CommitCoverageData {
     // FIXME: RustTestIdentifier is specific to Rust -- in the future this structure probably becomes generic over
-    // different types of test identifier storage.
+    // different types of test identifier storage.  Same with RustCoverageIdentifier.
     all_existing_test_set: HashSet<RustTestIdentifier>,
     executed_test_set: HashSet<RustTestIdentifier>,
     executed_test_to_files_map: HashMap<RustTestIdentifier, HashSet<PathBuf>>,
     executed_test_to_functions_map: HashMap<RustTestIdentifier, HashSet<String>>,
+    executed_test_to_coverage_identifier_map:
+        HashMap<RustTestIdentifier, HashSet<RustCoverageIdentifier>>,
 }
 
 pub struct FileCoverage {
@@ -36,6 +52,11 @@ pub struct FileCoverage {
 pub struct FunctionCoverage {
     pub function_name: String,
     pub test_identifier: RustTestIdentifier,
+}
+
+pub struct HeuristicCoverage<T> {
+    pub test_identifier: RustTestIdentifier,
+    pub coverage_identifier: T,
 }
 
 impl Default for CommitCoverageData {
@@ -51,6 +72,7 @@ impl CommitCoverageData {
             executed_test_set: HashSet::new(),
             executed_test_to_files_map: HashMap::new(),
             executed_test_to_functions_map: HashMap::new(),
+            executed_test_to_coverage_identifier_map: HashMap::new(),
         }
     }
 
@@ -68,6 +90,12 @@ impl CommitCoverageData {
 
     pub fn executed_test_to_functions_map(&self) -> &HashMap<RustTestIdentifier, HashSet<String>> {
         &self.executed_test_to_functions_map
+    }
+
+    pub fn executed_test_to_coverage_identifier_map(
+        &self,
+    ) -> &HashMap<RustTestIdentifier, HashSet<RustCoverageIdentifier>> {
+        &self.executed_test_to_coverage_identifier_map
     }
 
     pub fn add_existing_test(&mut self, test_identifier: RustTestIdentifier) {
@@ -94,6 +122,16 @@ impl CommitCoverageData {
             .entry(coverage.test_identifier)
             .or_default()
             .insert(coverage.function_name);
+    }
+
+    pub fn add_heuristic_coverage_to_test(
+        &mut self,
+        coverage: HeuristicCoverage<RustCoverageIdentifier>,
+    ) {
+        self.executed_test_to_coverage_identifier_map
+            .entry(coverage.test_identifier)
+            .or_default()
+            .insert(coverage.coverage_identifier);
     }
 }
 
@@ -249,5 +287,68 @@ mod tests {
             .get(&test2)
             .unwrap()
             .contains("func1"));
+    }
+
+    #[test]
+    fn add_coverage_identifier_to_test() {
+        let mut coverage_data = CommitCoverageData::new();
+        let thiserror = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+            package_name: String::from("thiserror"),
+            version: String::from("0.1"),
+        });
+        let regex = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+            package_name: String::from("regex"),
+            version: String::from("0.1"),
+        });
+        coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test1.clone(),
+            coverage_identifier: regex.clone(),
+        });
+        coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test2.clone(),
+            coverage_identifier: regex.clone(),
+        });
+        coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test1.clone(),
+            coverage_identifier: thiserror.clone(),
+        });
+
+        assert_eq!(
+            coverage_data
+                .executed_test_to_coverage_identifier_map()
+                .len(),
+            2
+        );
+        assert_eq!(
+            coverage_data
+                .executed_test_to_coverage_identifier_map()
+                .get(&test1)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            coverage_data
+                .executed_test_to_coverage_identifier_map()
+                .get(&test2)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .executed_test_to_coverage_identifier_map()
+            .get(&test1)
+            .unwrap()
+            .contains(&thiserror));
+        assert!(coverage_data
+            .executed_test_to_coverage_identifier_map()
+            .get(&test1)
+            .unwrap()
+            .contains(&regex));
+        assert!(coverage_data
+            .executed_test_to_coverage_identifier_map()
+            .get(&test2)
+            .unwrap()
+            .contains(&regex));
     }
 }
