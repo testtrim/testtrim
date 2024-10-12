@@ -77,6 +77,200 @@ impl DieselCoverageDatabase {
         // Unwrap is safe here because we've ensured it's `Some`
         Ok(self.connection.as_mut().unwrap())
     }
+
+    fn save_test_case_file_coverage(
+        conn: &mut SqliteConnection,
+        test_case_execution_id: &Uuid,
+        test_case: &RustTestIdentifier,
+        coverage_data: &CommitCoverageData,
+    ) -> Result<()> {
+        use crate::schema::*;
+
+        if let Some(files_covered) = coverage_data.executed_test_to_files_map().get(test_case) {
+            let mut tuples = vec![];
+            for tc in files_covered {
+                tuples.push((
+                    test_case_file_covered::dsl::test_case_execution_id
+                        .eq(test_case_execution_id.to_string()),
+                    test_case_file_covered::dsl::file_identifier.eq(tc.to_string_lossy()), // FIXME: lossy?
+                ))
+            }
+            for chunk in tuples.chunks(1000) {
+                // HACK: avoid "too many SQL variables"
+                diesel::insert_into(test_case_file_covered::dsl::test_case_file_covered)
+                    .values(chunk)
+                    .execute(conn)
+                    .context("bulk insert into test_case_file_covered")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn save_test_case_function_coverage(
+        conn: &mut SqliteConnection,
+        test_case_execution_id: &Uuid,
+        test_case: &RustTestIdentifier,
+        coverage_data: &CommitCoverageData,
+    ) -> Result<()> {
+        use crate::schema::*;
+
+        if let Some(functions_covered) = coverage_data
+            .executed_test_to_functions_map()
+            .get(test_case)
+        {
+            let mut tuples = vec![];
+            for tc in functions_covered {
+                tuples.push((
+                    test_case_function_covered::dsl::test_case_execution_id
+                        .eq(test_case_execution_id.to_string()),
+                    test_case_function_covered::dsl::function_identifier.eq(tc),
+                ))
+            }
+            for chunk in tuples.chunks(1000) {
+                // HACK: avoid "too many SQL variables"
+                diesel::insert_into(test_case_function_covered::dsl::test_case_function_covered)
+                    .values(chunk)
+                    .execute(conn)
+                    .context("bulk insert into test_case_function_covered")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn save_test_case_coverage_identifiers(
+        conn: &mut SqliteConnection,
+        test_case_execution_id: &Uuid,
+        test_case: &RustTestIdentifier,
+        coverage_data: &CommitCoverageData,
+    ) -> Result<()> {
+        use crate::schema::*;
+
+        if let Some(coverage_identifiers) = coverage_data
+            .executed_test_to_coverage_identifier_map()
+            .get(test_case)
+        {
+            let mut tuples = vec![];
+            for tc in coverage_identifiers {
+                tuples.push((
+                    test_case_coverage_identifier_covered::dsl::test_case_execution_id
+                        .eq(test_case_execution_id.to_string()),
+                    test_case_coverage_identifier_covered::dsl::coverage_identifier
+                        .eq(serde_json::to_string(&tc)?),
+                ))
+            }
+            for chunk in tuples.chunks(1000) {
+                // HACK: avoid "too many SQL variables"
+                diesel::insert_into(test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered)
+                    .values(chunk)
+                    .execute(conn)
+                    .context("bulk insert into test_case_coverage_identifier_covered")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Now we build a comprehensive full test map by reading the ancestor commit's coverage_map_test_case_executed, and
+    /// replacing any test cases in it from the commit that we just ran.  If there was no ancestor commit test map, then
+    /// our current test suite should-be/must-be complete and we use that for coverage_map_test_case_executed.
+    ///
+    /// Hypothetically this entire operation could be done DB-side with a few commands, but:
+    /// - SQLite doesn't have a server-side UUID generate function, preventing this from working with creating new IDs
+    ///   in the denormalized tables
+    /// - It's moderately complex to do in SQL, and when operating through the wet-noodle of a query builder it's even
+    ///   more complex
+    fn save_coverage_map(
+        conn: &mut SqliteConnection,
+        scm_commit_id: Uuid,
+        ancestor_scm_commit_id: Option<String>,
+        test_case_id_to_test_case_map: &HashMap<Uuid, &RustTestIdentifier>,
+        test_case_to_test_case_id_map: &HashMap<&RustTestIdentifier, Uuid>,
+        test_case_to_test_case_execution_id_map: &HashMap<&RustTestIdentifier, Uuid>,
+        coverage_data: &CommitCoverageData,
+    ) -> Result<()> {
+        use crate::schema::*;
+
+        let coverage_map_id = Uuid::new_v4();
+        diesel::insert_into(coverage_map::dsl::coverage_map)
+            .values((
+                coverage_map::dsl::id.eq(coverage_map_id.to_string()),
+                coverage_map::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+            ))
+            .execute(conn)
+            .context("insert into coverage_map")?;
+
+        #[derive(Queryable, Selectable)]
+        #[diesel(table_name = crate::schema::test_case_execution)]
+        struct TestCaseExecution {
+            id: String,
+            test_case_id: String,
+        }
+        let ancestor_test_cases: Option<Vec<TestCaseExecution>> = match ancestor_scm_commit_id {
+            Some(ref ancestor_scm_commit_id) => {
+                let scm_commit_id = coverage_map::dsl::coverage_map
+                    .inner_join(
+                        coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
+                            .inner_join(test_case_execution::dsl::test_case_execution),
+                    )
+                    // .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
+                    .filter(coverage_map::dsl::scm_commit_id.eq(&ancestor_scm_commit_id))
+                    .select(TestCaseExecution::as_select())
+                    .get_results(conn)
+                    .context("loading coverage_map_test_case_executed from ancestor_commit_sha")?;
+                Some(scm_commit_id)
+            }
+            None => None,
+        };
+        let ancestor_test_cases = ancestor_test_cases.unwrap_or_default();
+
+        let mut coverage_map_test_case_executed = HashMap::new();
+        // Insert all the ancestor test executions.
+        for test_case_execution in ancestor_test_cases {
+            // Even if it's part of the ancestor commit, if it doesn't exist anymore in this commit let's not copy it
+            // forward; this indicates a test case removed since the ancestor.
+            if test_case_id_to_test_case_map
+                .contains_key(&Uuid::parse_str(&test_case_execution.test_case_id)?)
+            {
+                coverage_map_test_case_executed
+                    .insert(test_case_execution.test_case_id, test_case_execution.id);
+            }
+        }
+        // Overwrite with all the test executions that we stored in this commit.
+        for tc in coverage_data.executed_test_set() {
+            let test_case_id = test_case_to_test_case_id_map
+                .get(tc)
+                .expect("populated earlier");
+            let test_case_execution_id = test_case_to_test_case_execution_id_map
+                .get(&tc)
+                .expect("populated earlier");
+            coverage_map_test_case_executed
+                .insert(test_case_id.to_string(), test_case_execution_id.to_string());
+        }
+
+        let mut insertables = vec![];
+        for (_, test_case_execution_id) in coverage_map_test_case_executed.iter() {
+            insertables.push((
+                coverage_map_test_case_executed::dsl::coverage_map_id
+                    .eq(coverage_map_id.to_string()),
+                coverage_map_test_case_executed::dsl::test_case_execution_id
+                    .eq(test_case_execution_id),
+            ));
+        }
+
+        for chunk in insertables.chunks(1000) {
+            // HACK: avoid "too many SQL variables"
+            diesel::insert_into(
+                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed,
+            )
+            .values(chunk)
+            .execute(conn)
+            .context("insert into coverage_map_test_case_executed")?;
+        }
+
+        Ok(())
+    }
 }
 
 impl CoverageDatabase for DieselCoverageDatabase {
@@ -114,7 +308,7 @@ impl CoverageDatabase for DieselCoverageDatabase {
         .execute(conn)
         .context("delete from scm_commit")?;
 
-        let ancesor_scm_commit_id: Option<String> = match ancestor_commit_sha {
+        let ancestor_scm_commit_id: Option<String> = match ancestor_commit_sha {
             Some(ancestor_commit_sha) => {
                 let scm_commit_id = scm_commit::dsl::scm_commit
                     .filter(scm_commit::dsl::scm_identifier.eq(ancestor_commit_sha))
@@ -131,7 +325,7 @@ impl CoverageDatabase for DieselCoverageDatabase {
             .values((
                 scm_commit::dsl::id.eq(scm_commit_id.to_string()),
                 scm_commit::dsl::project_id.eq(project_id.to_string()),
-                scm_commit::dsl::ancestor_scm_commit_id.eq(&ancesor_scm_commit_id),
+                scm_commit::dsl::ancestor_scm_commit_id.eq(&ancestor_scm_commit_id),
                 scm_commit::dsl::scm_identifier.eq(commit_sha),
             ))
             .execute(conn)
@@ -192,154 +386,38 @@ impl CoverageDatabase for DieselCoverageDatabase {
                     .execute(conn)
                     .context("insert into commit_test_case_executed")?;
 
-                if let Some(files_covered) = coverage_data.executed_test_to_files_map().get(tc) {
-                    let mut tuples = vec![];
-                    for tc in files_covered {
-                        tuples.push((
-                            test_case_file_covered::dsl::test_case_execution_id
-                                .eq(test_case_execution_id.to_string()),
-                            test_case_file_covered::dsl::file_identifier.eq(tc.to_string_lossy()), // FIXME: lossy?
-                        ))
-                    }
-                    for chunk in tuples.chunks(1000) {
-                        // HACK: avoid "too many SQL variables"
-                        diesel::insert_into(test_case_file_covered::dsl::test_case_file_covered)
-                            .values(chunk)
-                            .execute(conn)
-                            .context("bulk insert into test_case_file_covered")?;
-                    }
-                }
+                DieselCoverageDatabase::save_test_case_file_coverage(
+                    conn,
+                    &test_case_execution_id,
+                    tc,
+                    coverage_data,
+                )?;
 
-                if let Some(functions_covered) =
-                    coverage_data.executed_test_to_functions_map().get(tc)
-                {
-                    let mut tuples = vec![];
-                    for tc in functions_covered {
-                        tuples.push((
-                            test_case_function_covered::dsl::test_case_execution_id
-                                .eq(test_case_execution_id.to_string()),
-                            test_case_function_covered::dsl::function_identifier.eq(tc),
-                        ))
-                    }
-                    for chunk in tuples.chunks(1000) {
-                        // HACK: avoid "too many SQL variables"
-                        diesel::insert_into(
-                            test_case_function_covered::dsl::test_case_function_covered,
-                        )
-                        .values(chunk)
-                        .execute(conn)
-                        .context("bulk insert into test_case_function_covered")?;
-                    }
-                }
+                DieselCoverageDatabase::save_test_case_function_coverage(
+                    conn,
+                    &test_case_execution_id,
+                    tc,
+                    coverage_data,
+                )?;
 
-                if let Some(coverage_identifiers) = coverage_data
-                    .executed_test_to_coverage_identifier_map()
-                    .get(tc)
-                {
-                    let mut tuples = vec![];
-                    for tc in coverage_identifiers {
-                        tuples.push((
-                            test_case_coverage_identifier_covered::dsl::test_case_execution_id
-                                .eq(test_case_execution_id.to_string()),
-                            test_case_coverage_identifier_covered::dsl::coverage_identifier
-                                .eq(serde_json::to_string(&tc)?),
-                        ))
-                    }
-                    for chunk in tuples.chunks(1000) {
-                        // HACK: avoid "too many SQL variables"
-                        diesel::insert_into(
-                            test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered,
-                        )
-                        .values(chunk)
-                        .execute(conn)
-                        .context("bulk insert into test_case_coverage_identifier_covered")?;
-                    }
-                }
+                DieselCoverageDatabase::save_test_case_coverage_identifiers(
+                    conn,
+                    &test_case_execution_id,
+                    tc,
+                    coverage_data,
+                )?;
             }
         }
 
-        // Now we build a comprehensive full test map by reading the ancestor commit's coverage_map_test_case_executed,
-        // and replacing any test cases in it from the commit that we just ran.  If there was no ancestor commit test
-        // map, then our current test suite should-be/must-be complete and we use that for
-        // coverage_map_test_case_executed.
-        //
-        // Hypothetically this entire operation could be done DB-side with a few commands, but:
-        // - SQLite doesn't have a server-side UUID generate function, preventing this from working with creating new
-        //   IDs in the denormalized tables
-        // - It's moderately complex to do in SQL, and when operating through the wet-noodle of a query builder it's
-        //   even more complex
-
-        let coverage_map_id = Uuid::new_v4();
-        diesel::insert_into(coverage_map::dsl::coverage_map)
-            .values((
-                coverage_map::dsl::id.eq(coverage_map_id.to_string()),
-                coverage_map::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
-            ))
-            .execute(conn)
-            .context("insert into coverage_map")?;
-
-        // FIXME: typing isn't helping us; this type is (test_case_execution_id, test_case_id)
-        let ancestor_test_cases: Option<Vec<(String, String)>> = match ancesor_scm_commit_id {
-            Some(ref ancesor_scm_commit_id) => {
-                let scm_commit_id = coverage_map::dsl::coverage_map
-                    .inner_join(
-                        coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
-                            .inner_join(test_case_execution::dsl::test_case_execution),
-                    )
-                    // .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
-                    .filter(coverage_map::dsl::scm_commit_id.eq(&ancesor_scm_commit_id))
-                    .select((
-                        test_case_execution::dsl::id,
-                        test_case_execution::dsl::test_case_id,
-                    ))
-                    .get_results::<(String, String)>(conn)
-                    .context("loading coverage_map_test_case_executed from ancestor_commit_sha")?;
-                Some(scm_commit_id)
-            }
-            None => None,
-        };
-        let ancestor_test_cases = ancestor_test_cases.unwrap_or_default();
-
-        let mut coverage_map_test_case_executed = HashMap::new();
-        // Insert all the ancestor test executions.
-        for (test_case_execution_id, test_case_id) in ancestor_test_cases {
-            // Even if it's part of the ancestor commit, if it doesn't exist anymore in this commit let's not copy it
-            // forward; this indicates a test case removed since the ancestor.
-            if test_case_id_to_test_case_map.contains_key(&Uuid::parse_str(&test_case_id)?) {
-                coverage_map_test_case_executed.insert(test_case_id, test_case_execution_id);
-            }
-        }
-        // Overwrite with all the test executions that we stored in this commit.
-        for tc in coverage_data.executed_test_set() {
-            let test_case_id = test_case_to_test_case_id_map
-                .get(tc)
-                .expect("populated earlier");
-            let test_case_execution_id = test_case_to_test_case_execution_id_map
-                .get(&tc)
-                .expect("populated earlier");
-            coverage_map_test_case_executed
-                .insert(test_case_id.to_string(), test_case_execution_id.to_string());
-        }
-
-        let mut insertables = vec![];
-        for (_, test_case_execution_id) in coverage_map_test_case_executed.iter() {
-            insertables.push((
-                coverage_map_test_case_executed::dsl::coverage_map_id
-                    .eq(coverage_map_id.to_string()),
-                coverage_map_test_case_executed::dsl::test_case_execution_id
-                    .eq(test_case_execution_id),
-            ));
-        }
-
-        for chunk in insertables.chunks(1000) {
-            // HACK: avoid "too many SQL variables"
-            diesel::insert_into(
-                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed,
-            )
-            .values(chunk)
-            .execute(conn)
-            .context("insert into coverage_map_test_case_executed")?;
-        }
+        DieselCoverageDatabase::save_coverage_map(
+            conn,
+            scm_commit_id,
+            ancestor_scm_commit_id,
+            &test_case_id_to_test_case_map,
+            &test_case_to_test_case_id_map,
+            &test_case_to_test_case_execution_id_map,
+            coverage_data,
+        )?;
 
         Ok(())
     }
