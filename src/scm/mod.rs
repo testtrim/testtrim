@@ -2,6 +2,8 @@ use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+pub mod git;
+
 pub trait ScmCommit {}
 
 pub trait Scm<Commit: ScmCommit> {

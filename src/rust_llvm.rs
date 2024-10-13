@@ -146,12 +146,6 @@ pub struct InstrumentationPointMetadata {
     pub function_name: String,
 }
 
-/// This function is just used for internal testing of coverage reporting, and should be ignored otherwise.
-#[allow(dead_code)]
-pub fn sentinel_function() -> i32 {
-    1 + 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

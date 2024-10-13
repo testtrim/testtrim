@@ -1,71 +1,51 @@
-use serde::{Deserialize, Serialize};
-use std::hash::Hash;
 use std::{
     collections::{HashMap, HashSet},
+    hash::Hash,
     path::PathBuf,
 };
 
-// FIXME: move RustTestIdentifier to a rust-platform-specific module
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-pub struct RustTestIdentifier {
-    /// Project-relative source path that defines the binary which contains the test.  For example,
-    /// some_module/src/lib.rs.
-    pub test_src_path: PathBuf,
-    /// Name of the test.  For example, basic_ops::tests::test_add.
-    pub test_name: String,
-}
-
-// FIXME: move RustCoverageIdentifier to a rust-platform-specific module
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-pub enum RustCoverageIdentifier {
-    ExternalDependency(RustExternalDependency),
-    // Future: information like the rust version used
-}
-
-// FIXME: move RustExternalDependency to a rust-platform-specific module
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-pub struct RustExternalDependency {
-    pub package_name: String,
-    pub version: String,
-}
+use crate::platform::TestIdentifier;
 
 /// CommitCoverageData represents the coverage data that could be collected from test execution on a single commit;
 /// importantly this may represent data from only a partial execution of tests that were appropriate to that commit,
 /// rather than a complete test run.
 #[derive(Debug, Clone)]
-pub struct CommitCoverageData {
-    // FIXME: RustTestIdentifier is specific to Rust -- in the future this structure probably becomes generic over
-    // different types of test identifier storage.  Same with RustCoverageIdentifier.
-    all_existing_test_set: HashSet<RustTestIdentifier>,
-    executed_test_set: HashSet<RustTestIdentifier>,
-    executed_test_to_files_map: HashMap<RustTestIdentifier, HashSet<PathBuf>>,
-    executed_test_to_functions_map: HashMap<RustTestIdentifier, HashSet<String>>,
-    executed_test_to_coverage_identifier_map:
-        HashMap<RustTestIdentifier, HashSet<RustCoverageIdentifier>>,
+pub struct CommitCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
+    all_existing_test_set: HashSet<TI>,
+    executed_test_set: HashSet<TI>,
+    executed_test_to_files_map: HashMap<TI, HashSet<PathBuf>>,
+    executed_test_to_functions_map: HashMap<TI, HashSet<String>>,
+    executed_test_to_coverage_identifier_map: HashMap<TI, HashSet<CI>>,
 }
 
-pub struct FileCoverage {
+pub struct FileCoverage<TI: TestIdentifier> {
     pub file_name: PathBuf,
-    pub test_identifier: RustTestIdentifier,
+    pub test_identifier: TI,
 }
 
-pub struct FunctionCoverage {
+pub struct FunctionCoverage<TI: TestIdentifier> {
     pub function_name: String,
-    pub test_identifier: RustTestIdentifier,
+    pub test_identifier: TI,
 }
 
-pub struct HeuristicCoverage<T> {
-    pub test_identifier: RustTestIdentifier,
-    pub coverage_identifier: T,
+pub struct HeuristicCoverage<TI: TestIdentifier, CI: CoverageIdentifier> {
+    pub test_identifier: TI,
+    pub coverage_identifier: CI,
 }
 
-impl Default for CommitCoverageData {
+pub trait CoverageIdentifier {}
+
+impl<TI: TestIdentifier + Hash + Eq, CI: CoverageIdentifier + Hash + Eq> Default
+    for CommitCoverageData<TI, CI>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CommitCoverageData {
+impl<TI: TestIdentifier + Hash + Eq, CI: CoverageIdentifier + Hash + Eq>
+    CommitCoverageData<TI, CI>
+{
     pub fn new() -> Self {
         CommitCoverageData {
             all_existing_test_set: HashSet::new(),
@@ -76,37 +56,35 @@ impl CommitCoverageData {
         }
     }
 
-    pub fn existing_test_set(&self) -> &HashSet<RustTestIdentifier> {
+    pub fn existing_test_set(&self) -> &HashSet<TI> {
         &self.all_existing_test_set
     }
 
-    pub fn executed_test_set(&self) -> &HashSet<RustTestIdentifier> {
+    pub fn executed_test_set(&self) -> &HashSet<TI> {
         &self.executed_test_set
     }
 
-    pub fn executed_test_to_files_map(&self) -> &HashMap<RustTestIdentifier, HashSet<PathBuf>> {
+    pub fn executed_test_to_files_map(&self) -> &HashMap<TI, HashSet<PathBuf>> {
         &self.executed_test_to_files_map
     }
 
-    pub fn executed_test_to_functions_map(&self) -> &HashMap<RustTestIdentifier, HashSet<String>> {
+    pub fn executed_test_to_functions_map(&self) -> &HashMap<TI, HashSet<String>> {
         &self.executed_test_to_functions_map
     }
 
-    pub fn executed_test_to_coverage_identifier_map(
-        &self,
-    ) -> &HashMap<RustTestIdentifier, HashSet<RustCoverageIdentifier>> {
+    pub fn executed_test_to_coverage_identifier_map(&self) -> &HashMap<TI, HashSet<CI>> {
         &self.executed_test_to_coverage_identifier_map
     }
 
-    pub fn add_existing_test(&mut self, test_identifier: RustTestIdentifier) {
+    pub fn add_existing_test(&mut self, test_identifier: TI) {
         self.all_existing_test_set.insert(test_identifier);
     }
 
-    pub fn add_executed_test(&mut self, test_identifier: RustTestIdentifier) {
+    pub fn add_executed_test(&mut self, test_identifier: TI) {
         self.executed_test_set.insert(test_identifier);
     }
 
-    pub fn add_file_to_test(&mut self, coverage: FileCoverage) {
+    pub fn add_file_to_test(&mut self, coverage: FileCoverage<TI>) {
         // "FileCoverage" is slightly over engineered compared to just having two &str arguments, but it prevents the
         // two strings from being passed in the wrong order by making them named.
         self.executed_test_to_files_map
@@ -115,7 +93,7 @@ impl CommitCoverageData {
             .insert(coverage.file_name);
     }
 
-    pub fn add_function_to_test(&mut self, coverage: FunctionCoverage) {
+    pub fn add_function_to_test(&mut self, coverage: FunctionCoverage<TI>) {
         // "FunctionCoverage" is slightly over engineered compared to just having two &str arguments, but it prevents
         // the two strings from being passed in the wrong order by making them named.
         self.executed_test_to_functions_map
@@ -124,10 +102,7 @@ impl CommitCoverageData {
             .insert(coverage.function_name);
     }
 
-    pub fn add_heuristic_coverage_to_test(
-        &mut self,
-        coverage: HeuristicCoverage<RustCoverageIdentifier>,
-    ) {
+    pub fn add_heuristic_coverage_to_test(&mut self, coverage: HeuristicCoverage<TI, CI>) {
         self.executed_test_to_coverage_identifier_map
             .entry(coverage.test_identifier)
             .or_default()
@@ -137,6 +112,10 @@ impl CommitCoverageData {
 
 #[cfg(test)]
 mod tests {
+    use crate::platform::rust::{
+        RustCoverageIdentifier, RustExternalDependency, RustTestIdentifier,
+    };
+
     use super::*;
     use lazy_static::lazy_static;
 
@@ -163,7 +142,8 @@ mod tests {
 
     #[test]
     fn test_new_coverage_data() {
-        let coverage_data = CommitCoverageData::new();
+        let coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
         assert!(coverage_data.executed_test_set().is_empty());
         assert!(coverage_data.executed_test_to_files_map().is_empty());
         assert!(coverage_data.executed_test_to_functions_map().is_empty());
@@ -171,7 +151,8 @@ mod tests {
 
     #[test]
     fn test_add_executed_test() {
-        let mut coverage_data = CommitCoverageData::new();
+        let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
         coverage_data.add_executed_test(test1.clone());
         coverage_data.add_executed_test(test2.clone());
         assert_eq!(coverage_data.executed_test_set().len(), 2);
@@ -181,7 +162,8 @@ mod tests {
 
     #[test]
     fn test_add_existing_test() {
-        let mut coverage_data = CommitCoverageData::new();
+        let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
         coverage_data.add_existing_test(test1.clone());
         coverage_data.add_existing_test(test2.clone());
         assert_eq!(coverage_data.existing_test_set().len(), 2);
@@ -191,7 +173,8 @@ mod tests {
 
     #[test]
     fn test_add_file_to_test() {
-        let mut coverage_data = CommitCoverageData::new();
+        let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
             test_identifier: test1.clone(),
@@ -241,7 +224,8 @@ mod tests {
 
     #[test]
     fn test_add_function_to_test() {
-        let mut coverage_data = CommitCoverageData::new();
+        let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
             test_identifier: test1.clone(),

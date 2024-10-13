@@ -5,7 +5,8 @@ use log::info;
 use std::process::Command;
 use std::{env, sync::Mutex};
 use tempdir::TempDir;
-use testtrim::scm_git::GitScm;
+use testtrim::platform::rust::RustTestPlatform;
+use testtrim::scm::git::GitScm;
 use testtrim::{
     get_target_test_cases, run_tests_subcommand, AncestorSearchMode, GetTestIdentifierMode,
     SourceMode,
@@ -276,7 +277,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         info!("checking out {}", commit_test_data.test_commit);
         git_checkout(commit_test_data.test_commit)?;
 
-        let all_test_cases = get_target_test_cases(
+        let all_test_cases = get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
             &GetTestIdentifierMode::All,
             &scm,
             AncestorSearchMode::AllCommits,
@@ -298,7 +299,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             );
         }
 
-        let relevant_test_cases = get_target_test_cases(
+        let relevant_test_cases = get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
             &GetTestIdentifierMode::Relevant,
             &scm,
             AncestorSearchMode::AllCommits,

@@ -1,15 +1,20 @@
 use crate::{
     commit_coverage_data::{
-        CommitCoverageData, FileCoverage, FunctionCoverage, RustTestIdentifier,
+        CommitCoverageData, CoverageIdentifier, FileCoverage, FunctionCoverage,
     },
     full_coverage_data::FullCoverageData,
+    platform::TestIdentifier,
 };
+
 use anyhow::{anyhow, Context, Result};
 use diesel::{connection::Instrumentation, prelude::*};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use log::trace;
+use serde::{de::DeserializeOwned, Serialize};
+use std::hash::Hash;
 use std::{
     collections::HashMap,
+    marker::PhantomData,
     path::{Path, PathBuf},
 };
 use time::{OffsetDateTime, PrimitiveDateTime};
@@ -18,16 +23,16 @@ use uuid::{uuid, Uuid};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 const DEFAULT_PROJECT_ID: Uuid = uuid!("b4574300-9d65-4099-8383-1e1d9f69254e");
 
-pub trait CoverageDatabase {
+pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     fn save_coverage_data(
         &mut self,
-        coverage_data: &CommitCoverageData,
+        coverage_data: &CommitCoverageData<TI, CI>,
         // FIXME: should take an `impl ScmCommit`?
         commit_sha: &str,
         // FIXME: should take an `impl ScmCommit`?
         ancestor_commit_sha: Option<&str>,
     ) -> Result<()>;
-    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData>>;
+    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>>;
     fn has_any_coverage_data(&mut self) -> Result<bool>;
 }
 
@@ -39,13 +44,19 @@ impl Instrumentation for DbLogger {
     }
 }
 
-pub struct DieselCoverageDatabase {
+pub struct DieselCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
     connection: Option<SqliteConnection>,
+    test_identifier_type: PhantomData<TI>,
+    coverage_identifier_type: PhantomData<CI>,
 }
 
-impl DieselCoverageDatabase {
-    pub fn new_sqlite_from_default_path() -> DieselCoverageDatabase {
+impl<
+        TI: TestIdentifier + Eq + Hash + Serialize + DeserializeOwned,
+        CI: CoverageIdentifier + Eq + Hash + Serialize + DeserializeOwned,
+    > DieselCoverageDatabase<TI, CI>
+{
+    pub fn new_sqlite_from_default_path() -> DieselCoverageDatabase<TI, CI> {
         // FIXME: hard-coded... ideally this could be overriden by CLI and ENV var and use different DBs, but this is a stopgap
         DieselCoverageDatabase::new_sqlite(
             // FIXME: ~/testtrim.db is clearly a bad place
@@ -57,10 +68,12 @@ impl DieselCoverageDatabase {
         )
     }
 
-    pub fn new_sqlite(path: &str) -> DieselCoverageDatabase {
+    pub fn new_sqlite(path: &str) -> DieselCoverageDatabase<TI, CI> {
         DieselCoverageDatabase {
             database_url: String::from(path),
             connection: None,
+            test_identifier_type: PhantomData,
+            coverage_identifier_type: PhantomData,
         }
     }
 
@@ -81,8 +94,8 @@ impl DieselCoverageDatabase {
     fn save_test_case_file_coverage(
         conn: &mut SqliteConnection,
         test_case_execution_id: &Uuid,
-        test_case: &RustTestIdentifier,
-        coverage_data: &CommitCoverageData,
+        test_case: &TI,
+        coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
         use crate::schema::*;
 
@@ -110,8 +123,8 @@ impl DieselCoverageDatabase {
     fn save_test_case_function_coverage(
         conn: &mut SqliteConnection,
         test_case_execution_id: &Uuid,
-        test_case: &RustTestIdentifier,
-        coverage_data: &CommitCoverageData,
+        test_case: &TI,
+        coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
         use crate::schema::*;
 
@@ -142,8 +155,8 @@ impl DieselCoverageDatabase {
     fn save_test_case_coverage_identifiers(
         conn: &mut SqliteConnection,
         test_case_execution_id: &Uuid,
-        test_case: &RustTestIdentifier,
-        coverage_data: &CommitCoverageData,
+        test_case: &TI,
+        coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
         use crate::schema::*;
 
@@ -185,10 +198,10 @@ impl DieselCoverageDatabase {
         conn: &mut SqliteConnection,
         scm_commit_id: Uuid,
         ancestor_scm_commit_id: Option<String>,
-        test_case_id_to_test_case_map: &HashMap<Uuid, &RustTestIdentifier>,
-        test_case_to_test_case_id_map: &HashMap<&RustTestIdentifier, Uuid>,
-        test_case_to_test_case_execution_id_map: &HashMap<&RustTestIdentifier, Uuid>,
-        coverage_data: &CommitCoverageData,
+        test_case_id_to_test_case_map: &HashMap<Uuid, &TI>,
+        test_case_to_test_case_id_map: &HashMap<&TI, Uuid>,
+        test_case_to_test_case_execution_id_map: &HashMap<&TI, Uuid>,
+        coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
         use crate::schema::*;
 
@@ -273,10 +286,15 @@ impl DieselCoverageDatabase {
     }
 }
 
-impl CoverageDatabase for DieselCoverageDatabase {
+impl<
+        TI: TestIdentifier + Eq + Hash + Clone + Serialize + DeserializeOwned,
+        CI: CoverageIdentifier + Eq + Hash + Clone + Serialize + DeserializeOwned,
+    > CoverageDatabase<TI, CI> for DieselCoverageDatabase<TI, CI>
+{
+    // impl CoverageDatabase<TI, CI> for DieselCoverageDatabase {
     fn save_coverage_data(
         &mut self,
-        coverage_data: &CommitCoverageData,
+        coverage_data: &CommitCoverageData<TI, CI>,
         commit_sha: &str,
         ancestor_commit_sha: Option<&str>,
     ) -> Result<()> {
@@ -422,7 +440,7 @@ impl CoverageDatabase for DieselCoverageDatabase {
         Ok(())
     }
 
-    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData>> {
+    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>> {
         use crate::schema::*;
 
         let conn = self.get_connection()?;
@@ -477,7 +495,7 @@ impl CoverageDatabase for DieselCoverageDatabase {
 
         let mut test_case_id_to_test_identifier_map = HashMap::new();
         for (test_case_id, test_identifier) in all_test_cases {
-            let test_identifier: RustTestIdentifier = serde_json::from_str(&test_identifier)?;
+            let test_identifier: TI = serde_json::from_str(&test_identifier)?;
             test_case_id_to_test_identifier_map.insert(test_case_id, test_identifier.clone());
             coverage_data.add_existing_test(test_identifier);
         }
@@ -592,8 +610,9 @@ impl CoverageDatabase for DieselCoverageDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commit_coverage_data::{
-        CommitCoverageData, HeuristicCoverage, RustCoverageIdentifier, RustExternalDependency,
+    use crate::{
+        commit_coverage_data::{CommitCoverageData, HeuristicCoverage},
+        platform::rust::{RustCoverageIdentifier, RustExternalDependency, RustTestIdentifier},
     };
     use lazy_static::lazy_static;
 
@@ -620,7 +639,10 @@ mod tests {
 
     #[test]
     fn has_any_coverage_data_false() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
         let result = db.has_any_coverage_data();
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -629,7 +651,10 @@ mod tests {
 
     #[test]
     fn save_empty() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
         let data1 = CommitCoverageData::new();
         let result = db.save_coverage_data(&data1, "c1", None);
         assert!(result.is_ok());
@@ -637,7 +662,10 @@ mod tests {
 
     #[test]
     fn has_any_coverage_data_true() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
         let data1 = CommitCoverageData::new();
         let result = db.save_coverage_data(&data1, "c1", None);
         assert!(result.is_ok());
@@ -649,7 +677,10 @@ mod tests {
 
     #[test]
     fn load_empty() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
         let result = db.read_coverage_data("c1");
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -660,7 +691,10 @@ mod tests {
     fn load_updates_last_read_timestamp() {
         use crate::schema::*;
 
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
 
         let saved_data = CommitCoverageData::new();
         let result = db.save_coverage_data(&saved_data, "c1", None);
@@ -878,7 +912,10 @@ mod tests {
     /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
     #[test]
     fn save_and_load_new_case_in_child() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
 
         let mut ancestor_data = CommitCoverageData::new();
         ancestor_data.add_executed_test(test1.clone());
@@ -996,7 +1033,10 @@ mod tests {
     /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
     #[test]
     fn save_and_load_replacement_case_in_child() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
 
         let mut ancestor_data = CommitCoverageData::new();
         ancestor_data.add_executed_test(test1.clone());
@@ -1076,7 +1116,10 @@ mod tests {
     /// Test a child coverage set which indicates a test was removed and no longer present
     #[test]
     fn save_and_load_removed_case_in_child() {
-        let mut db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
 
         let mut ancestor_data = CommitCoverageData::new();
         ancestor_data.add_executed_test(test1.clone());
