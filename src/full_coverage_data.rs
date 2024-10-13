@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    hash::Hash,
     path::PathBuf,
 };
 
@@ -19,15 +18,13 @@ pub struct FullCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
     coverage_identifier_to_test_map: HashMap<CI, HashSet<TI>>,
 }
 
-impl<TI: TestIdentifier + Hash + Eq, CI: CoverageIdentifier + Hash + Eq> Default
-    for FullCoverageData<TI, CI>
-{
+impl<TI: TestIdentifier, CI: CoverageIdentifier> Default for FullCoverageData<TI, CI> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<TI: TestIdentifier + Hash + Eq, CI: CoverageIdentifier + Hash + Eq> FullCoverageData<TI, CI> {
+impl<TI: TestIdentifier, CI: CoverageIdentifier> FullCoverageData<TI, CI> {
     pub fn new() -> Self {
         FullCoverageData {
             all_tests: HashSet::new(),

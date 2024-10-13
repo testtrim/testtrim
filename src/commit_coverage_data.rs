@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Debug,
     hash::Hash,
     path::PathBuf,
 };
@@ -33,19 +34,15 @@ pub struct HeuristicCoverage<TI: TestIdentifier, CI: CoverageIdentifier> {
     pub coverage_identifier: CI,
 }
 
-pub trait CoverageIdentifier {}
+pub trait CoverageIdentifier: Eq + Hash + Clone + Debug {}
 
-impl<TI: TestIdentifier + Hash + Eq, CI: CoverageIdentifier + Hash + Eq> Default
-    for CommitCoverageData<TI, CI>
-{
+impl<TI: TestIdentifier, CI: CoverageIdentifier> Default for CommitCoverageData<TI, CI> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<TI: TestIdentifier + Hash + Eq, CI: CoverageIdentifier + Hash + Eq>
-    CommitCoverageData<TI, CI>
-{
+impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
     pub fn new() -> Self {
         CommitCoverageData {
             all_existing_test_set: HashSet::new(),

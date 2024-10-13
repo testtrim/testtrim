@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, path::PathBuf};
 
 use crate::{
     commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
@@ -12,11 +12,11 @@ pub mod rust;
 /// TestIdentifier is a machine-independent way to reference a test in a project.  It should contain data such that, if
 /// it was serialized to a DB, it could be picked up on another machine and the data would be useable to find and
 /// execute the test.
-pub trait TestIdentifier {}
+pub trait TestIdentifier: Eq + Hash + Clone + Debug {}
 
 /// Similar to TestIdentifier, but this represents a machine-dependent reference to a test.  ConcreteTestIdentifier is
 /// "ready to execute" on the current machine, where TestIdentifier may be missing specific pathing data (for example).
-pub trait ConcreteTestIdentifier<TI: TestIdentifier> {
+pub trait ConcreteTestIdentifier<TI: TestIdentifier>: Eq + Hash + Clone + Debug {
     fn test_identifier(&self) -> &TI;
 }
 

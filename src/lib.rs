@@ -18,7 +18,6 @@ use serde::Serialize;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
@@ -166,19 +165,20 @@ pub enum AncestorSearchMode {
     AllCommits,
 }
 
-pub fn get_target_test_cases<
-    Commit: ScmCommit,
-    MyScm: Scm<Commit>,
-    TI: TestIdentifier + Hash + Eq + Clone + Debug + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Hash + Eq + Clone + Serialize + DeserializeOwned,
-    TD: TestDiscovery<CTI, TI>,
-    CTI: ConcreteTestIdentifier<TI> + Hash + Eq + Clone,
-    TP: TestPlatform<TI, CI, TD, CTI>,
->(
+pub fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     mode: &GetTestIdentifierMode,
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
-) -> Result<TargetTestCases<Commit, TI, CTI>> {
+) -> Result<TargetTestCases<Commit, TI, CTI>>
+where
+    Commit: ScmCommit,
+    MyScm: Scm<Commit>,
+    TI: TestIdentifier + Serialize + DeserializeOwned,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TD: TestDiscovery<CTI, TI>,
+    CTI: ConcreteTestIdentifier<TI>,
+    TP: TestPlatform<TI, CI, TD, CTI>,
+{
     let test_discovery = TP::discover_tests()?;
     let all_test_cases = test_discovery.all_test_cases();
 
@@ -332,17 +332,18 @@ pub fn run_tests_subcommand(mode: &GetTestIdentifierMode, source_mode: &SourceMo
 /// branch commits an incorrect source of data.  Commits are searched starting at HEAD and going towards their ancestors
 /// checking for any coverage data.  If a merge commit is found, then the search skips to the best common ancestor to
 /// both parents of the merge commit, and continues from there.
-fn find_ancestor_commit_with_coverage_data<
-    Commit: ScmCommit,
-    MyScm: Scm<Commit>,
-    TI: TestIdentifier + Eq + Hash + Clone + Debug,
-    CI: CoverageIdentifier + Eq + Hash,
->(
+fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
     coverage_db: &mut impl CoverageDatabase<TI, CI>,
-) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>> {
+) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
+where
+    Commit: ScmCommit,
+    MyScm: Scm<Commit>,
+    TI: TestIdentifier,
+    CI: CoverageIdentifier,
+{
     if !coverage_db.has_any_coverage_data()? {
         return Ok(None);
     }
@@ -411,10 +412,7 @@ fn find_ancestor_commit_with_coverage_data<
 /// - For changed files -- because the coverage data is a complete denormalization of all coverage data, even if the
 ///   previous commit only ran a subset of tests, it is easy to just look up all touched points in the coverage data and
 ///   coalesce them.
-fn compute_relevant_test_cases<
-    TI: TestIdentifier + Eq + Hash + Clone + Debug,
-    CI: CoverageIdentifier + Eq + Hash,
->(
+fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     eval_target_changed_files: &HashSet<PathBuf>,
     coverage_data: &FullCoverageData<TI, CI>,
@@ -447,10 +445,7 @@ fn compute_relevant_test_cases<
     Ok(retval)
 }
 
-fn compute_all_new_test_cases<
-    TI: TestIdentifier + Eq + Hash + Clone + Debug,
-    CI: CoverageIdentifier + Eq + Hash,
->(
+fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     coverage_data: &FullCoverageData<TI, CI>,
     retval: &mut HashSet<TI>,
@@ -464,10 +459,7 @@ fn compute_all_new_test_cases<
     Ok(())
 }
 
-fn compute_changed_file_test_cases<
-    TI: TestIdentifier + Eq + Hash + Clone,
-    CI: CoverageIdentifier + Eq + Hash,
->(
+fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     eval_target_changed_files: &HashSet<PathBuf>,
     coverage_data: &FullCoverageData<TI, CI>,

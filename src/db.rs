@@ -11,7 +11,6 @@ use diesel::{connection::Instrumentation, prelude::*};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use log::trace;
 use serde::{de::DeserializeOwned, Serialize};
-use std::hash::Hash;
 use std::{
     collections::HashMap,
     marker::PhantomData,
@@ -52,8 +51,8 @@ pub struct DieselCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
 }
 
 impl<
-        TI: TestIdentifier + Eq + Hash + Serialize + DeserializeOwned,
-        CI: CoverageIdentifier + Eq + Hash + Serialize + DeserializeOwned,
+        TI: TestIdentifier + Serialize + DeserializeOwned,
+        CI: CoverageIdentifier + Serialize + DeserializeOwned,
     > DieselCoverageDatabase<TI, CI>
 {
     pub fn new_sqlite_from_default_path() -> DieselCoverageDatabase<TI, CI> {
@@ -287,8 +286,8 @@ impl<
 }
 
 impl<
-        TI: TestIdentifier + Eq + Hash + Clone + Serialize + DeserializeOwned,
-        CI: CoverageIdentifier + Eq + Hash + Clone + Serialize + DeserializeOwned,
+        TI: TestIdentifier + Serialize + DeserializeOwned,
+        CI: CoverageIdentifier + Serialize + DeserializeOwned,
     > CoverageDatabase<TI, CI> for DieselCoverageDatabase<TI, CI>
 {
     // impl CoverageDatabase<TI, CI> for DieselCoverageDatabase {
