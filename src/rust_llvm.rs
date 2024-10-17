@@ -99,13 +99,6 @@ pub struct ProfilingData {
 
 impl ProfilingData {
     /// Parse a profraw file.
-    pub fn new_from_profraw(path: &Path) -> Result<Self> {
-        Ok(ProfilingData {
-            instrumentation_profile: llvm_profparser::parse(path)?,
-        })
-    }
-
-    /// Parse a profraw file.
     pub fn new_from_profraw_reader<T: Read>(mut reader: T) -> Result<Self> {
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf)?;

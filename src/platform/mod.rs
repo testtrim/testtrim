@@ -13,13 +13,16 @@ use crate::{
 
 pub mod rust;
 
-/// TestIdentifier is a machine-independent way to reference a test in a project.  It should contain data such that, if
-/// it was serialized to a DB, it could be picked up on another machine and the data would be useable to find and
-/// execute the test.
+/// TestIdentifier is a machine-independent way to reference a test in a project.
+///
+/// It must contain data such that, if it was serialized between machines, it could be picked up and contain relevant
+/// data to find and execute the test on another host.
 pub trait TestIdentifier: Eq + Hash + Clone + Debug {}
 
-/// Similar to TestIdentifier, but this represents a machine-dependent reference to a test.  ConcreteTestIdentifier is
-/// "ready to execute" on the current machine, where TestIdentifier may be missing specific pathing data (for example).
+/// Represents a machine-dependent reference to a test.
+///
+/// ConcreteTestIdentifier is "ready to execute" on the current machine, as compared to `TestIdentifier` which may be
+/// missing information, such as specific pathing or tooling references, to be able to be executed.
 pub trait ConcreteTestIdentifier<TI: TestIdentifier>: Eq + Hash + Clone + Debug {
     fn test_identifier(&self) -> &TI;
 }
