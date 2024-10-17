@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   rust-checks:
-    runs-on: ubuntu-latest
+    runs-on: docker
     container:
       options: --volume nix-forgejo-cache:/nix
     steps:
@@ -14,7 +14,7 @@ jobs:
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
-      - run: sed -i 's/github.com/forgejo.kainnef.com/' /etc/nix/nix.conf
+      - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
       - run: nix develop .# --command cargo build
       - name: run tests
         run: nix develop .# --command cargo test

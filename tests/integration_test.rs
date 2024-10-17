@@ -47,10 +47,10 @@ fn git_clone() -> Result<()> {
     let auth_token = env::var("RUST_COVERAGE_SPECIMEN_PAT").ok();
     let repo_url = match auth_token {
         Some(token) => format!(
-            "https://:{}@forgejo.kainnef.com/mfenniak/rust-coverage-specimen.git",
+            "https://:{}@codeberg.org/testtrim/rust-coverage-specimen.git",
             token
         ),
-        None => "forgejo@ssh.forgejo.kainnef.com:mfenniak/rust-coverage-specimen.git".to_string(),
+        None => "git@codeberg.org:testtrim/rust-coverage-specimen.git".to_string(),
     };
 
     let output = Command::new("git")

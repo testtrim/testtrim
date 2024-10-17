@@ -14,7 +14,7 @@ I've also published an introductory video (in two formats):
 
 3. Look at a source control diff since the last time you did #2 to find out what changes occurred to the code, then look them up in the database to see what test cases need to be run.
 
-This is the core concept behind [testtrim](https://forgejo.kainnef.com/testtrim/testtrim).
+This is the core concept behind [testtrim](https://codeberg.org/testtrim/testtrim).
 
 # How well does it work?
 
@@ -51,7 +51,7 @@ Oh, well, I'm not quite sure I'd recommend that right now.  But it could be fun 
 
 - Clone the git repo:
     ```
-    git clone forgejo@ssh.forgejo.kainnef.com:testtrim/testtrim.git
+    git clone https://codeberg.org/testtrim/testtrim.git
     ```
 
 - Build the project with `cargo`; might as well use the release mode for optimizations:
