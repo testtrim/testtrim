@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+--
+-- SPDX-License-Identifier: GPL-3.0-or-later
+
 DROP TABLE coverage_map_test_case_executed;
 DROP TABLE coverage_map;
 DROP TABLE test_case_coverage_identifier_covered;

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 {
   description = "cargo based nix development";
 
@@ -41,6 +45,8 @@
 
             diesel-cli
             sqlite
+
+            reuse
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+--
+-- SPDX-License-Identifier: GPL-3.0-or-later
+
 -- Normalized data representing a testtrim run on a commit...
 
 CREATE TABLE project (

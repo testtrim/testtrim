@@ -1,5 +1,9 @@
 #![feature(let_chains)]
 
+// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::scm::git::GitScm;
 use crate::scm::Scm;
 use crate::subcommand::SubcommandErrors;

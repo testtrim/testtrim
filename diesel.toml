@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # For documentation on how to configure this file,
 # see https://diesel.rs/guides/configuring-diesel-cli
 

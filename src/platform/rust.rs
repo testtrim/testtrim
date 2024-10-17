@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{Context, Result};
 use cargo_lock::Lockfile;
 use lazy_static::lazy_static;

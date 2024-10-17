@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 testtrim targets software automated tests for execution based upon previous code-coverage data and git changes.  It's in early development, but it's looking quite promising with evaluations showing that on-average 90% of tests can be safely skipped with this strategy.
 
 I've also published an introductory video (in two formats):

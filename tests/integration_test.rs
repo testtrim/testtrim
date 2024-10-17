@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::util::ChangeWorkingDirectory;
 use anyhow::Result;
 use lazy_static::lazy_static;
