@@ -10,6 +10,7 @@ edition = "2021"
 [dependencies]
 anyhow = "*"
 cargo-lock = "*"
+csv = "*"
 clap = { version = "*", features = ["derive"] }
 clap-verbosity-flag = "*"
 diesel = { version = "*", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "uuid", "time"] }

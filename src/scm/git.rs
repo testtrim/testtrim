@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::errors::SubcommandErrors;
 use crate::scm::{Scm, ScmCommit};
-use crate::SubcommandErrors;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -180,5 +180,37 @@ impl Scm<GitScmCommit> for GitScm {
         }
 
         Ok(output.stdout)
+    }
+
+    fn checkout(&self, commit: &GitScmCommit) -> Result<()> {
+        let output = Command::new("git")
+            .args(["checkout", &commit.sha])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!("git checkout {}", &commit.sha),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+
+        Ok(())
+    }
+
+    fn clean_lightly(&self) -> Result<()> {
+        let output = Command::new("git").args(["clean", "-f", "-d"]).output()?;
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: String::from("git clean -f -d"),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+
+        Ok(())
     }
 }

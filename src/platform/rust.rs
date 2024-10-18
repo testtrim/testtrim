@@ -21,12 +21,15 @@ use tempdir::TempDir;
 use crate::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FunctionCoverage, HeuristicCoverage,
 };
+use crate::errors::SubcommandErrors;
 use crate::full_coverage_data::FullCoverageData;
 use crate::rust_llvm::{CoverageLibrary, ProfilingData};
 use crate::scm::{Scm, ScmCommit};
-use crate::subcommand::SubcommandErrors;
 
-use super::{ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform};
+use super::{
+    ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
+    TestPlatform,
+};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct RustTestIdentifier {
@@ -109,7 +112,7 @@ impl RustTestPlatform {
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
         test_cases: &mut HashSet<RustTestIdentifier>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         // I think there might be plausible cases where Cargo.lock loading from the previous commit would fail, but we
         // wouldn't want to error out... for example, if Cargo.lock was added since the ancestor commit?.  But I'm not
         // confident what those cases would be where we would actually have ancestor coverage data yet be discovering
@@ -136,6 +139,7 @@ impl RustTestPlatform {
         // - New packages in current_lock that aren't in ancestor_lock aren't relevant -- they wouldn't be part of the
         //   ancestor's coverage data.
 
+        let mut changed_external_dependencies = 0;
         for old in ancestor_lock.packages {
             let relevant_change = match current_lock_map.get(old.name.as_str()) {
                 Some(current_version) => {
@@ -162,6 +166,7 @@ impl RustTestPlatform {
                     "Change to dependency {}; will run all tests that touched it",
                     old.name
                 );
+                changed_external_dependencies += 1;
                 let coverage_identifier =
                     RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
                         package_name: String::from(old.name.as_str()),
@@ -182,7 +187,7 @@ impl RustTestPlatform {
             }
         }
 
-        Ok(())
+        Ok(changed_external_dependencies)
     }
 
     fn find_test_binaries() -> Result<HashSet<RustTestBinary>> {
@@ -336,22 +341,26 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
             RustTestIdentifier,
             RustCoverageIdentifier,
         >,
-    ) -> anyhow::Result<std::collections::HashSet<RustTestIdentifier>> {
+    ) -> anyhow::Result<PlatformSpecificRelevantTestCaseData<RustTestIdentifier>> {
         let mut test_cases = HashSet::new();
 
+        let mut external_dependencies_changed = None;
         // FIXME: I'm not confident that this check is right -- could there be multiple lock files in a realistic repo?
         // But this is simple and seems pretty applicable for now.
         if eval_target_changed_files.contains(Path::new("Cargo.lock")) {
-            RustTestPlatform::rust_cargo_deps_test_cases(
+            external_dependencies_changed = Some(RustTestPlatform::rust_cargo_deps_test_cases(
                 eval_target_test_cases,
                 scm,
                 ancestor_commit,
                 coverage_data,
                 &mut test_cases,
-            )?;
+            )?);
         }
 
-        Ok(test_cases)
+        Ok(PlatformSpecificRelevantTestCaseData {
+            additional_test_cases: test_cases,
+            external_dependencies_changed,
+        })
     }
 
     fn run_tests<'a, I>(

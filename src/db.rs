@@ -37,6 +37,7 @@ pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     ) -> Result<()>;
     fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>>;
     fn has_any_coverage_data(&mut self) -> Result<bool>;
+    fn clear_project_data(&mut self) -> Result<()>;
 }
 
 struct DbLogger;
@@ -607,6 +608,34 @@ impl<
             .context("loading denormalized_coverage_map_id")?;
 
         Ok(coverage_map_id.is_some())
+    }
+
+    fn clear_project_data(&mut self) -> Result<()> {
+        use crate::schema::*;
+
+        let conn = self.get_connection()?;
+
+        conn.run_pending_migrations(MIGRATIONS)
+            .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+
+        diesel::delete(coverage_map_test_case_executed::dsl::coverage_map_test_case_executed)
+            .execute(conn)?;
+        diesel::delete(coverage_map::dsl::coverage_map).execute(conn)?;
+        diesel::delete(
+            test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered,
+        )
+        .execute(conn)?;
+        diesel::delete(test_case_file_covered::dsl::test_case_file_covered).execute(conn)?;
+        diesel::delete(test_case_function_covered::dsl::test_case_function_covered)
+            .execute(conn)?;
+        diesel::delete(commit_test_case_executed::dsl::commit_test_case_executed).execute(conn)?;
+        diesel::delete(test_case_execution::dsl::test_case_execution).execute(conn)?;
+        diesel::delete(commit_test_case::dsl::commit_test_case).execute(conn)?;
+        diesel::delete(test_case::dsl::test_case).execute(conn)?;
+        diesel::delete(scm_commit::dsl::scm_commit).execute(conn)?;
+        diesel::delete(project::dsl::project).execute(conn)?;
+
+        Ok(())
     }
 }
 

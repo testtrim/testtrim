@@ -32,6 +32,14 @@ pub trait TestDiscovery<CTI: ConcreteTestIdentifier<TI>, TI: TestIdentifier> {
     fn map_ti_to_cti(&self, test_identifier: TI) -> Option<CTI>;
 }
 
+pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier> {
+    /// Key data, which additional test cases should be executed
+    pub additional_test_cases: HashSet<TI>,
+
+    /// Instrumentation: how many "external dependencies" changed that caused those additional test cases?
+    pub external_dependencies_changed: Option<usize>,
+}
+
 pub trait TestPlatform<TI, CI, TD, CTI>
 where
     TI: TestIdentifier,
@@ -52,5 +60,5 @@ where
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<TI, CI>,
-    ) -> Result<HashSet<TI>>;
+    ) -> Result<PlatformSpecificRelevantTestCaseData<TI>>;
 }

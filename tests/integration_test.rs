@@ -9,12 +9,11 @@ use log::info;
 use std::process::Command;
 use std::{env, sync::Mutex};
 use tempdir::TempDir;
+use testtrim::cmd::cli::{GetTestIdentifierMode, SourceMode};
+use testtrim::cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode};
+use testtrim::cmd::run_tests::run_tests;
 use testtrim::platform::rust::RustTestPlatform;
 use testtrim::scm::git::GitScm;
-use testtrim::{
-    get_target_test_cases, run_tests_subcommand, AncestorSearchMode, GetTestIdentifierMode,
-    SourceMode,
-};
 use thiserror::Error;
 
 mod util;
@@ -325,7 +324,11 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             );
         }
 
-        run_tests_subcommand(&GetTestIdentifierMode::Relevant, &SourceMode::Automatic)?;
+        run_tests::<_, _, _, _, _, _, RustTestPlatform>(
+            &GetTestIdentifierMode::Relevant,
+            &scm,
+            &SourceMode::Automatic,
+        )?;
 
         Ok(())
     }

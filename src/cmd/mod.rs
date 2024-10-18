@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use testtrim::cmd::cli::run_cli;
-
-fn main() {
-    run_cli();
-}
+pub mod cli;
+pub mod get_test_identifiers;
+pub mod run_tests;
+pub mod simulate_history;

@@ -22,3 +22,11 @@ pub enum SubcommandErrors {
         output: String,
     },
 }
+
+#[derive(Error, Debug)]
+pub enum RunTestsErrors {
+    #[error(
+        "the CleanCommit mode cannot be used as the working directory is dirty; either clean the directory, use the WorkingTree mode, or override with OverrideCleanCommit"
+    )]
+    CleanCommitWorkingDirectoryDirty,
+}

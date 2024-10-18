@@ -1,0 +1,204 @@
+// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::io;
+
+use anyhow::Result;
+use log::{error, info, trace, warn};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+use crate::{
+    cmd::run_tests::run_tests,
+    commit_coverage_data::CoverageIdentifier,
+    db::{CoverageDatabase, DieselCoverageDatabase},
+    platform::{
+        rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
+    },
+    scm::{git::GitScm, Scm, ScmCommit},
+};
+
+use super::cli::{GetTestIdentifierMode, SourceMode};
+
+// Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
+// functionality as possible to library methods that don't do interactive output but instead return data structures.
+pub fn cli(num_commits: &u16) {
+    match simulate_history::<_, _, _, _, _, _, RustTestPlatform>(&GitScm {}, num_commits) {
+        Ok(out) => {
+            // FIXME: output simulation data in CSV format
+            let mut wtr = csv::Writer::from_writer(io::stdout());
+            for rec in out.commits_simulated {
+                wtr.serialize(rec)
+                    .expect("serialize SimulateCommitOutput and write to stdout");
+            }
+        }
+        Err(err) => {
+            error!("error occurred in simulate_history: {:?}", err)
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct SimulateCommitOutput<Commit: ScmCommit> {
+    #[serde(skip_serializing)]
+    pub commit: Commit,
+    pub commit_identifier: String,
+
+    pub success: bool, // FIXME: enum, success/which-error?
+
+    #[serde(skip_serializing)]
+    pub ancestor_commit: Option<Commit>,
+    pub ancestor_commit_identifier: Option<String>,
+    pub total_test_count: Option<usize>,
+    pub targeted_test_count: Option<usize>,
+
+    pub file_changed_count: Option<usize>,
+    pub external_dependencies_changed_count: Option<usize>,
+    // FIXME: add profiling return data
+    //   - time taken to discover tests / build, time taken to run tests, time "added by testtrim" for reading coverage
+    //     data, analyzing coverage data, and writing coverage data
+
+    // FIXME: add testtrim database statistics -- eg. current size after this commit
+}
+
+#[derive(Serialize)]
+pub struct SimulateHistoryOutput<Commit: ScmCommit> {
+    pub commits_simulated: Vec<SimulateCommitOutput<Commit>>,
+}
+
+fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
+    scm: &MyScm,
+    num_commits: &u16,
+) -> Result<SimulateHistoryOutput<Commit>>
+where
+    Commit: ScmCommit,
+    MyScm: Scm<Commit>,
+    TI: TestIdentifier + Serialize + DeserializeOwned,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TD: TestDiscovery<CTI, TI>,
+    CTI: ConcreteTestIdentifier<TI>,
+    TP: TestPlatform<TI, CI, TD, CTI>,
+{
+    // Remove all contents from the testtrim database, to ensure a clean simulation.
+    (DieselCoverageDatabase::<TI, CI>::new_sqlite_from_default_path()).clear_project_data()?;
+
+    // Use git log -> get the target commits from earliest to latest.  When we hit a merge branch, we'll go up each
+    // parent's path until we've found enough commits to meet the requested test count.  This might not reach a common
+    // ancestor of all commits, leaving the potential for multiple test commits to have no ancestor coverage data at the
+    // beginning of testing.
+    info!("Searching for testing target commits...");
+    let head = scm.get_head_commit()?;
+    let mut commits = get_more_commits(scm, &head, num_commits - 1)?;
+    commits.push(head);
+    info!("Found {} commits to test.", commits.len());
+
+    // Simulate each commit, and thenoutput results to stdout in a CSV format:
+    //   - commit identifier
+    //   - did the tests execute successfully
+    //   - was an ancestor commit identified successfully w/ coverage data; ancestor commit identifier
+    //   - how many tests were present
+    //   - how many tests were targeted based upon coverage data
+    //   - change stats; # of files changed, # of functions changed, # of external dependencies changed
+    //   - time taken to discover tests / build, time taken to run tests, time "added by testtrim" for reading coverage
+    //     data, analyzing coverage data, and writing coverage data
+    let mut commits_simulated = Vec::<SimulateCommitOutput<Commit>>::with_capacity(commits.len());
+    for commit in commits {
+        // FIXME: error handling here -- it's OK to have an error, we just need to report it
+        info!("testing commit: {:?}", scm.get_commit_identifier(&commit));
+        commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit)?);
+    }
+
+    Ok(SimulateHistoryOutput { commits_simulated })
+}
+
+fn get_more_commits<Commit, MyScm>(
+    scm: &MyScm,
+    head: &Commit,
+    num_commits: u16,
+) -> Result<Vec<Commit>>
+where
+    Commit: ScmCommit,
+    MyScm: Scm<Commit>,
+{
+    let mut result = vec![];
+    let mut parents = scm.get_commit_parents(head)?;
+    while result.len() < num_commits.into()
+        && let Some(cur_commit) = parents.pop()
+    {
+        let cur_parents = scm.get_commit_parents(&cur_commit)?;
+        result.push(cur_commit);
+        parents.extend(cur_parents);
+    }
+    // Reorganize the commits from oldest to newest (not based upon time; based upon ancestry).
+    result.reverse();
+    Ok(result)
+}
+
+fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
+    scm: &MyScm,
+    commit: Commit,
+) -> Result<SimulateCommitOutput<Commit>>
+where
+    Commit: ScmCommit,
+    MyScm: Scm<Commit>,
+    TI: TestIdentifier + Serialize + DeserializeOwned,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TD: TestDiscovery<CTI, TI>,
+    CTI: ConcreteTestIdentifier<TI>,
+    TP: TestPlatform<TI, CI, TD, CTI>,
+{
+    // For each commit:
+    // - Checkout that branch
+    // - Ensure working directory is clean, but try not to remove any incremental build files.  `git clean -f` (without
+    //   -x, -d) should probably do this.
+    // - Run `testtrim run-tests --source-mode=CleanCommit` (in-process), which should guarantee that the working
+    //   directory is clean and that coverage map will be saved if generated.
+    // - Return data for simulation output, if applicable
+
+    trace!("checking out {:?}", scm.get_commit_identifier(&commit));
+    scm.checkout(&commit)?;
+
+    trace!("cleaning working directory");
+    scm.clean_lightly()?;
+
+    let commit_identifier = scm.get_commit_identifier(&commit);
+    trace!("beginning run test subcommand");
+    match run_tests::<_, _, _, _, _, _, TP>(
+        &GetTestIdentifierMode::Relevant,
+        scm,
+        &SourceMode::CleanCommit,
+    ) {
+        Ok(run_result) => {
+            let ancestor_commit_identifier = run_result
+                .ancestor_commit
+                .as_ref()
+                .map(|c| scm.get_commit_identifier(c));
+            Ok(SimulateCommitOutput {
+                commit,
+                commit_identifier,
+                success: true,
+                ancestor_commit: run_result.ancestor_commit,
+                ancestor_commit_identifier,
+                total_test_count: Some(run_result.all_test_cases.len()),
+                targeted_test_count: Some(run_result.target_test_cases.len()),
+                file_changed_count: run_result.files_changed.map(|set| set.len()),
+                external_dependencies_changed_count: run_result.external_dependencies_changed,
+            })
+        }
+        Err(e) => {
+            warn!("commit {commit_identifier} failed to run tests with error: {e}");
+            Ok(SimulateCommitOutput {
+                commit,
+                commit_identifier,
+                success: false,
+                ancestor_commit: None,
+                ancestor_commit_identifier: None,
+                total_test_count: None,
+                targeted_test_count: None,
+                file_changed_count: None,
+                external_dependencies_changed_count: None,
+            })
+        }
+    }
+}
