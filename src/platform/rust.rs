@@ -328,8 +328,10 @@ impl RustTestPlatform {
             // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
             // the coverage library can't fetch data about it... for the moment we'll just ignore it until we come
             // up with a test that hits this case and breaks
+            let mut external_dependency = false;
+
             if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
-                for file in metadata.file_paths {
+                for file in &metadata.file_paths {
                     // detect a path like:
                     // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
                     // by identifying `.cargo/registry/src` section, and then extract the package name
@@ -355,18 +357,23 @@ impl RustTestPlatform {
                                         version,
                                     },
                                 ),
-                            })
+                            });
+                            external_dependency = true;
                         }
                     }
-                    coverage_data.add_file_to_test(FileCoverage {
-                        file_name: file,
+                }
+                if !external_dependency {
+                    for file in metadata.file_paths {
+                        coverage_data.add_file_to_test(FileCoverage {
+                            file_name: file,
+                            test_identifier: test_case.test_identifier.clone(),
+                        });
+                    }
+                    coverage_data.add_function_to_test(FunctionCoverage {
+                        function_name: metadata.function_name,
                         test_identifier: test_case.test_identifier.clone(),
                     });
                 }
-                coverage_data.add_function_to_test(FunctionCoverage {
-                    function_name: metadata.function_name,
-                    test_identifier: test_case.test_identifier.clone(),
-                });
             }
         }
 

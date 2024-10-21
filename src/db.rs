@@ -11,7 +11,10 @@ use crate::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use diesel::{connection::Instrumentation, prelude::*};
+use diesel::{
+    connection::{Instrumentation, SimpleConnection as _},
+    prelude::*,
+};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use log::trace;
 use serde::{de::DeserializeOwned, Serialize};
@@ -88,6 +91,17 @@ impl<
             let mut connection = SqliteConnection::establish(&self.database_url)
                 .context("connecting to the database")?;
             connection.set_instrumentation(DbLogger {});
+
+            connection.batch_execute(
+                "
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = OFF; -- don't fsync; let OS handle it
+            PRAGMA wal_autocheckpoint = 1000;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            ",
+            )?;
+            // FIXME: maybe enable foreign_keys -- but would have a performance hit so it might not be important for now
+
             self.connection = Some(connection);
         }
 
@@ -112,7 +126,7 @@ impl<
                     test_case_file_covered::dsl::file_identifier.eq(tc.to_string_lossy()), // FIXME: lossy?
                 ))
             }
-            for chunk in tuples.chunks(1000) {
+            for chunk in tuples.chunks(10000) {
                 // HACK: avoid "too many SQL variables"
                 diesel::insert_into(test_case_file_covered::dsl::test_case_file_covered)
                     .values(chunk)
@@ -144,7 +158,7 @@ impl<
                     test_case_function_covered::dsl::function_identifier.eq(tc),
                 ))
             }
-            for chunk in tuples.chunks(1000) {
+            for chunk in tuples.chunks(10000) {
                 // HACK: avoid "too many SQL variables"
                 diesel::insert_into(test_case_function_covered::dsl::test_case_function_covered)
                     .values(chunk)
@@ -177,7 +191,7 @@ impl<
                         .eq(serde_json::to_string(&tc)?),
                 ))
             }
-            for chunk in tuples.chunks(1000) {
+            for chunk in tuples.chunks(10000) {
                 // HACK: avoid "too many SQL variables"
                 diesel::insert_into(test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered)
                     .values(chunk)
@@ -356,57 +370,87 @@ impl<
         let mut test_case_to_test_case_id_map = HashMap::new();
         let mut test_case_id_to_test_case_map = HashMap::new();
         let mut test_case_to_test_case_execution_id_map = HashMap::new();
+
+        #[derive(Queryable, Selectable)]
+        #[diesel(table_name = crate::schema::test_case)]
+        struct TestCase {
+            id: String,
+            test_identifier: String,
+        }
+        let project_test_cases = test_case::dsl::test_case
+            .filter(test_case::dsl::project_id.eq(project_id.to_string()))
+            .select(TestCase::as_select())
+            .get_results(conn)
+            .context("loading project_test_cases")?;
+        for project_test_case in project_test_cases {
+            let test_identifier: TI = serde_json::from_str(&project_test_case.test_identifier)?;
+            if let Some(stored_ti) = coverage_data.existing_test_set().get(&test_identifier) {
+                let test_case_id = Uuid::parse_str(&project_test_case.id)?;
+                test_case_to_test_case_id_map.insert(stored_ti, test_case_id);
+                test_case_id_to_test_case_map.insert(test_case_id, stored_ti);
+            }
+        }
+
+        let mut insertables = vec![];
         for tc in coverage_data.existing_test_set() {
-            let test_case_id: String = diesel::insert_into(test_case::dsl::test_case)
-                .values((
-                    test_case::dsl::id.eq(Uuid::new_v4().to_string()),
+            if !test_case_to_test_case_id_map.contains_key(tc) {
+                // New test identifier...
+                let test_case_id = Uuid::new_v4();
+                insertables.push((
+                    test_case::dsl::id.eq(test_case_id.to_string()),
                     test_case::dsl::project_id.eq(project_id.to_string()),
                     test_case::dsl::test_identifier.eq(serde_json::to_string(&tc)?),
-                ))
-                // This is really what I'd like -- if there's a conflict, ignore it.  But this causes the returning()
-                // clause to skip the row, which is no good because I need the test case ID for later inserts.  So...
-                // we'll do a pointless on_conflict().do_update().set() which is basically a no-op.  This allows the
-                // returning() to work though.
-                //
-                // .on_conflict((test_case::dsl::project_id, test_case::dsl::test_identifier))
-                // .do_nothing()
-                .on_conflict((test_case::dsl::project_id, test_case::dsl::test_identifier))
-                .do_update()
-                .set(test_case::dsl::project_id.eq(project_id.to_string()))
-                .returning(test_case::dsl::id)
-                .get_result(conn)
-                .context("upsert into test_case")?;
-            test_case_to_test_case_id_map.insert(tc, Uuid::parse_str(&test_case_id)?);
-            test_case_id_to_test_case_map.insert(Uuid::parse_str(&test_case_id)?, tc);
+                ));
+                test_case_to_test_case_id_map.insert(tc, test_case_id);
+                test_case_id_to_test_case_map.insert(test_case_id, tc);
+            }
+        }
+        for chunk in insertables.chunks(10000) {
+            diesel::insert_into(test_case::dsl::test_case)
+                .values(chunk)
+                .execute(conn)
+                .context("insert into test_case")?;
+        }
 
+        // Batch insert into commit_test_case...
+        let mut insertables = vec![];
+        for tc in coverage_data.existing_test_set() {
+            let test_case_id = test_case_to_test_case_id_map
+                .get(tc)
+                .expect("populated earlier");
+            insertables.push((
+                commit_test_case::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+                commit_test_case::dsl::test_case_id.eq(test_case_id.to_string()),
+            ));
+        }
+        for chunk in insertables.chunks(10000) {
+            // HACK: avoid "too many SQL variables"
             diesel::insert_into(commit_test_case::dsl::commit_test_case)
-                .values((
-                    commit_test_case::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
-                    commit_test_case::dsl::test_case_id.eq(&test_case_id),
-                ))
+                .values(chunk)
                 .execute(conn)
                 .context("insert into commit_test_case")?;
+        }
 
+        let mut test_case_execution_insertables = vec![];
+        let mut commit_test_case_insertables = vec![];
+        for tc in coverage_data.existing_test_set() {
             if coverage_data.executed_test_set().contains(tc) {
+                let test_case_id = test_case_to_test_case_id_map
+                    .get(tc)
+                    .expect("populated earlier");
+
                 let test_case_execution_id = Uuid::new_v4();
                 test_case_to_test_case_execution_id_map.insert(tc, test_case_execution_id);
-                diesel::insert_into(test_case_execution::dsl::test_case_execution)
-                    .values((
-                        test_case_execution::dsl::id.eq(test_case_execution_id.to_string()),
-                        // test_case_execution::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
-                        test_case_execution::dsl::test_case_id.eq(&test_case_id),
-                    ))
-                    .execute(conn)
-                    .context("insert into test_case_execution")?;
+                test_case_execution_insertables.push((
+                    test_case_execution::dsl::id.eq(test_case_execution_id.to_string()),
+                    test_case_execution::dsl::test_case_id.eq(test_case_id.to_string()),
+                ));
 
-                diesel::insert_into(commit_test_case_executed::dsl::commit_test_case_executed)
-                    .values((
-                        commit_test_case_executed::dsl::test_case_execution_id
-                            .eq(test_case_execution_id.to_string()),
-                        commit_test_case_executed::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
-                    ))
-                    .execute(conn)
-                    .context("insert into commit_test_case_executed")?;
+                commit_test_case_insertables.push((
+                    commit_test_case_executed::dsl::test_case_execution_id
+                        .eq(test_case_execution_id.to_string()),
+                    commit_test_case_executed::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+                ));
 
                 DieselCoverageDatabase::save_test_case_file_coverage(
                     conn,
@@ -429,6 +473,19 @@ impl<
                     coverage_data,
                 )?;
             }
+        }
+
+        for chunk in test_case_execution_insertables.chunks(10000) {
+            diesel::insert_into(test_case_execution::dsl::test_case_execution)
+                .values(chunk)
+                .execute(conn)
+                .context("bulk insert into test_case_execution")?;
+        }
+        for chunk in commit_test_case_insertables.chunks(10000) {
+            diesel::insert_into(commit_test_case_executed::dsl::commit_test_case_executed)
+                .values(chunk)
+                .execute(conn)
+                .context("bulk insert into commit_test_case_executed")?;
         }
 
         DieselCoverageDatabase::save_coverage_map(
