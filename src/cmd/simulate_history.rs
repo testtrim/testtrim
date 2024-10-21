@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::io;
+use std::{
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use log::{error, info, trace, warn};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::{de::DeserializeOwned, Serializer};
 
 use crate::{
     cmd::run_tests::run_tests,
@@ -17,6 +21,7 @@ use crate::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
     },
     scm::{git::GitScm, Scm, ScmCommit},
+    timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
 };
 
 use super::cli::{GetTestIdentifierMode, SourceMode};
@@ -39,6 +44,13 @@ pub fn cli(num_commits: &u16) {
     }
 }
 
+fn duration_to_seconds<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_f64(duration.as_secs_f64())
+}
+
 #[derive(Serialize)]
 pub struct SimulateCommitOutput<Commit: ScmCommit> {
     #[serde(skip_serializing)]
@@ -55,10 +67,26 @@ pub struct SimulateCommitOutput<Commit: ScmCommit> {
 
     pub file_changed_count: Option<usize>,
     pub external_dependencies_changed_count: Option<usize>,
-    // FIXME: add profiling return data
-    //   - time taken to discover tests / build, time taken to run tests, time "added by testtrim" for reading coverage
-    //     data, analyzing coverage data, and writing coverage data
 
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub total_time: Duration,
+    // FIXME: cannot serialize RunTestTiming container inside struct when writing headers from structs
+    // As a hack around this, just copying the values into this struct.
+    // pub profiling: RunTestTiming,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub discover_tests: Duration,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub read_historical_coverage_data: Duration,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub test_determination: Duration,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub addt_platform_specific_test_determination: Duration,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub run_tests: Duration,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub read_new_coverage_data: Duration,
+    #[serde(serialize_with = "duration_to_seconds")]
+    pub write_new_coverage_data: Duration,
     // FIXME: add testtrim database statistics -- eg. current size after this commit
 }
 
@@ -162,13 +190,24 @@ where
     trace!("cleaning working directory");
     scm.clean_lightly()?;
 
-    let commit_identifier = scm.get_commit_identifier(&commit);
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
+    let start_instant = Instant::now();
+
     trace!("beginning run test subcommand");
-    match run_tests::<_, _, _, _, _, _, TP>(
-        &GetTestIdentifierMode::Relevant,
-        scm,
-        &SourceMode::CleanCommit,
-    ) {
+    let run_tests_result = tracing::subscriber::with_default(my_subscriber, || {
+        run_tests::<_, _, _, _, _, _, TP>(
+            &GetTestIdentifierMode::Relevant,
+            scm,
+            &SourceMode::CleanCommit,
+        )
+    });
+
+    let total_time = Instant::now().duration_since(start_instant);
+    let run_test_timing = perf_storage.interpret_run_test_timing();
+
+    let commit_identifier = scm.get_commit_identifier(&commit);
+    match run_tests_result {
         Ok(run_result) => {
             let ancestor_commit_identifier = run_result
                 .ancestor_commit
@@ -184,6 +223,15 @@ where
                 targeted_test_count: Some(run_result.target_test_cases.len()),
                 file_changed_count: run_result.files_changed.map(|set| set.len()),
                 external_dependencies_changed_count: run_result.external_dependencies_changed,
+                total_time,
+                discover_tests: run_test_timing.discover_tests,
+                read_historical_coverage_data: run_test_timing.read_historical_coverage_data,
+                test_determination: run_test_timing.test_determination,
+                addt_platform_specific_test_determination: run_test_timing
+                    .addt_platform_specific_test_determination,
+                run_tests: run_test_timing.run_tests,
+                read_new_coverage_data: run_test_timing.read_new_coverage_data,
+                write_new_coverage_data: run_test_timing.write_new_coverage_data,
             })
         }
         Err(e) => {
@@ -198,6 +246,15 @@ where
                 targeted_test_count: None,
                 file_changed_count: None,
                 external_dependencies_changed_count: None,
+                total_time,
+                discover_tests: run_test_timing.discover_tests,
+                read_historical_coverage_data: run_test_timing.read_historical_coverage_data,
+                test_determination: run_test_timing.test_determination,
+                addt_platform_specific_test_determination: run_test_timing
+                    .addt_platform_specific_test_determination,
+                run_tests: run_test_timing.run_tests,
+                read_new_coverage_data: run_test_timing.read_new_coverage_data,
+                write_new_coverage_data: run_test_timing.write_new_coverage_data,
             })
         }
     }

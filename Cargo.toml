@@ -13,11 +13,13 @@ cargo-lock = "*"
 csv = "*"
 clap = { version = "*", features = ["derive"] }
 clap-verbosity-flag = "*"
+dashmap = "*"
 diesel = { version = "*", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "uuid", "time"] }
 diesel_migrations = "*"
 lazy_static = "*"
 llvm_profparser = "*"
 log = "*"
+rand = "*"
 regex = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
@@ -25,4 +27,5 @@ simplelog = "*"
 tempdir = "*"
 thiserror = "*"
 time = "*"
+tracing = "*"
 uuid = { version = "*", features = ["v4"] }

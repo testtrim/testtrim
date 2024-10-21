@@ -8,8 +8,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
+use tracing::instrument;
 
+use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     commit_coverage_data::CoverageIdentifier,
     db::{CoverageDatabase, DieselCoverageDatabase},
@@ -25,20 +28,30 @@ use super::cli::GetTestIdentifierMode;
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
 pub fn cli(test_selection_mode: &GetTestIdentifierMode) {
-    let test_cases = match get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
-        test_selection_mode,
-        &GitScm {},
-        AncestorSearchMode::AllCommits,
-    ) {
-        Ok(test_cases) => test_cases,
-        Err(err) => {
-            error!("error occurred in get_target_test_cases: {:?}", err);
-            return;
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
+
+    tracing::subscriber::with_default(my_subscriber, || {
+        let test_cases = match get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
+            test_selection_mode,
+            &GitScm {},
+            AncestorSearchMode::AllCommits,
+        ) {
+            Ok(test_cases) => test_cases,
+            Err(err) => {
+                error!("error occurred in get_target_test_cases: {:?}", err);
+                return;
+            }
+        };
+        for test_case in test_cases.target_test_cases {
+            println!("{:?}", test_case.test_identifier);
         }
-    };
-    for test_case in test_cases.target_test_cases {
-        println!("{:?}", test_case.test_identifier);
-    }
+    });
+
+    // FIXME: probably not the right choice to print this to stdout; ideally this cli command just prints the test
+    // identifiers.
+    println!("Performance stats:");
+    perf_storage.print();
 }
 
 pub struct TargetTestCases<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTestIdentifier<TI>> {
@@ -163,6 +176,7 @@ where
 /// branch commits an incorrect source of data.  Commits are searched starting at HEAD and going towards their ancestors
 /// checking for any coverage data.  If a merge commit is found, then the search skips to the best common ancestor to
 /// both parents of the merge commit, and continues from there.
+#[instrument(skip_all, fields(perftrace = "read-coverage-data"))]
 fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     scm: &MyScm,
     head: Commit,
@@ -243,6 +257,7 @@ where
 /// - For changed files -- because the coverage data is a complete denormalization of all coverage data, even if the
 ///   previous commit only ran a subset of tests, it is easy to just look up all touched points in the coverage data and
 ///   coalesce them.
+#[instrument(skip_all, fields(perftrace = "analyze-tests-to-run"))]
 fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     eval_target_changed_files: &HashSet<PathBuf>,

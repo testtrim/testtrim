@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{collections::HashSet, marker::PhantomData, path::PathBuf};
+use std::{collections::HashSet, marker::PhantomData, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use log::{error, info};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tracing::info_span;
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
@@ -18,6 +19,7 @@ use crate::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
     },
     scm::{git::GitScm, Scm, ScmCommit},
+    timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
 };
 
 use super::cli::{GetTestIdentifierMode, SourceMode};
@@ -25,24 +27,33 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
 pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode) {
-    match run_tests::<_, _, _, _, _, _, RustTestPlatform>(
-        test_selection_mode,
-        &GitScm {},
-        source_mode,
-    ) {
-        Ok(out) => {
-            println!("successfully executed tests");
-            println!(
-                "target test cases were {} of {}, {}%",
-                out.target_test_cases.len(),
-                out.all_test_cases.len(),
-                100 * out.target_test_cases.len() / out.all_test_cases.len(),
-            );
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
+
+    tracing::subscriber::with_default(my_subscriber, || {
+        match run_tests::<_, _, _, _, _, _, RustTestPlatform>(
+            test_selection_mode,
+            &GitScm {},
+            source_mode,
+        ) {
+            Ok(out) => {
+                println!("successfully executed tests");
+                println!(
+                    "target test cases were {} of {}, {}%",
+                    out.target_test_cases.len(),
+                    out.all_test_cases.len(),
+                    100 * out.target_test_cases.len() / out.all_test_cases.len(),
+                );
+            }
+            Err(err) => {
+                error!("error occurred in run_tests: {:?}", err)
+            }
         }
-        Err(err) => {
-            error!("error occurred in run_tests: {:?}", err)
-        }
-    }
+    });
+
+    // FIXME: probably not the right choice to print this to stdout; maybe log info?
+    println!("Performance stats:");
+    perf_storage.print();
 }
 
 pub struct RunTestsOutput<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTestIdentifier<TI>> {
@@ -124,11 +135,13 @@ where
             .as_ref()
             .map(|c| scm.get_commit_identifier(c));
 
-        DieselCoverageDatabase::new_sqlite_from_default_path().save_coverage_data(
-            &coverage_data,
-            &commit_sha,
-            ancestor_commit_sha.as_deref(),
-        )?;
+        info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
+            DieselCoverageDatabase::new_sqlite_from_default_path().save_coverage_data(
+                &coverage_data,
+                &commit_sha,
+                ancestor_commit_sha.as_deref(),
+            )
+        })?;
     }
 
     Ok(RunTestsOutput {

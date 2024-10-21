@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::{env, fs, io};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
+use tracing::{info_span, instrument};
 
 use crate::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FunctionCoverage, HeuristicCoverage,
@@ -311,11 +312,72 @@ impl RustTestPlatform {
 
         Ok(result)
     }
+
+    #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
+    fn parse_profiling_data(
+        test_case: &RustTestCase,
+        profile_file: &PathBuf,
+        coverage_library: &CoverageLibrary,
+        coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
+    ) -> Result<()> {
+        let reader = fs::File::open(profile_file).context("Failed to open profile file")?;
+        let profiling_data =
+            ProfilingData::new_from_profraw_reader(reader).context("new_from_profraw_reader")?;
+
+        for point in profiling_data.get_hit_instrumentation_points() {
+            // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
+            // the coverage library can't fetch data about it... for the moment we'll just ignore it until we come
+            // up with a test that hits this case and breaks
+            if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
+                for file in metadata.file_paths {
+                    // detect a path like:
+                    // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
+                    // by identifying `.cargo/registry/src` section, and then extract the package name
+                    // (regex-automata) and version (0.4.7) from the path if present.
+                    let mut itr = file.components();
+                    while let Some(comp) = itr.next() {
+                        if let std::path::Component::Normal(path) = comp
+                            && path == ".cargo"
+                            && let Some(std::path::Component::Normal(path)) = itr.next()
+                            && path == "registry"
+                            && let Some(std::path::Component::Normal(path)) = itr.next()
+                            && path == "src"
+                            && let Some(std::path::Component::Normal(_registry_path)) = itr.next()
+                            && let Some(std::path::Component::Normal(package_path)) = itr.next()
+                            && let Some((package_name, version)) = parse_cargo_package(package_path)
+                        {
+                            trace!("Found package reference to {} / {}", package_name, version);
+                            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                                test_identifier: test_case.test_identifier.clone(),
+                                coverage_identifier: RustCoverageIdentifier::ExternalDependency(
+                                    RustExternalDependency {
+                                        package_name,
+                                        version,
+                                    },
+                                ),
+                            })
+                        }
+                    }
+                    coverage_data.add_file_to_test(FileCoverage {
+                        file_name: file,
+                        test_identifier: test_case.test_identifier.clone(),
+                    });
+                }
+                coverage_data.add_function_to_test(FunctionCoverage {
+                    function_name: metadata.function_name,
+                    test_identifier: test_case.test_identifier.clone(),
+                });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery, RustTestCase>
     for RustTestPlatform
 {
+    #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     fn discover_tests() -> Result<RustTestDiscovery> {
         let test_binaries = RustTestPlatform::find_test_binaries()?;
         trace!("test_binaries: {:?}", test_binaries);
@@ -329,6 +391,7 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
         })
     }
 
+    #[instrument(skip_all, fields(perftrace = "platform-specific-test-cases"))]
     fn platform_specific_relevant_test_cases<
         Commit: crate::scm::ScmCommit,
         MyScm: crate::scm::Scm<Commit>,
@@ -420,14 +483,16 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
                 "Execute test case {:?} into {:?} from working-dir {:?}...",
                 test_case, profile_file, test_wd
             );
-            let output = Command::new(&test_case.test_binary.executable_path)
-                .arg("--exact")
-                .arg(&test_case.test_identifier.test_name)
-                .env("LLVM_PROFILE_FILE", &profile_file)
-                .env("RUSTFLAGS", "-C instrument-coverage")
-                .current_dir(test_wd)
-                .output()
-                .expect("Failed to execute test");
+            let output = info_span!("execute-test", perftrace = "run-test").in_scope(|| {
+                Command::new(&test_case.test_binary.executable_path)
+                    .arg("--exact")
+                    .arg(&test_case.test_identifier.test_name)
+                    .env("LLVM_PROFILE_FILE", &profile_file)
+                    .env("RUSTFLAGS", "-C instrument-coverage")
+                    .current_dir(test_wd)
+                    .output()
+                    .expect("Failed to execute test")
+            });
 
             if !output.status.success() {
                 return Err(SubcommandErrors::SubcommandFailed {
@@ -445,57 +510,12 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
 
             trace!("Successfully ran test {:?}!", test_case.test_identifier);
 
-            let reader = fs::File::open(&profile_file).context("Failed to open profile file")?;
-            let profiling_data = ProfilingData::new_from_profraw_reader(reader)
-                .context("new_from_profraw_reader")?;
-
-            for point in profiling_data.get_hit_instrumentation_points() {
-                // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
-                // the coverage library can't fetch data about it... for the moment we'll just ignore it until we come
-                // up with a test that hits this case and breaks
-                if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
-                    for file in metadata.file_paths {
-                        // detect a path like:
-                        // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
-                        // by identifying `.cargo/registry/src` section, and then extract the package name
-                        // (regex-automata) and version (0.4.7) from the path if present.
-                        let mut itr = file.components();
-                        while let Some(comp) = itr.next() {
-                            if let std::path::Component::Normal(path) = comp
-                                && path == ".cargo"
-                                && let Some(std::path::Component::Normal(path)) = itr.next()
-                                && path == "registry"
-                                && let Some(std::path::Component::Normal(path)) = itr.next()
-                                && path == "src"
-                                && let Some(std::path::Component::Normal(_registry_path)) =
-                                    itr.next()
-                                && let Some(std::path::Component::Normal(package_path)) = itr.next()
-                                && let Some((package_name, version)) =
-                                    parse_cargo_package(package_path)
-                            {
-                                trace!("Found package reference to {} / {}", package_name, version);
-                                coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-                                    test_identifier: test_case.test_identifier.clone(),
-                                    coverage_identifier: RustCoverageIdentifier::ExternalDependency(
-                                        RustExternalDependency {
-                                            package_name,
-                                            version,
-                                        },
-                                    ),
-                                })
-                            }
-                        }
-                        coverage_data.add_file_to_test(FileCoverage {
-                            file_name: file,
-                            test_identifier: test_case.test_identifier.clone(),
-                        });
-                    }
-                    coverage_data.add_function_to_test(FunctionCoverage {
-                        function_name: metadata.function_name,
-                        test_identifier: test_case.test_identifier.clone(),
-                    });
-                }
-            }
+            RustTestPlatform::parse_profiling_data(
+                test_case,
+                &profile_file,
+                &coverage_library,
+                &mut coverage_data,
+            )?;
         }
 
         Ok(coverage_data)
