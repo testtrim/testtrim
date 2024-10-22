@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::{env, fs, io};
@@ -325,40 +325,44 @@ impl RustTestPlatform {
             ProfilingData::new_from_profraw_reader(reader).context("new_from_profraw_reader")?;
 
         for point in profiling_data.get_hit_instrumentation_points() {
-            // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
-            // the coverage library can't fetch data about it... for the moment we'll just ignore it until we come
-            // up with a test that hits this case and breaks
             let mut external_dependency = false;
 
+            // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but the
+            // coverage library can't fetch data about it... for the moment we'll just ignore it until we come up with a
+            // test that hits this case and breaks
             if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
                 for file in &metadata.file_paths {
                     // detect a path like:
                     // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
-                    // by identifying `.cargo/registry/src` section, and then extract the package name
-                    // (regex-automata) and version (0.4.7) from the path if present.
+                    // by identifying `.cargo/registry/src` section, and then extract the package name (regex-automata)
+                    // and version (0.4.7) from the path if present.
                     let mut itr = file.components();
                     while let Some(comp) = itr.next() {
-                        if let std::path::Component::Normal(path) = comp
+                        if let Component::Normal(path) = comp
                             && path == ".cargo"
-                            && let Some(std::path::Component::Normal(path)) = itr.next()
-                            && path == "registry"
-                            && let Some(std::path::Component::Normal(path)) = itr.next()
-                            && path == "src"
-                            && let Some(std::path::Component::Normal(_registry_path)) = itr.next()
-                            && let Some(std::path::Component::Normal(package_path)) = itr.next()
-                            && let Some((package_name, version)) = parse_cargo_package(package_path)
                         {
-                            trace!("Found package reference to {} / {}", package_name, version);
-                            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-                                test_identifier: test_case.test_identifier.clone(),
-                                coverage_identifier: RustCoverageIdentifier::ExternalDependency(
-                                    RustExternalDependency {
-                                        package_name,
-                                        version,
-                                    },
-                                ),
-                            });
-                            external_dependency = true;
+                            if let Some(Component::Normal(path)) = itr.next()
+                                && path == "registry"
+                                && let Some(Component::Normal(path)) = itr.next()
+                                && path == "src"
+                                && let Some(Component::Normal(_registry_path)) = itr.next()
+                                && let Some(Component::Normal(package_path)) = itr.next()
+                                && let Some((package_name, version)) =
+                                    parse_cargo_package(package_path)
+                            {
+                                trace!("Found package reference to {} / {}", package_name, version);
+                                coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                                    test_identifier: test_case.test_identifier.clone(),
+                                    coverage_identifier: RustCoverageIdentifier::ExternalDependency(
+                                        RustExternalDependency {
+                                            package_name,
+                                            version,
+                                        },
+                                    ),
+                                });
+                                external_dependency = true;
+                            }
+                            break;
                         }
                     }
                 }
