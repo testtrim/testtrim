@@ -326,11 +326,19 @@ impl RustTestPlatform {
 
         for point in profiling_data.get_hit_instrumentation_points() {
             let mut external_dependency = false;
+            let mut internal_dependency = false;
 
             // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but the
             // coverage library can't fetch data about it... for the moment we'll just ignore it until we come up with a
             // test that hits this case and breaks
             if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
+                for file in &metadata.file_paths {
+                    if file.is_relative() {
+                        internal_dependency = true;
+                        break;
+                    }
+                }
+
                 for file in &metadata.file_paths {
                     // detect a path like:
                     // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
@@ -366,7 +374,13 @@ impl RustTestPlatform {
                         }
                     }
                 }
-                if !external_dependency {
+
+                // If we touched a relative path (eg. src/lib.rs) then we're confidently an internal dependency and we
+                // should record the coverage data.  The same instrumentation point could also touch an external
+                // dependency, in which case we still want to record the coverage data.  But if it was external only and
+                // not an internal dependency, we can skip it for a performance and storage benefit.  If we don't know,
+                // err on the side of storing it?
+                if internal_dependency || !external_dependency {
                     for file in metadata.file_paths {
                         coverage_data.add_file_to_test(FileCoverage {
                             file_name: file,
