@@ -10,6 +10,7 @@ use llvm_profparser::{
 };
 use log::trace;
 use std::{
+    collections::HashMap,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -25,6 +26,7 @@ use std::{
 /// points from those profiling data sources.
 pub struct CoverageLibrary {
     object_files: Vec<CoverageMappingInfo>,
+    lookup_map: HashMap<(u64, u64), (usize, u64)>,
 }
 
 impl Default for CoverageLibrary {
@@ -38,6 +40,7 @@ impl CoverageLibrary {
     pub fn new() -> Self {
         CoverageLibrary {
             object_files: Vec::new(),
+            lookup_map: HashMap::new(),
         }
     }
 
@@ -46,7 +49,17 @@ impl CoverageLibrary {
     pub fn load_binary(&mut self, path: &Path) -> Result<()> {
         // FIXME: is the version 10 provided here... meaningful?  I guessed a random number and it worked.
         let object_file = read_object_file(path, 10)?;
+
+        let object_file_index = self.object_files.len();
+        for c in &object_file.cov_fun {
+            self.lookup_map.insert(
+                (c.header.name_hash, c.header.fn_hash),
+                (object_file_index, c.header.filenames_ref),
+            );
+        }
+
         self.object_files.push(object_file);
+
         Ok(())
     }
 
@@ -56,26 +69,22 @@ impl CoverageLibrary {
     ) -> Result<Option<InstrumentationPointMetadata>> {
         match (point.rec.name_hash, point.rec.hash) {
             (Some(name_hash), Some(fn_hash)) => {
-                // FIXME: This is a linear search; should build more efficient data structures in the future as object
-                // files are loaded.
-                for object_file in &self.object_files {
-                    for c in &object_file.cov_fun {
-                        if c.header.name_hash == name_hash && c.header.fn_hash == fn_hash {
-                            // Find the file that matches the function
-                            match object_file.cov_map.get(&c.header.filenames_ref) {
-                                Some(file) => {
-                                    // FIXME: I don't know if the multiple file paths here are right... need to create
-                                    // some synthetic test cases and verify that the references make sense to me, and
-                                    // maybe verify some of the test-project cases to understand them.
-                                    return Ok(Some(InstrumentationPointMetadata {
-                                        file_paths: file.clone(),
-                                        function_name: point.rec.name.clone().unwrap(),
-                                    }));
-                                }
-                                None => {
-                                    trace!("\t\tNo file found for function");
-                                }
-                            }
+                if let Some((object_file_index, filenames_ref)) =
+                    self.lookup_map.get(&(name_hash, fn_hash))
+                {
+                    let object_file = &self.object_files[*object_file_index];
+                    match object_file.cov_map.get(filenames_ref) {
+                        Some(file) => {
+                            // FIXME: I don't know if the multiple file paths here are right... need to create
+                            // some synthetic test cases and verify that the references make sense to me, and
+                            // maybe verify some of the test-project cases to understand them.
+                            return Ok(Some(InstrumentationPointMetadata {
+                                file_paths: file.clone(),
+                                function_name: point.rec.name.clone().unwrap(),
+                            }));
+                        }
+                        None => {
+                            trace!("\t\tNo file found for function");
                         }
                     }
                 }
