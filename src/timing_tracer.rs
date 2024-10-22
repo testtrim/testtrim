@@ -67,10 +67,11 @@ pub struct RunTestTiming {
     /// Time spent figuring out more tests via platform-specific means (eg. external dependencies).
     #[serde(serialize_with = "duration_to_seconds")]
     pub addt_platform_specific_test_determination: Duration,
-    /// Time spent running tests.
+    /// Time spent running tests; note that this is cumulative time across concurrent test runners, not wall-clock time.
     #[serde(serialize_with = "duration_to_seconds")]
     pub run_tests: Duration,
-    /// Time spent reading newly output coverage data after a test run.
+    /// Time spent reading newly output coverage data after a test run; note that this is cumulative time across
+    /// concurrent test runners, not wall-clock time.
     #[serde(serialize_with = "duration_to_seconds")]
     pub read_new_coverage_data: Duration,
     /// Time spent writing new coverage data to the DB.
@@ -85,7 +86,11 @@ impl PerformanceStorage {
         }
     }
 
-    fn accumulate_time(&self) -> HashMap<String, Duration> {
+    /// For every span marked with perftrace, accumulate all the time in those spans by their perftrace value.
+    ///
+    /// If spans were executed in parallel, the cumulative time of each parallel task will be counted separately.  eg. 5
+    /// parallel 1 second tasks would show 5 seconds of cumulative time.
+    fn aggregate_cumulative_time(&self) -> HashMap<String, Duration> {
         let mut accumulated_time: HashMap<String, Duration> = HashMap::new();
         for thingy in &self.span_storage {
             if let Some(perftrace) = &thingy.perftrace
@@ -109,14 +114,14 @@ impl PerformanceStorage {
     }
 
     pub fn print(&self) {
-        let accumulated_time = self.accumulate_time();
+        let accumulated_time = self.aggregate_cumulative_time();
         for (trace, duration) in &accumulated_time {
             println!("{trace}: {} s", duration.as_secs_f64());
         }
     }
 
     pub fn interpret_run_test_timing(&self) -> RunTestTiming {
-        let accumulated_time = self.accumulate_time();
+        let accumulated_time = self.aggregate_cumulative_time();
         let m = |str: &str| *accumulated_time.get(str).unwrap_or(&Duration::ZERO);
         //   - perftrace="discover-tests" -- discover tests / build
         //   - perftrace="read-coverage-data" -- find ancestor commit and read coverage data

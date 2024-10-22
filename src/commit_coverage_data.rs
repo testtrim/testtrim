@@ -109,6 +109,24 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
             .or_default()
             .insert(coverage.coverage_identifier);
     }
+
+    pub fn merge_in(&mut self, mut other: CommitCoverageData<TI, CI>) {
+        for tc in other.all_existing_test_set.drain() {
+            self.all_existing_test_set.insert(tc);
+        }
+        for tc in other.executed_test_set.drain() {
+            self.executed_test_set.insert(tc);
+        }
+        for (k, v) in other.executed_test_to_files_map.drain() {
+            self.executed_test_to_files_map.insert(k, v);
+        }
+        for (k, v) in other.executed_test_to_functions_map.drain() {
+            self.executed_test_to_functions_map.insert(k, v);
+        }
+        for (k, v) in other.executed_test_to_coverage_identifier_map.drain() {
+            self.executed_test_to_coverage_identifier_map.insert(k, v);
+        }
+    }
 }
 
 #[cfg(test)]

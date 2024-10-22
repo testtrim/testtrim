@@ -28,8 +28,8 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(num_commits: &u16) {
-    match simulate_history::<_, _, _, _, _, _, RustTestPlatform>(&GitScm {}, num_commits) {
+pub fn cli(num_commits: &u16, jobs: &u16) {
+    match simulate_history::<_, _, _, _, _, _, RustTestPlatform>(&GitScm {}, num_commits, jobs) {
         Ok(out) => {
             // FIXME: output simulation data in CSV format
             let mut wtr = csv::Writer::from_writer(io::stdout());
@@ -68,8 +68,10 @@ pub struct SimulateCommitOutput<Commit: ScmCommit> {
     pub file_changed_count: Option<usize>,
     pub external_dependencies_changed_count: Option<usize>,
 
+    /// Total wall-clock time taken to execute the commit's simulation.
     #[serde(serialize_with = "duration_to_seconds")]
     pub total_time: Duration,
+
     // FIXME: cannot serialize RunTestTiming container inside struct when writing headers from structs
     // As a hack around this, just copying the values into this struct.
     // pub profiling: RunTestTiming,
@@ -81,8 +83,10 @@ pub struct SimulateCommitOutput<Commit: ScmCommit> {
     pub test_determination: Duration,
     #[serde(serialize_with = "duration_to_seconds")]
     pub addt_platform_specific_test_determination: Duration,
+    /// Total time spent running tests; note that this is cumulative time across concurrent test runners, not wall-clock time.
     #[serde(serialize_with = "duration_to_seconds")]
     pub run_tests: Duration,
+    /// Total time spent reading test's coverage output; note that this is cumulative time across concurrent test runners, not wall-clock time.
     #[serde(serialize_with = "duration_to_seconds")]
     pub read_new_coverage_data: Duration,
     #[serde(serialize_with = "duration_to_seconds")]
@@ -98,6 +102,7 @@ pub struct SimulateHistoryOutput<Commit: ScmCommit> {
 fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     num_commits: &u16,
+    jobs: &u16,
 ) -> Result<SimulateHistoryOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -134,7 +139,7 @@ where
     for commit in commits {
         // FIXME: error handling here -- it's OK to have an error, we just need to report it
         info!("testing commit: {:?}", scm.get_commit_identifier(&commit));
-        commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit)?);
+        commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs)?);
     }
 
     Ok(SimulateHistoryOutput { commits_simulated })
@@ -166,6 +171,7 @@ where
 fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     commit: Commit,
+    jobs: &u16,
 ) -> Result<SimulateCommitOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -200,6 +206,7 @@ where
             &GetTestIdentifierMode::Relevant,
             scm,
             &SourceMode::CleanCommit,
+            jobs,
         )
     });
 

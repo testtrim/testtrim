@@ -42,6 +42,10 @@ pub enum Commands {
         /// Strategy for treating the working directory and coverage map storage
         #[arg(value_enum, long, default_value_t = SourceMode::Automatic)]
         source_mode: SourceMode,
+
+        /// Number of parallel jobs for test execution; defaults to # of CPUs.
+        #[arg(short, long, default_value_t = 0)]
+        jobs: u16,
     },
 
     /// Run through a series of historical commits and simulate using testtrim
@@ -49,6 +53,10 @@ pub enum Commands {
         /// Number of historical commits to simulate
         #[arg(short, long, default_value_t = 100)]
         num_commits: u16,
+
+        /// Number of parallel jobs for test execution; defaults to # of CPUs.
+        #[arg(short, long, default_value_t = 0)]
+        jobs: u16,
     },
 }
 
@@ -104,7 +112,8 @@ pub fn run_cli() {
         Commands::RunTests {
             test_selection_mode,
             source_mode,
-        } => run_tests::cli(test_selection_mode, source_mode),
-        Commands::SimulateHistory { num_commits } => simulate_history::cli(num_commits),
+            jobs,
+        } => run_tests::cli(test_selection_mode, source_mode, jobs),
+        Commands::SimulateHistory { num_commits, jobs } => simulate_history::cli(num_commits, jobs),
     }
 }

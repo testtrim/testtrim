@@ -49,7 +49,7 @@ where
 {
     fn discover_tests() -> Result<TD>;
 
-    fn run_tests<'a, I>(test_cases: I) -> Result<CommitCoverageData<TI, CI>>
+    fn run_tests<'a, I>(test_cases: I, jobs: u16) -> Result<CommitCoverageData<TI, CI>>
     where
         I: IntoIterator<Item = &'a CTI>,
         CTI: 'a;

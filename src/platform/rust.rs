@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use cargo_lock::Lockfile;
+use dashmap::DashSet;
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use regex::Regex;
@@ -13,10 +14,15 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Component, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::mpsc::channel;
+use std::sync::{Arc, RwLock};
 use std::{env, fs, io};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
+use threadpool::ThreadPool;
+use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
 use crate::commit_coverage_data::{
@@ -398,6 +404,96 @@ impl RustTestPlatform {
 
         Ok(())
     }
+
+    fn run_test(
+        test_case: &RustTestCase,
+        tmp_path: &Path,
+        binaries: &DashSet<PathBuf>,
+        coverage_library: Arc<RwLock<CoverageLibrary>>,
+    ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>> {
+        let mut coverage_data = CommitCoverageData::new();
+
+        trace!("preparing for test case {:?}", test_case);
+
+        coverage_data.add_executed_test(test_case.test_identifier.clone());
+
+        if binaries.insert(test_case.test_binary.executable_path.clone()) {
+            let mut lock = coverage_library.write().unwrap(); // FIXME: unwrap?
+            trace!(
+                "binary {:?}; loading instrumentation data...",
+                test_case.test_binary
+            );
+            (*lock).load_binary(&test_case.test_binary.executable_path)?;
+        }
+
+        let coverage_dir = tmp_path.join(
+            Path::new("coverage-output").join(
+                test_case
+                    .test_binary
+                    .executable_path
+                    .file_name()
+                    .expect("file_name must be present"),
+            ),
+        );
+        // Create coverage_dir but ignore if its error is 17 (file exists)
+        fs::create_dir_all(&coverage_dir)
+            .or_else(|e| {
+                if e.kind() != io::ErrorKind::AlreadyExists {
+                    Err(e)
+                } else {
+                    Ok(())
+                }
+            })
+            .context("Failed to create coverage directory")?;
+
+        let profile_file = coverage_dir
+            .join(&test_case.test_identifier.test_name)
+            .with_extension("profraw");
+
+        // Match `cargo test` behavior by moving CWD into the root of the module
+        let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
+        debug!(
+            "Execute test case {:?} into {:?} from working-dir {:?}...",
+            test_case, profile_file, test_wd
+        );
+        let output =
+            info_span!("execute-test", perftrace = "run-test", parallel = true).in_scope(|| {
+                Command::new(&test_case.test_binary.executable_path)
+                    .arg("--exact")
+                    .arg(&test_case.test_identifier.test_name)
+                    .env("LLVM_PROFILE_FILE", &profile_file)
+                    .env("RUSTFLAGS", "-C instrument-coverage")
+                    .current_dir(test_wd)
+                    .output()
+                    .expect("Failed to execute test")
+            });
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!(
+                    "{:?} --exact {:?}",
+                    test_case.test_binary, test_case.test_identifier.test_name
+                )
+                .to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+        // FIXME: do something with test failure?
+
+        trace!("Successfully ran test {:?}!", test_case.test_identifier);
+
+        let coverage_library_lock = coverage_library.read().unwrap();
+        RustTestPlatform::parse_profiling_data(
+            test_case,
+            &profile_file,
+            &coverage_library_lock,
+            &mut coverage_data,
+        )?;
+
+        Ok(coverage_data)
+    }
 }
 
 impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery, RustTestCase>
@@ -454,94 +550,61 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
 
     fn run_tests<'a, I>(
         test_cases: I,
-    ) -> Result<
-        crate::commit_coverage_data::CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
-    >
+        jobs: u16,
+    ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>>
     where
         I: IntoIterator<Item = &'a RustTestCase>,
         RustTestCase: 'a,
     {
         let tmp_dir = TempDir::new("testtrim")?;
-        let mut coverage_library = CoverageLibrary::new();
+
+        let coverage_library = Arc::new(RwLock::new(CoverageLibrary::new()));
         let mut coverage_data = CommitCoverageData::new();
+        let binaries = Arc::new(DashSet::new());
 
-        let mut binaries = HashSet::new();
+        let pool = Rc::new(ThreadPool::new(if jobs == 0 {
+            num_cpus::get()
+        } else {
+            jobs.into()
+        }));
+        let (tx, rx) = channel();
+
+        let mut outstanding_tests = 0;
         for test_case in test_cases {
-            trace!("preparing for test case {:?}", test_case);
+            let tc = test_case.clone();
+            let tmp_path = PathBuf::from(tmp_dir.path());
+            let b = binaries.clone();
+            let cl = coverage_library.clone();
+            let tx = tx.clone();
+            let pool = pool.clone();
 
-            coverage_data.add_executed_test(test_case.test_identifier.clone());
-
-            if binaries.insert(&test_case.test_binary.executable_path) {
-                trace!(
-                    "binary {:?}; loading instrumentation data...",
-                    test_case.test_binary
-                );
-                coverage_library.load_binary(&test_case.test_binary.executable_path)?;
-            }
-
-            let coverage_dir = tmp_dir.path().join(
-                Path::new("coverage-output").join(
-                    test_case
-                        .test_binary
-                        .executable_path
-                        .file_name()
-                        .expect("file_name must be present"),
-                ),
-            );
-            // Create coverage_dir but ignore if its error is 17 (file exists)
-            fs::create_dir_all(&coverage_dir)
-                .or_else(|e| {
-                    if e.kind() != io::ErrorKind::AlreadyExists {
-                        Err(e)
-                    } else {
-                        Ok(())
-                    }
-                })
-                .context("Failed to create coverage directory")?;
-
-            let profile_file = coverage_dir
-                .join(&test_case.test_identifier.test_name)
-                .with_extension("profraw");
-
-            // Match `cargo test` behavior by moving CWD into the root of the module
-            let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
-            debug!(
-                "Execute test case {:?} into {:?} from working-dir {:?}...",
-                test_case, profile_file, test_wd
-            );
-            let output = info_span!("execute-test", perftrace = "run-test").in_scope(|| {
-                Command::new(&test_case.test_binary.executable_path)
-                    .arg("--exact")
-                    .arg(&test_case.test_identifier.test_name)
-                    .env("LLVM_PROFILE_FILE", &profile_file)
-                    .env("RUSTFLAGS", "-C instrument-coverage")
-                    .current_dir(test_wd)
-                    .output()
-                    .expect("Failed to execute test")
+            // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
+            // performance data from them.  Note that, as we're running these tests in parallel, the performance data
+            // starts to deviate from wall-clock time at this point.
+            get_default(move |dispatcher| {
+                let tc = tc.clone();
+                let tmp_path = tmp_path.clone();
+                let b = b.clone();
+                let cl = cl.clone();
+                let tx = tx.clone();
+                let dispatcher = dispatcher.clone();
+                pool.execute(move || {
+                    dispatcher::with_default(&dispatcher, || {
+                        tx.send(RustTestPlatform::run_test(&tc, &tmp_path, &b, cl))
+                            .unwrap();
+                    });
+                });
             });
 
-            if !output.status.success() {
-                return Err(SubcommandErrors::SubcommandFailed {
-                    command: format!(
-                        "{:?} --exact {:?}",
-                        test_case.test_binary, test_case.test_identifier.test_name
-                    )
-                    .to_string(),
-                    status: output.status,
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                }
-                .into());
-            }
-            // FIXME: do something with test failure?
+            outstanding_tests += 1;
+        }
 
-            trace!("Successfully ran test {:?}!", test_case.test_identifier);
+        pool.join();
 
-            RustTestPlatform::parse_profiling_data(
-                test_case,
-                &profile_file,
-                &coverage_library,
-                &mut coverage_data,
-            )?;
+        while outstanding_tests > 0 {
+            let res = rx.recv()??;
+            coverage_data.merge_in(res);
+            outstanding_tests -= 1;
         }
 
         Ok(coverage_data)

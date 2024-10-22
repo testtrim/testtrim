@@ -26,7 +26,7 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode) {
+pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode, jobs: &u16) {
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
@@ -35,6 +35,7 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode
             test_selection_mode,
             &GitScm {},
             source_mode,
+            jobs,
         ) {
             Ok(out) => {
                 println!("successfully executed tests");
@@ -76,6 +77,7 @@ pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     mode: &GetTestIdentifierMode,
     scm: &MyScm,
     source_mode: &SourceMode,
+    jobs: &u16,
 ) -> Result<RunTestsOutput<Commit, TI, CTI>>
 where
     Commit: ScmCommit,
@@ -120,7 +122,7 @@ where
     let test_cases =
         get_target_test_cases::<Commit, MyScm, _, _, _, _, TP>(mode, scm, ancestor_search_mode)?;
 
-    let mut coverage_data = TP::run_tests(&test_cases.target_test_cases)?;
+    let mut coverage_data = TP::run_tests(&test_cases.target_test_cases, *jobs)?;
     for tc in &test_cases.all_test_cases {
         coverage_data.add_existing_test(tc.test_identifier().clone());
     }
