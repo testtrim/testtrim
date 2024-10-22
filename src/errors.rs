@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -29,4 +31,15 @@ pub enum RunTestsErrors {
         "the CleanCommit mode cannot be used as the working directory is dirty; either clean the directory, use the WorkingTree mode, or override with OverrideCleanCommit"
     )]
     CleanCommitWorkingDirectoryDirty,
+}
+
+#[derive(Error, Debug)]
+pub enum RustLlvmError {
+    #[error(
+        "attempted to read data about a binary file that was not in the coverage library: {0:?}"
+    )]
+    LibraryMissingBinary(PathBuf),
+
+    #[error("coverage point found in profiling data was not found in binary's coverage map")]
+    CoverageMismatch,
 }

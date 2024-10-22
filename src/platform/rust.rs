@@ -322,7 +322,8 @@ impl RustTestPlatform {
     ) -> Result<()> {
         let reader = fs::File::open(profile_file).context("Failed to open profile file")?;
         let profiling_data =
-            ProfilingData::new_from_profraw_reader(reader).context("new_from_profraw_reader")?;
+            ProfilingData::new_from_profraw_reader(reader, &test_case.test_binary.executable_path)
+                .context("new_from_profraw_reader")?;
 
         for point in profiling_data.get_hit_instrumentation_points() {
             let mut external_dependency = false;
