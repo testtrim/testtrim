@@ -3,10 +3,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
-use std::{collections::HashSet, fmt::Debug, hash::Hash, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Display},
+    hash::Hash,
+    path::PathBuf,
+};
 
 use crate::{
     commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
+    errors::RunTestsErrors,
     full_coverage_data::FullCoverageData,
     scm::{Scm, ScmCommit},
 };
@@ -18,6 +24,10 @@ pub mod rust;
 /// It must contain data such that, if it was serialized between machines, it could be picked up and contain relevant
 /// data to find and execute the test on another host.
 pub trait TestIdentifier: Eq + Hash + Clone + Debug {}
+
+/// An alternate trait of TestIdentifier which can be used with dynamic dispatch.  Test identifiers must implement both
+/// traits.
+pub trait TestIdentifierCore: Debug + Send + Sync + Display {}
 
 /// Represents a machine-dependent reference to a test.
 ///
@@ -49,7 +59,10 @@ where
 {
     fn discover_tests() -> Result<TD>;
 
-    fn run_tests<'a, I>(test_cases: I, jobs: u16) -> Result<CommitCoverageData<TI, CI>>
+    fn run_tests<'a, I>(
+        test_cases: I,
+        jobs: u16,
+    ) -> Result<CommitCoverageData<TI, CI>, RunTestsErrors>
     where
         I: IntoIterator<Item = &'a CTI>,
         CTI: 'a;

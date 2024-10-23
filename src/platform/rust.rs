@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, RwLock};
-use std::{env, fs, io};
+use std::{env, fmt, fs, io};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
 use threadpool::ThreadPool;
@@ -28,14 +28,16 @@ use tracing::{info_span, instrument};
 use crate::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FunctionCoverage, HeuristicCoverage,
 };
-use crate::errors::SubcommandErrors;
+use crate::errors::{
+    FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
+};
 use crate::full_coverage_data::FullCoverageData;
 use crate::rust_llvm::{CoverageLibrary, ProfilingData};
 use crate::scm::{Scm, ScmCommit};
 
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
-    TestPlatform,
+    TestIdentifierCore, TestPlatform,
 };
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
@@ -48,6 +50,13 @@ pub struct RustTestIdentifier {
 }
 
 impl TestIdentifier for RustTestIdentifier {}
+impl TestIdentifierCore for RustTestIdentifier {}
+
+impl fmt::Display for RustTestIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?} / {}", self.test_src_path, self.test_name)
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RustCoverageIdentifier {
@@ -410,7 +419,7 @@ impl RustTestPlatform {
         tmp_path: &Path,
         binaries: &DashSet<PathBuf>,
         coverage_library: Arc<RwLock<CoverageLibrary>>,
-    ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>> {
+    ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestError> {
         let mut coverage_data = CommitCoverageData::new();
 
         trace!("preparing for test case {:?}", test_case);
@@ -469,18 +478,15 @@ impl RustTestPlatform {
             });
 
         if !output.status.success() {
-            return Err(SubcommandErrors::SubcommandFailed {
-                command: format!(
-                    "{:?} --exact {:?}",
-                    test_case.test_binary, test_case.test_identifier.test_name
-                )
-                .to_string(),
-                status: output.status,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }
-            .into());
+            return Err(RunTestError::TestExecutionFailure(FailedTestResult {
+                test_identifier: Box::new(test_case.test_identifier.clone()),
+                failure: TestFailure::NonZeroExitCode {
+                    exit_code: output.status.code(),
+                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                },
+            }));
         }
-        // FIXME: do something with test failure?
 
         trace!("Successfully ran test {:?}!", test_case.test_identifier);
 
@@ -551,7 +557,7 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
     fn run_tests<'a, I>(
         test_cases: I,
         jobs: u16,
-    ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>>
+    ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestsErrors>
     where
         I: IntoIterator<Item = &'a RustTestCase>,
         RustTestCase: 'a,
@@ -601,13 +607,23 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
 
         pool.join();
 
+        let mut failed_test_results = vec![];
         while outstanding_tests > 0 {
-            let res = rx.recv()??;
-            coverage_data.merge_in(res);
+            match rx.recv()? {
+                Ok(res) => coverage_data.merge_in(res),
+                Err(RunTestError::TestExecutionFailure(failed_test_result)) => {
+                    failed_test_results.push(failed_test_result);
+                }
+                Err(e) => return Err(e.into()),
+            }
             outstanding_tests -= 1;
         }
 
-        Ok(coverage_data)
+        if !failed_test_results.is_empty() {
+            Err(RunTestsErrors::TestExecutionFailures(failed_test_results))
+        } else {
+            Ok(coverage_data)
+        }
     }
 }
 
