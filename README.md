@@ -26,30 +26,42 @@ This is the core concept behind [testtrim](https://codeberg.org/testtrim/testtri
 
 It's early days for testtrim.
 
-To evaluate how well it worked, I took an Open Source project ([alacritty](https://github.com/alacritty/alacritty)), and I ran the last 100 commits through testtrim.
+## alacritty evaluation
 
-| # Commits:                          |       100 |
-|-------------------------------------|----------:|
-| # Commits Successful Build & Test:  |        66 |
-| # Commits Appropriate for Analysis: |        53 |
-| Average Tests to Run per Commit:    |  **8.4%** |
-| Median Tests to Run per Commit:     |  **0.0%** |
-| P90 Tests to Run per Commit:        | **38.9%** |
+To evaluate how well it worked, I took an Open Source project ([alacritty](https://github.com/alacritty/alacritty)), and I ran the last 100 commits through testtrim.  testtrim has a command `simulate-history` that does this automatically and generates a CSV file with the output data, which can be easily analyzed:
 
-For each commit, testtrim identified that an average of only 8.4% of tests needed to be executed to fully test the code change that was being made.
+| # Commits:                           |       100 |
+|--------------------------------------|----------:|
+| # Commits Successful Build & Test:   |        83 |
+| # Commits Analyzed w/ Ancestor Data: |        82 |
+| Average Tests to Run per Commit:     | **14.5%** |
+| Median Tests to Run per Commit:      |  **1.6%** |
+| P90 Tests to Run per Commit:         | **54.6%** |
+
+For each commit, testtrim identified that an average of only 14.5% of tests needed to be executed to fully test the code change that was being made.
 
 I could list a dozen reasons why this analysis isn't generalizable... and so I will:
 
-- This analysis didn't include changes to `Cargo.lock` files (eg. references to external dependencies).  I've added that capability to testtrim, but I haven't redone this analysis yet.
 - alacritty is a pretty mature project that isn't undergoing rapid development.
-- This specific measurement didn't take into account new tests being added to the repo during this period.
-- alacritty has some tests that work through reading static files; those commits were removed from the analysis, possibly lowering the numbers.
+- alacritty has some tests that work through reading static files; changes to those files wouldn't be considered as requiring reruns of the related tests because they don't appear in code coverage and testtrim doesn't do anything else to compensate for that.
 - There's no evidence that a test on a single project will generalize to lots of other projects.
 - The only guarantee of correctness in this analysis is my own eyeballing of the changes and proposed tests.
 
-But on the other hand, this was just based upon the simple heuristic of "this test touched a file, and that file changed, therefore rerun this test."  I think that could become a lot more sophisticated with more work in the future as well.
+## ripgrep evaluation
 
-I think it's **promising**, but not **promised**.
+The same evaluation was performed on [ripgrep](https://github.com/BurntSushi/ripgrep), which has a slightly larger test base (>1000 unit tests) than alacritty, using the `simulate-history` command on the past 100 commits:
+
+| # Commits:                           |       100 |
+|--------------------------------------|----------:|
+| # Commits Successful Build & Test:   |       100 |
+| # Commits Analyzed w/ Ancestor Data: |        99 |
+| Average Tests to Run per Commit:     |  **6.0%** |
+| Median Tests to Run per Commit:      |  **0.0%** |
+| P90 Tests to Run per Commit:         | **12.7%** |
+
+These results are also great, but suffer from some of the same reasons listed above for why it may not be generalizable to every project
+
+Between the results of both projects, I think it's **promising**, but not **promised**.
 
 # How to use?
 
