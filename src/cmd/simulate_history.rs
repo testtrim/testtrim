@@ -17,6 +17,7 @@ use crate::{
     cmd::run_tests::run_tests,
     commit_coverage_data::CoverageIdentifier,
     db::{CoverageDatabase, DieselCoverageDatabase},
+    errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
     },
@@ -31,7 +32,6 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 pub fn cli(num_commits: &u16, jobs: &u16) {
     match simulate_history::<_, _, _, _, _, _, RustTestPlatform>(&GitScm {}, num_commits, jobs) {
         Ok(out) => {
-            // FIXME: output simulation data in CSV format
             let mut wtr = csv::Writer::from_writer(io::stdout());
             for rec in out.commits_simulated {
                 wtr.serialize(rec)
@@ -52,12 +52,24 @@ where
 }
 
 #[derive(Serialize)]
+pub enum SimulationResult {
+    /// Success, including all tests.
+    Success,
+    /// testtrim's simulation attempt occurred, but tests failed.
+    TestExecutionFailure,
+    /// simulation attempt failed; could be a compile failure, could be an internal error; more clarity might be useful
+    /// in the future.
+    Error,
+}
+
+#[derive(Serialize)]
 pub struct SimulateCommitOutput<Commit: ScmCommit> {
     #[serde(skip_serializing)]
     pub commit: Commit,
     pub commit_identifier: String,
 
-    pub success: bool, // FIXME: enum, success/which-error?
+    pub success: SimulationResult,
+    pub test_failure_count: Option<usize>, // if success == TestExecutionFailure
 
     #[serde(skip_serializing)]
     pub ancestor_commit: Option<Commit>,
@@ -137,7 +149,6 @@ where
     //     data, analyzing coverage data, and writing coverage data
     let mut commits_simulated = Vec::<SimulateCommitOutput<Commit>>::with_capacity(commits.len());
     for commit in commits {
-        // FIXME: error handling here -- it's OK to have an error, we just need to report it
         info!("testing commit: {:?}", scm.get_commit_identifier(&commit));
         commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs)?);
     }
@@ -223,7 +234,8 @@ where
             Ok(SimulateCommitOutput {
                 commit,
                 commit_identifier,
-                success: true,
+                success: SimulationResult::Success,
+                test_failure_count: None,
                 ancestor_commit: run_result.ancestor_commit,
                 ancestor_commit_identifier,
                 total_test_count: Some(run_result.all_test_cases.len()),
@@ -241,12 +253,42 @@ where
                 write_new_coverage_data: run_test_timing.write_new_coverage_data,
             })
         }
+        Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
+            failures,
+        ))) => {
+            warn!(
+                "commit {commit_identifier} failed to execute {} tests",
+                failures.len()
+            );
+            Ok(SimulateCommitOutput {
+                commit,
+                commit_identifier,
+                success: SimulationResult::TestExecutionFailure,
+                test_failure_count: Some(failures.len()),
+                ancestor_commit: None,
+                ancestor_commit_identifier: None,
+                total_test_count: None,
+                targeted_test_count: None,
+                file_changed_count: None,
+                external_dependencies_changed_count: None,
+                total_time,
+                discover_tests: run_test_timing.discover_tests,
+                read_historical_coverage_data: run_test_timing.read_historical_coverage_data,
+                test_determination: run_test_timing.test_determination,
+                addt_platform_specific_test_determination: run_test_timing
+                    .addt_platform_specific_test_determination,
+                run_tests: run_test_timing.run_tests,
+                read_new_coverage_data: run_test_timing.read_new_coverage_data,
+                write_new_coverage_data: run_test_timing.write_new_coverage_data,
+            })
+        }
         Err(e) => {
             warn!("commit {commit_identifier} failed to run tests with error: {e}");
             Ok(SimulateCommitOutput {
                 commit,
                 commit_identifier,
-                success: false,
+                success: SimulationResult::Error,
+                test_failure_count: None,
                 ancestor_commit: None,
                 ancestor_commit_identifier: None,
                 total_test_count: None,

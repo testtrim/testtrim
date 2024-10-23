@@ -46,41 +46,40 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode
                     100 * out.target_test_cases.len() / out.all_test_cases.len(),
                 );
             }
-            Err(err) => {
-                if let Some(RunTestsErrors::TestExecutionFailures(ref test_failures)) =
-                    err.downcast_ref::<RunTestsErrors>()
-                {
-                    println!("{} test(s) failed:", test_failures.len());
-                    for failure in test_failures {
-                        println!();
-                        println!("Test: {}", failure.test_identifier);
-                        match failure.failure {
-                            TestFailure::NonZeroExitCode {
-                                ref exit_code,
-                                ref stdout,
-                                ref stderr,
-                            } => {
-                                if let Some(ref exit_code) = exit_code {
-                                    println!("\tprocess exited with code {}", exit_code);
+            Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
+                ref test_failures,
+            ))) => {
+                println!("{} test(s) failed:", test_failures.len());
+                for failure in test_failures {
+                    println!();
+                    println!("Test: {}", failure.test_identifier);
+                    match failure.failure {
+                        TestFailure::NonZeroExitCode {
+                            ref exit_code,
+                            ref stdout,
+                            ref stderr,
+                        } => {
+                            if let Some(ref exit_code) = exit_code {
+                                println!("\tprocess exited with code {}", exit_code);
+                            }
+                            if !stdout.is_empty() {
+                                println!("\tstdout:");
+                                for line in stdout.lines() {
+                                    println!("\t{}", line);
                                 }
-                                if !stdout.is_empty() {
-                                    println!("\tstdout:");
-                                    for line in stdout.lines() {
-                                        println!("\t{}", line);
-                                    }
-                                }
-                                if !stderr.is_empty() {
-                                    println!("\tstderr:");
-                                    for line in stderr.lines() {
-                                        println!("\t{}", line);
-                                    }
+                            }
+                            if !stderr.is_empty() {
+                                println!("\tstderr:");
+                                for line in stderr.lines() {
+                                    println!("\t{}", line);
                                 }
                             }
                         }
                     }
-                } else {
-                    error!("error occurred in run_tests: {:?}", err)
                 }
+            }
+            Err(err) => {
+                error!("error occurred in run_tests: {:?}", err)
             }
         }
     });
@@ -100,9 +99,6 @@ pub struct RunTestsOutput<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTe
     pub files_changed: Option<HashSet<PathBuf>>,
     pub external_dependencies_changed: Option<usize>,
 
-    // FIXME: add profiling return data:
-    //   - time taken to discover tests / build, time taken to run tests, time "added by testtrim" for reading coverage
-    //     data, analyzing coverage data, and writing coverage data
     test_identifier_type: PhantomData<TI>,
 }
 
@@ -111,7 +107,7 @@ pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     source_mode: &SourceMode,
     jobs: &u16,
-) -> Result<RunTestsOutput<Commit, TI, CTI>>
+) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
@@ -125,7 +121,7 @@ where
         SourceMode::Automatic => scm.is_working_dir_clean()?,
         SourceMode::CleanCommit => {
             if !scm.is_working_dir_clean()? {
-                return Err(RunTestsCommandErrors::CleanCommitWorkingDirectoryDirty.into());
+                return Err(RunTestsCommandErrors::CleanCommitWorkingDirectoryDirty);
             } else {
                 true
             }

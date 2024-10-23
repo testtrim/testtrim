@@ -79,6 +79,12 @@ pub enum RunTestsCommandErrors {
         "the CleanCommit mode cannot be used as the working directory is dirty; either clean the directory, use the WorkingTree mode, or override with OverrideCleanCommit"
     )]
     CleanCommitWorkingDirectoryDirty,
+
+    #[error(transparent)]
+    RunTestsErrors(#[from] RunTestsErrors),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 #[derive(Error, Debug)]

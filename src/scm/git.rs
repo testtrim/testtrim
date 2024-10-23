@@ -43,21 +43,6 @@ impl Scm<GitScmCommit> for GitScm {
             .args(["diff", "--name-only", &commit.sha])
             .output()?;
 
-        // This case shouldn't be needed anymore since we'll only diff when we've found an ancestor commit.
-        // if !output.status.success() {
-        //     let stderr = String::from_utf8_lossy(&output.stderr);
-        //     if stderr.contains("^': unknown revision or path not in the working tree") {
-        //         // Couldn't find the parent commit ({str}^) for the commit ({str}).  That's a valid case if it's the first
-        //         // commit in the repository.  In that case, replace the base commit with the well-known sha1 of the root git
-        //         // commit, giving us all the changes in the original commit.
-        //         // FIXME: this hard-codes the usage of a sha1 git repo
-        //         let repo_root = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-        //         output = Command::new("git")
-        //             .args(["diff", "--name-only", repo_root, commit])
-        //             .output()?;
-        //     }
-        // }
-
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
                 command: format!("git diff --name-only {}", &commit.sha).to_string(),

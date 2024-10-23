@@ -319,7 +319,6 @@ impl<
         use crate::schema::*;
 
         let conn = self.get_connection()?;
-        // FIXME: PRAGMA foreign_keys = ON;
 
         conn.run_pending_migrations(MIGRATIONS)
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
