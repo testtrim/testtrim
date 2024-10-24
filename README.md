@@ -4,15 +4,19 @@ SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
+# Introduction
+
 testtrim targets software automated tests for execution based upon previous code-coverage data and git changes.  It's in early development, but it's looking quite promising with evaluations showing that on-average 90% of tests can be safely skipped with this strategy.
 
-I've also published an introductory video (in two formats):
+I've also published an introductory video:
 
 [Short Introduction Video, 10 minutes](https://youtu.be/wNPeTxf3xFw)
 
 [Deep-dive Introduction Video, 37 minutes](https://youtu.be/YQKc58dTR1M)
 
 # testtrim's Equation
+
+## Core
 
 1. Just like you would use to report test coverage (eg. "75% of our code is tested!"), run tests with a coverage tool.  But rather than running the entire test suite and reporting generalized coverage, run each individual test to get the coverage for each test.
 
@@ -22,9 +26,21 @@ I've also published an introductory video (in two formats):
 
 This is the core concept behind [testtrim](https://codeberg.org/testtrim/testtrim).
 
+## Supplementary Data
+
+### Local Files
+
+Some tests might access data files while they're running, in order to have a file that contains the expected input or output from a test.  In order to accomodate this, testtrim runs all the tests with syscall tracing (only supported on Linux presently) in order to detect which local files are needed by which tests.  In the future if those local files change, then the tests that read then will be targeted for re-execution.
+
+Some tests might embed local files during their compile; in Rust, using the `include_str!`, `include_bytes!`, or `include!` compiler macros.  Those aren't supported yet, but will be soon (#26).
+
+### Network Access
+
+The long-term goal of testtrim is to work with tests that require network services via distributed tracing using OpenTelemetry.  Presently this capability is on the drawing board only.
+
 # How well does it work?
 
-It's early days for testtrim.
+It's early days for testtrim.  It looks **promising**, but not **promised**.
 
 ## alacritty evaluation
 
@@ -60,8 +76,6 @@ The same evaluation was performed on [ripgrep](https://github.com/BurntSushi/rip
 | P90 Tests to Run per Commit:         | **12.7%** |
 
 These results are also great, but suffer from some of the same reasons listed above for why it may not be generalizable to every project
-
-Between the results of both projects, I think it's **promising**, but not **promised**.
 
 # How to use?
 
