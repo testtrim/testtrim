@@ -95,7 +95,7 @@ fn git_checkout(commit: &str) -> Result<()> {
 
 #[test]
 fn rust_linearcommits_filecoverage() -> Result<()> {
-    // simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())?;
+    // simplelog::SimpleLogger::init(simplelog::LevelFilter::Info, simplelog::Config::default())?;
 
     let _cwd_mutex = CWD_MUTEX.lock();
 
@@ -271,6 +271,40 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
                 "sequences::tests::test_factorial",
             ],
             relevant_test_cases: vec!["basic_ops::tests::test_add_decimal"],
+        },
+        CommitTestData {
+            test_commit: "check-10",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+            ],
+            relevant_test_cases: vec![
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+            ],
+        },
+        CommitTestData {
+            test_commit: "check-11",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+            ],
+            relevant_test_cases: vec!["sequences::tests::test_fibonacci_sequence"],
         },
     ];
 

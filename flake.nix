@@ -47,6 +47,8 @@
             sqlite
 
             reuse
+
+            strace
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;

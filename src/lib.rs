@@ -13,4 +13,5 @@ pub mod platform;
 mod rust_llvm;
 mod schema;
 pub mod scm;
+mod sys_trace;
 mod timing_tracer;

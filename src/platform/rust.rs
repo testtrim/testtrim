@@ -34,6 +34,7 @@ use crate::errors::{
 use crate::full_coverage_data::FullCoverageData;
 use crate::rust_llvm::{CoverageLibrary, ProfilingData};
 use crate::scm::{Scm, ScmCommit};
+use crate::sys_trace::{sys_trace_command, trace::Trace};
 
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
@@ -414,6 +415,27 @@ impl RustTestPlatform {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
+    fn parse_trace_data(
+        test_case: &RustTestCase,
+        trace: &Trace,
+        coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
+    ) -> Result<()> {
+        for path in trace.get_open_paths() {
+            if path.is_relative() {
+                trace!("found test {test_case:?} accessed local file {path:?}");
+                // It might make sense to filter out files that aren't part of the repo... both here and in
+                // parse_profiling_data?
+                coverage_data.add_file_to_test(FileCoverage {
+                    file_name: path.clone(),
+                    test_identifier: test_case.test_identifier.clone(),
+                });
+            }
+            // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
+        }
+        Ok(())
+    }
+
     fn run_test(
         test_case: &RustTestCase,
         tmp_path: &Path,
@@ -458,6 +480,9 @@ impl RustTestPlatform {
         let profile_file = coverage_dir
             .join(&test_case.test_identifier.test_name)
             .with_extension("profraw");
+        let strace_file = coverage_dir
+            .join(&test_case.test_identifier.test_name)
+            .with_extension("strace");
 
         // Match `cargo test` behavior by moving CWD into the root of the module
         let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
@@ -465,17 +490,16 @@ impl RustTestPlatform {
             "Execute test case {:?} into {:?} from working-dir {:?}...",
             test_case, profile_file, test_wd
         );
-        let output =
-            info_span!("execute-test", perftrace = "run-test", parallel = true).in_scope(|| {
-                Command::new(&test_case.test_binary.executable_path)
-                    .arg("--exact")
-                    .arg(&test_case.test_identifier.test_name)
-                    .env("LLVM_PROFILE_FILE", &profile_file)
-                    .env("RUSTFLAGS", "-C instrument-coverage")
-                    .current_dir(test_wd)
-                    .output()
-                    .expect("Failed to execute test")
-            });
+        let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
+            .in_scope(|| {
+            let mut cmd = Command::new(&test_case.test_binary.executable_path);
+            cmd.arg("--exact")
+                .arg(&test_case.test_identifier.test_name)
+                .env("LLVM_PROFILE_FILE", &profile_file)
+                .env("RUSTFLAGS", "-C instrument-coverage")
+                .current_dir(test_wd);
+            sys_trace_command.trace_command(cmd, &strace_file)
+        })?;
 
         if !output.status.success() {
             return Err(RunTestError::TestExecutionFailure(FailedTestResult {
@@ -491,12 +515,13 @@ impl RustTestPlatform {
         trace!("Successfully ran test {:?}!", test_case.test_identifier);
 
         let coverage_library_lock = coverage_library.read().unwrap();
-        RustTestPlatform::parse_profiling_data(
+        Self::parse_profiling_data(
             test_case,
             &profile_file,
             &coverage_library_lock,
             &mut coverage_data,
         )?;
+        Self::parse_trace_data(test_case, &trace, &mut coverage_data)?;
 
         Ok(coverage_data)
     }
