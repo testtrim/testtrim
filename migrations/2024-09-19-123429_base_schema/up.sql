@@ -63,6 +63,15 @@ CREATE TABLE test_case_coverage_identifier_covered (
     PRIMARY KEY (test_case_execution_id, coverage_identifier)
 );
 
+-- This is likely to be much smaller than the test-case -> {file,function} maps, so it's much simpler -- a complete
+-- record of all known cross-file references at a specific commit.
+CREATE TABLE commit_file_reference (
+    id TEXT PRIMARY KEY NOT NULL, -- ideally should be UUID
+    scm_commit_id TEXT REFERENCES scm_commit (id) NOT NULL, -- ideally should be UUID
+    referencing_filepath TEXT NOT NULL,
+    target_filepath TEXT NOT NULL,
+    UNIQUE (scm_commit_id, referencing_filepath, target_filepath)
+);
 
 -- Denormalized data allowing for the quick and (hopefully) efficient lookup of test cases that need to be run...
 

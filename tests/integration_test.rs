@@ -306,6 +306,48 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             ],
             relevant_test_cases: vec!["sequences::tests::test_fibonacci_sequence"],
         },
+        CommitTestData {
+            test_commit: "check-12",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_factorial_include",
+            ],
+            relevant_test_cases: vec![
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_factorial_include",
+            ],
+        },
+        CommitTestData {
+            test_commit: "check-13",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_factorial_include",
+            ],
+            relevant_test_cases: vec![
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_factorial_include",
+            ],
+        },
     ];
 
     fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {

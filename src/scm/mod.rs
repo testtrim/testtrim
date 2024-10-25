@@ -14,6 +14,7 @@ pub trait ScmCommit {}
 // need to create mock implementations a simpler path to doing so...
 pub trait Scm<Commit: ScmCommit> {
     fn get_changed_files(&self, commit: &Commit) -> Result<HashSet<PathBuf>>;
+    fn get_all_repo_files(&self) -> Result<HashSet<PathBuf>>;
     fn is_working_dir_clean(&self) -> Result<bool>;
     fn get_head_commit(&self) -> Result<Commit>;
     fn get_commit_identifier(&self, commit: &Commit) -> String;

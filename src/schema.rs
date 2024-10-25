@@ -5,6 +5,15 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    commit_file_reference (id) {
+        id -> Text,
+        scm_commit_id -> Text,
+        referencing_filepath -> Text,
+        target_filepath -> Text,
+    }
+}
+
+diesel::table! {
     commit_test_case (scm_commit_id, test_case_id) {
         scm_commit_id -> Text,
         test_case_id -> Text,
@@ -84,6 +93,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(commit_file_reference -> scm_commit (scm_commit_id));
 diesel::joinable!(commit_test_case -> scm_commit (scm_commit_id));
 diesel::joinable!(commit_test_case -> test_case (test_case_id));
 diesel::joinable!(commit_test_case_executed -> scm_commit (scm_commit_id));
@@ -99,6 +109,7 @@ diesel::joinable!(test_case_file_covered -> test_case_execution (test_case_execu
 diesel::joinable!(test_case_function_covered -> test_case_execution (test_case_execution_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    commit_file_reference,
     commit_test_case,
     commit_test_case_executed,
     coverage_map,

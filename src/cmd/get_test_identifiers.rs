@@ -282,6 +282,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
         eval_target_changed_files,
         coverage_data,
         &mut retval,
+        &mut HashSet::with_capacity(eval_target_changed_files.len()),
     )?;
     trace!(
         "relevant test cases after searching for file changes: {:?}",
@@ -310,8 +311,14 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_changed_files: &HashSet<PathBuf>,
     coverage_data: &FullCoverageData<TI, CI>,
     retval: &mut HashSet<TI>,
+    recurse_ignore_files: &mut HashSet<PathBuf>,
 ) -> Result<()> {
     for changed_file in eval_target_changed_files {
+        // As this function recurses (by referenced files), avoid processing the same file twice.
+        if !recurse_ignore_files.insert(changed_file.clone()) {
+            continue;
+        }
+
         if let Some(tests) = coverage_data.file_to_test_map().get(changed_file) {
             for test in tests {
                 // Even if this test covered this file in the past, if the test doesn't exist in the current eval target
@@ -320,6 +327,22 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
                     retval.insert(test.clone());
                 }
             }
+        }
+
+        if let Some(referencing_files) = coverage_data
+            .file_referenced_by_files_map()
+            .get(changed_file)
+            && !referencing_files.is_empty()
+        {
+            // Treat all the "referencing files", which are files that had some reference to the changed file, as-if
+            // they were changed because this file was changed.
+            compute_changed_file_test_cases(
+                eval_target_test_cases,
+                referencing_files,
+                coverage_data,
+                retval,
+                recurse_ignore_files,
+            )?;
         }
     }
     Ok(())
@@ -473,6 +496,10 @@ mod tests {
         }
 
         fn clean_lightly(&self) -> anyhow::Result<()> {
+            unreachable!()
+        }
+
+        fn get_all_repo_files(&self) -> anyhow::Result<HashSet<PathBuf>> {
             unreachable!()
         }
     }

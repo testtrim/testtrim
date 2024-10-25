@@ -74,4 +74,9 @@ where
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<TI, CI>,
     ) -> Result<PlatformSpecificRelevantTestCaseData<TI>>;
+
+    fn analyze_changed_files(
+        changed_files: &HashSet<PathBuf>,
+        coverage_data: &mut CommitCoverageData<TI, CI>,
+    ) -> Result<()>;
 }

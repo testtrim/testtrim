@@ -4,7 +4,7 @@
 
 use crate::{
     commit_coverage_data::{
-        CommitCoverageData, CoverageIdentifier, FileCoverage, FunctionCoverage,
+        CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
     },
     full_coverage_data::FullCoverageData,
     platform::TestIdentifier,
@@ -245,7 +245,6 @@ impl<
                         coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
                             .inner_join(test_case_execution::dsl::test_case_execution),
                     )
-                    // .inner_join(denormalized_coverage_map::dsl::denormalized_coverage_map)
                     .filter(coverage_map::dsl::scm_commit_id.eq(&ancestor_scm_commit_id))
                     .select(TestCaseExecution::as_select())
                     .get_results(conn)
@@ -289,8 +288,7 @@ impl<
                     .eq(test_case_execution_id),
             ));
         }
-
-        for chunk in insertables.chunks(1000) {
+        for chunk in insertables.chunks(10000) {
             // HACK: avoid "too many SQL variables"
             diesel::insert_into(
                 coverage_map_test_case_executed::dsl::coverage_map_test_case_executed,
@@ -298,6 +296,64 @@ impl<
             .values(chunk)
             .execute(conn)
             .context("insert into coverage_map_test_case_executed")?;
+        }
+
+        #[derive(Queryable, Selectable, Debug)]
+        #[diesel(table_name = crate::schema::commit_file_reference)]
+        struct CommitFileReference {
+            referencing_filepath: String,
+            target_filepath: String,
+        }
+        let ancestor_file_references: Option<Vec<CommitFileReference>> =
+            match ancestor_scm_commit_id {
+                Some(ref ancestor_scm_commit_id) => {
+                    let scm_commit_id = commit_file_reference::dsl::commit_file_reference
+                        .filter(
+                            commit_file_reference::dsl::scm_commit_id.eq(&ancestor_scm_commit_id),
+                        )
+                        .select(CommitFileReference::as_select())
+                        .order(commit_file_reference::dsl::referencing_filepath)
+                        .get_results(conn)
+                        .context("loading commit_file_reference from ancestor_commit_sha")?;
+                    Some(scm_commit_id)
+                }
+                None => None,
+            };
+        let ancestor_file_references = ancestor_file_references.unwrap_or_default();
+        let mut file_references_map: HashMap<String, Vec<String>> = HashMap::new();
+        for anc in ancestor_file_references {
+            file_references_map
+                .entry(anc.referencing_filepath)
+                .or_default()
+                .push(anc.target_filepath);
+        }
+        // Overwrite file_references_map with any data that is in coverage_data; if a referencing file is in
+        // coverage_data then it is understood to be a complete set of files referenced by that file.
+        for (referencing_file, target_files) in coverage_data.file_references_files_map() {
+            // FIXME: lossy PathBuf -> String
+            let vec = target_files
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            file_references_map.insert(referencing_file.to_string_lossy().to_string(), vec);
+        }
+        let mut insertables = vec![];
+        for (referencing_file, target_files) in file_references_map {
+            for target_file in target_files {
+                insertables.push((
+                    commit_file_reference::dsl::id.eq(Uuid::new_v4().to_string()),
+                    commit_file_reference::dsl::scm_commit_id.eq(scm_commit_id.to_string()),
+                    commit_file_reference::dsl::referencing_filepath.eq(referencing_file.clone()),
+                    commit_file_reference::dsl::target_filepath.eq(target_file),
+                ));
+            }
+        }
+        for chunk in insertables.chunks(10000) {
+            // HACK: avoid "too many SQL variables"
+            diesel::insert_into(commit_file_reference::dsl::commit_file_reference)
+                .values(chunk)
+                .execute(conn)
+                .context("insert into commit_file_reference")?;
         }
 
         Ok(())
@@ -642,6 +698,26 @@ impl<
             );
         }
 
+        #[derive(Queryable, Selectable)]
+        #[diesel(table_name = crate::schema::commit_file_reference)]
+        struct CommitFileReference {
+            referencing_filepath: String,
+            target_filepath: String,
+        }
+        let all_referenced_files = commit_file_reference::dsl::commit_file_reference
+            .inner_join(scm_commit::dsl::scm_commit)
+            .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .select(CommitFileReference::as_select())
+            .get_results::<CommitFileReference>(conn)
+            .context("loading from commit_file_reference for commit_sha")?;
+        for fr in all_referenced_files {
+            coverage_data.add_file_reference(FileReference {
+                referencing_file: fr.referencing_filepath.into(),
+                target_file: fr.target_filepath.into(),
+            })
+        }
+
         Ok(Some(coverage_data))
     }
 
@@ -886,6 +962,18 @@ mod tests {
             test_identifier: test1.clone(),
             coverage_identifier: thiserror.clone(),
         });
+        saved_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file1.rs"),
+            target_file: PathBuf::from("extra_data/stuff.txt"),
+        });
+        saved_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file1.rs"),
+            target_file: PathBuf::from("extra_data/things.txt"),
+        });
+        saved_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file2.rs"),
+            target_file: PathBuf::from("extra_data/stuff.txt"),
+        });
 
         let result = db.save_coverage_data(&saved_data, "c1", None);
         assert!(result.is_ok());
@@ -995,6 +1083,38 @@ mod tests {
             .get(&regex)
             .unwrap()
             .contains(&test2));
+        assert_eq!(loaded_data.file_referenced_by_files_map().len(), 2);
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra_data/stuff.txt"))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra_data/things.txt"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs")));
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file2.rs")));
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/things.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs")));
     }
 
     /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
@@ -1024,6 +1144,10 @@ mod tests {
             function_name: "func2".to_string(),
             test_identifier: test1.clone(),
         });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file1.rs"),
+            target_file: PathBuf::from("extra_data/stuff.txt"),
+        });
 
         let result = db.save_coverage_data(&ancestor_data, "c1", None);
         assert!(result.is_ok());
@@ -1039,6 +1163,10 @@ mod tests {
         child_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
             test_identifier: test2.clone(),
+        });
+        child_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file2.rs"),
+            target_file: PathBuf::from("extra_data/stuff.txt"),
         });
 
         let result = db.save_coverage_data(&child_data, "c2", Some("c1"));
@@ -1116,6 +1244,25 @@ mod tests {
             .get("func1")
             .unwrap()
             .contains(&test2));
+        assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra_data/stuff.txt"))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs")));
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file2.rs")));
     }
 
     /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
@@ -1145,6 +1292,18 @@ mod tests {
             function_name: "func2".to_string(),
             test_identifier: test1.clone(),
         });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file1.rs"),
+            target_file: PathBuf::from("extra_data/stuff.txt"),
+        });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file1.rs"),
+            target_file: PathBuf::from("extra_data/things.txt"),
+        });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file2.rs"),
+            target_file: PathBuf::from("extra_data/stuff.txt"),
+        });
 
         let result = db.save_coverage_data(&ancestor_data, "c1", None);
         assert!(result.is_ok());
@@ -1159,6 +1318,10 @@ mod tests {
         child_data.add_function_to_test(FunctionCoverage {
             function_name: "func3".to_string(),
             test_identifier: test1.clone(),
+        });
+        child_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file2.rs"),
+            target_file: PathBuf::from("extra_data/more-stuff.txt"),
         });
 
         let result = db.save_coverage_data(&child_data, "c2", Some("c1"));
@@ -1199,6 +1362,46 @@ mod tests {
             .get("func3")
             .unwrap()
             .contains(&test1));
+        assert_eq!(loaded_data.file_referenced_by_files_map().len(), 3);
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra_data/stuff.txt"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra_data/things.txt"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra_data/more-stuff.txt"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs")));
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/things.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs")));
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/more-stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file2.rs")));
     }
 
     /// Test a child coverage set which indicates a test was removed and no longer present
@@ -1237,6 +1440,10 @@ mod tests {
         ancestor_data.add_function_to_test(FunctionCoverage {
             function_name: "func2".to_string(),
             test_identifier: test1.clone(),
+        });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("file2.rs"),
+            target_file: PathBuf::from("extra_data/more-stuff.txt"),
         });
 
         let result = db.save_coverage_data(&ancestor_data, "c1", None);
@@ -1286,5 +1493,63 @@ mod tests {
             .get("func1")
             .unwrap()
             .contains(&test2));
+    }
+
+    /// Test that we can remove file references from an ancestor
+    #[test]
+    fn remove_file_references_in_child() {
+        let mut db =
+            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+                ":memory:",
+            );
+
+        let mut ancestor_data = CommitCoverageData::new();
+        ancestor_data.add_executed_test(test1.clone());
+        ancestor_data.add_existing_test(test1.clone());
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/two.rs"),
+            target_file: PathBuf::from("extra-data/abc-123.txt"),
+        });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/two.rs"),
+            target_file: PathBuf::from("extra-data/abc-321.txt"),
+        });
+        ancestor_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/one.rs"),
+            target_file: PathBuf::from("extra-data/abc-123.txt"),
+        });
+
+        let result = db.save_coverage_data(&ancestor_data, "c1", None);
+        assert!(result.is_ok());
+
+        // Slightly weird here; the point of this test is to verify that the positive absence of data
+        // (mark_file_makes_no_reference) correctly overwrites ancestor data with no records for that file.
+        let mut child_data = CommitCoverageData::new();
+        child_data.add_executed_test(test1.clone());
+        child_data.add_existing_test(test1.clone());
+        child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
+
+        let result = db.save_coverage_data(&child_data, "c2", Some("c1"));
+        assert!(result.is_ok());
+
+        let result = db.read_coverage_data("c2");
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.is_some());
+        let loaded_data = result.unwrap();
+        assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
+        assert_eq!(
+            loaded_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra-data/abc-123.txt"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra-data/abc-123.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("src/one.rs")));
     }
 }

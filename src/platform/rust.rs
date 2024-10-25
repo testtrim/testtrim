@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Component, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -26,7 +28,8 @@ use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
 use crate::commit_coverage_data::{
-    CommitCoverageData, CoverageIdentifier, FileCoverage, FunctionCoverage, HeuristicCoverage,
+    CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
+    HeuristicCoverage,
 };
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
@@ -118,6 +121,13 @@ impl TestDiscovery<RustTestCase, RustTestIdentifier> for RustTestDiscovery {
         warn!("Unable to find test binary for test: {test_identifier:?}");
         None
     }
+}
+
+lazy_static! {
+    static ref include_regex: Regex = Regex::new(
+        r#"[\s=](include|include_str|include_bytes)!\(\s*"(?<path>(?:[^"\\]|\\.)*)"\s*\)"#
+    )
+    .unwrap();
 }
 
 pub struct RustTestPlatform;
@@ -525,6 +535,26 @@ impl RustTestPlatform {
 
         Ok(coverage_data)
     }
+
+    fn find_compile_time_includes(file: &PathBuf) -> Result<HashSet<PathBuf>> {
+        let mut result = HashSet::new();
+
+        let file = File::open(file)?;
+        let lines = BufReader::new(file).lines();
+
+        for line in lines {
+            let line = line?;
+
+            if let Some(cap) = include_regex.captures(&line) {
+                let path = String::from(&cap["path"])
+                    // Un-escape any escaped double-quotes
+                    .replace("\\\"", "\"");
+                result.insert(PathBuf::from(path));
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery, RustTestCase>
@@ -650,6 +680,70 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
             Ok(coverage_data)
         }
     }
+
+    fn analyze_changed_files(
+        changed_files: &HashSet<PathBuf>,
+        coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
+    ) -> Result<()> {
+        let repo_root = env::current_dir()?;
+
+        for file in changed_files {
+            if file.extension().is_some_and(|ext| ext == "rs") {
+                let mut found_references = false;
+
+                for target_path in Self::find_compile_time_includes(file)? {
+                    // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
+                    // them might be better elevated to errors?
+
+                    // Target path within the referencing file will be relative to the target file; so first we pretend
+                    // we're in the referencing file's path and join in the target file name...
+                    let target_path = match file.parent() {
+                        Some(parent) => parent.join(&target_path),
+                        None => {
+                            warn!("file {file:?} had an include/include_str/include_bytes macro, but couldn't get the file's parent directory?; reference will not be followed");
+                            continue;
+                        }
+                    };
+
+                    // Now the file path may have relative elements in it (eg. ../../some/thing); we need a canonical
+                    // form of the path in order to strip the repo root.  This will fail if the file doesn't exist.
+                    let target_path = match target_path.canonicalize() {
+                        Ok(canonical) => canonical,
+                        Err(e) => {
+                            warn!("file {file:?} had an include/include_str/include_bytes macro, but error occurred while canonicalize path: {e:?}; reference will not be followed");
+                            continue;
+                        }
+                    };
+
+                    // Now we strip the repo root so that we get to the repo-relative path to the included file, which
+                    // is the form that we'll later look for this file when we do a git diff to see changed files.
+                    let target_path = match target_path.strip_prefix(&repo_root) {
+                        Ok(stripped) => stripped,
+                        Err(e) => {
+                            warn!("file {file:?} had an include/include_str/include_bytes macro, but error occurred while stripping repo root: {e:?}; reference will not be followed");
+                            continue;
+                        }
+                    };
+
+                    coverage_data.add_file_reference(FileReference {
+                        referencing_file: file.clone(),
+                        target_file: PathBuf::from(target_path),
+                    });
+
+                    found_references = true;
+                }
+
+                if !found_references {
+                    coverage_data.mark_file_makes_no_references(file.clone())
+                }
+            } else {
+                // This probably isn't necessary since it would've never been marked as making references
+                coverage_data.mark_file_makes_no_references(file.clone())
+            }
+        }
+
+        Ok(())
+    }
 }
 
 lazy_static! {
@@ -680,7 +774,12 @@ fn parse_cargo_package(path: &OsStr) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
+    use std::{collections::HashSet, ffi::OsStr, path::PathBuf};
+
+    use crate::{
+        commit_coverage_data::CommitCoverageData,
+        platform::{rust::RustTestPlatform, TestPlatform},
+    };
 
     use super::parse_cargo_package;
 
@@ -712,5 +811,49 @@ mod tests {
                 String::from("0.11.0+wasi-snapshot-preview1")
             ))
         );
+    }
+
+    #[test]
+    fn find_compile_time_includes() {
+        let res = RustTestPlatform::find_compile_time_includes(&PathBuf::from(
+            "tests/rust_parse_examples/sequences.rs",
+        ));
+        println!("res: {res:?}");
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert_eq!(res.len(), 4, "correct # of files read");
+        assert!(res.contains(&PathBuf::from("../test_data/Factorial_Vec.txt")));
+        assert!(res.contains(&PathBuf::from("abc.txt ")));
+        assert!(res.contains(&PathBuf::from("file\"with\"quotes.txt")));
+        assert!(res.contains(&PathBuf::from("/proc/cpuinfo")));
+    }
+
+    #[test]
+    fn analyze_changed_files_include() {
+        let mut files = HashSet::new();
+        files.insert(PathBuf::from("tests/rust_parse_examples/sequences.rs"));
+
+        let mut coverage_data = CommitCoverageData::new();
+
+        let res = RustTestPlatform::analyze_changed_files(&files, &mut coverage_data);
+        assert!(res.is_ok());
+        assert_eq!(
+            coverage_data.file_references_files_map().len(),
+            1,
+            "correct # of files read"
+        );
+        assert_eq!(
+            coverage_data
+                .file_references_files_map()
+                .get(&PathBuf::from("tests/rust_parse_examples/sequences.rs"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .file_references_files_map()
+            .get(&PathBuf::from("tests/rust_parse_examples/sequences.rs"))
+            .unwrap()
+            .contains(&PathBuf::from("tests/test_data/Factorial_Vec.txt")));
     }
 }

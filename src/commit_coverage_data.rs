@@ -21,6 +21,7 @@ pub struct CommitCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
     executed_test_to_files_map: HashMap<TI, HashSet<PathBuf>>,
     executed_test_to_functions_map: HashMap<TI, HashSet<String>>,
     executed_test_to_coverage_identifier_map: HashMap<TI, HashSet<CI>>,
+    file_references_files_map: HashMap<PathBuf, HashSet<PathBuf>>,
 }
 
 pub struct FileCoverage<TI: TestIdentifier> {
@@ -36,6 +37,11 @@ pub struct FunctionCoverage<TI: TestIdentifier> {
 pub struct HeuristicCoverage<TI: TestIdentifier, CI: CoverageIdentifier> {
     pub test_identifier: TI,
     pub coverage_identifier: CI,
+}
+
+pub struct FileReference {
+    pub referencing_file: PathBuf,
+    pub target_file: PathBuf,
 }
 
 pub trait CoverageIdentifier: Eq + Hash + Clone + Debug {}
@@ -54,6 +60,7 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
             executed_test_to_files_map: HashMap::new(),
             executed_test_to_functions_map: HashMap::new(),
             executed_test_to_coverage_identifier_map: HashMap::new(),
+            file_references_files_map: HashMap::new(),
         }
     }
 
@@ -75,6 +82,10 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
 
     pub fn executed_test_to_coverage_identifier_map(&self) -> &HashMap<TI, HashSet<CI>> {
         &self.executed_test_to_coverage_identifier_map
+    }
+
+    pub fn file_references_files_map(&self) -> &HashMap<PathBuf, HashSet<PathBuf>> {
+        &self.file_references_files_map
     }
 
     pub fn add_existing_test(&mut self, test_identifier: TI) {
@@ -110,6 +121,18 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
             .insert(coverage.coverage_identifier);
     }
 
+    pub fn add_file_reference(&mut self, file_reference: FileReference) {
+        self.file_references_files_map
+            .entry(file_reference.referencing_file)
+            .or_default()
+            .insert(file_reference.target_file);
+    }
+
+    pub fn mark_file_makes_no_references(&mut self, referencing_file: PathBuf) {
+        self.file_references_files_map
+            .insert(referencing_file, HashSet::new());
+    }
+
     pub fn merge_in(&mut self, mut other: CommitCoverageData<TI, CI>) {
         for tc in other.all_existing_test_set.drain() {
             self.all_existing_test_set.insert(tc);
@@ -117,14 +140,25 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
         for tc in other.executed_test_set.drain() {
             self.executed_test_set.insert(tc);
         }
+        // The contents of reach of these keys are overwritten, not merged -- that's fine for the use-case we're
+        // expecting which is a single test run being merged into a library of test runs.  But just in-case we ever
+        // change how this works and stumble into this being a data corruption problem, we'll assert that we're never
+        // losing data.
         for (k, v) in other.executed_test_to_files_map.drain() {
-            self.executed_test_to_files_map.insert(k, v);
+            let retval = self.executed_test_to_files_map.insert(k, v);
+            assert_eq!(retval, None);
         }
         for (k, v) in other.executed_test_to_functions_map.drain() {
-            self.executed_test_to_functions_map.insert(k, v);
+            let retval = self.executed_test_to_functions_map.insert(k, v);
+            assert_eq!(retval, None);
         }
         for (k, v) in other.executed_test_to_coverage_identifier_map.drain() {
-            self.executed_test_to_coverage_identifier_map.insert(k, v);
+            let retval = self.executed_test_to_coverage_identifier_map.insert(k, v);
+            assert_eq!(retval, None);
+        }
+        for (k, v) in other.file_references_files_map.drain() {
+            let retval = self.file_references_files_map.insert(k, v);
+            assert_eq!(retval, None);
         }
     }
 }
@@ -353,5 +387,65 @@ mod tests {
             .get(&test2)
             .unwrap()
             .contains(&regex));
+    }
+
+    #[test]
+    fn add_file_reference() {
+        let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
+        coverage_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/two.rs"),
+            target_file: PathBuf::from("extra-data/abc-123.txt"),
+        });
+        coverage_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/two.rs"),
+            target_file: PathBuf::from("extra-data/abc-321.txt"),
+        });
+        coverage_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/one.rs"),
+            target_file: PathBuf::from("extra-data/abc-123.txt"),
+        });
+        coverage_data.mark_file_makes_no_references(PathBuf::from("src/zero.rs"));
+
+        assert_eq!(coverage_data.file_references_files_map().len(), 3);
+        assert_eq!(
+            coverage_data
+                .file_references_files_map()
+                .get(&PathBuf::from("src/two.rs"))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            coverage_data
+                .file_references_files_map()
+                .get(&PathBuf::from("src/one.rs"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            coverage_data
+                .file_references_files_map()
+                .get(&PathBuf::from("src/zero.rs"))
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(coverage_data
+            .file_references_files_map()
+            .get(&PathBuf::from("src/two.rs"))
+            .unwrap()
+            .contains(&PathBuf::from("extra-data/abc-123.txt")));
+        assert!(coverage_data
+            .file_references_files_map()
+            .get(&PathBuf::from("src/two.rs"))
+            .unwrap()
+            .contains(&PathBuf::from("extra-data/abc-321.txt")));
+        assert!(coverage_data
+            .file_references_files_map()
+            .get(&PathBuf::from("src/one.rs"))
+            .unwrap()
+            .contains(&PathBuf::from("extra-data/abc-123.txt")));
     }
 }

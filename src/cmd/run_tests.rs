@@ -159,6 +159,18 @@ where
     info!("successfully ran tests");
 
     if save_coverage_data {
+        // FIXME: this is weird; this variable is being used just so the inner match arm can take a reference to a value
+        // that lives long enough -- feels like there should be a better way
+        let mut _all_files: Option<HashSet<PathBuf>> = None;
+        let files_changed = match test_cases.files_changed {
+            Some(ref files_changed) => files_changed,
+            None => {
+                _all_files = Some(scm.get_all_repo_files()?);
+                &_all_files.unwrap()
+            }
+        };
+        TP::analyze_changed_files(files_changed, &mut coverage_data)?;
+
         let commit_sha = scm.get_commit_identifier(&scm.get_head_commit()?);
 
         let ancestor_commit_sha = test_cases

@@ -57,6 +57,23 @@ impl Scm<GitScmCommit> for GitScm {
         Ok(stdout.lines().map(PathBuf::from).collect())
     }
 
+    fn get_all_repo_files(&self) -> Result<HashSet<PathBuf>> {
+        let output = Command::new("git").args(["ls-files"]).output()?;
+
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: String::from("git ls-files"),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+
+        // FIXME: this doesn't seem like it will handle platform-specific file name encodings correctly
+        let stdout = String::from_utf8(output.stdout)?;
+        Ok(stdout.lines().map(PathBuf::from).collect())
+    }
+
     fn get_head_commit(&self) -> Result<GitScmCommit> {
         Ok(GitScmCommit {
             sha: self.get_revision_sha("HEAD")?,

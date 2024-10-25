@@ -1,0 +1,5 @@
+// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+This file is just here so that rust_parse_examples/sequences.rs can include!() it.
