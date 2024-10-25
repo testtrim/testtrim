@@ -429,17 +429,31 @@ impl RustTestPlatform {
     fn parse_trace_data(
         test_case: &RustTestCase,
         trace: &Trace,
+        current_dir: &Path,
         coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
     ) -> Result<()> {
+        let repo_root = env::current_dir()?;
+
         for path in trace.get_open_paths() {
             if path.is_relative() {
                 trace!("found test {test_case:?} accessed local file {path:?}");
-                // It might make sense to filter out files that aren't part of the repo... both here and in
-                // parse_profiling_data?
-                coverage_data.add_file_to_test(FileCoverage {
-                    file_name: path.clone(),
-                    test_identifier: test_case.test_identifier.clone(),
-                });
+
+                let target_path = Self::normalize_path(
+                    path,
+                    &current_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
+                    &repo_root,
+                    |warning| {
+                        warn!("syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}");
+                    },
+                );
+                if let Some(target_path) = target_path {
+                    // It might make sense to filter out files that aren't part of the repo... both here and in
+                    // parse_profiling_data?
+                    coverage_data.add_file_to_test(FileCoverage {
+                        file_name: target_path.clone(),
+                        test_identifier: test_case.test_identifier.clone(),
+                    });
+                }
             }
             // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
         }
@@ -531,7 +545,7 @@ impl RustTestPlatform {
             &coverage_library_lock,
             &mut coverage_data,
         )?;
-        Self::parse_trace_data(test_case, &trace, &mut coverage_data)?;
+        Self::parse_trace_data(test_case, &trace, test_wd, &mut coverage_data)?;
 
         Ok(coverage_data)
     }
@@ -554,6 +568,55 @@ impl RustTestPlatform {
         }
 
         Ok(result)
+    }
+
+    /// Given a path which is referenced from relative_to (eg. "src/module/lib.rs"), normalize it to a relative
+    /// reference within the absolute path repo_root where the files exist.
+    ///
+    /// The path is canonicalized, and therefore the file must exist.
+    ///
+    /// For example, if path is "../blah.txt", relative_to is "src/module/lib.rs", then "src/blah.txt" would be
+    /// returned.  repo_root is used to ensure that the path reference stays within the repo.
+    ///
+    /// The expectation is that problems, if they occur, are not errors but might be warnings.  Therefore the parameter
+    /// `warn` represents a function that can be called to provide contextual warnings about the problem.
+    fn normalize_path<T: FnOnce(&str)>(
+        path: &Path,
+        relative_to: &Path,
+        repo_root: &Path,
+        warn: T,
+    ) -> Option<PathBuf> {
+        // Target path within the referencing file will be relative to the target file; so first we pretend we're in the
+        // referencing file's path and join in the target file name...
+        let target_path = match relative_to.parent() {
+            Some(parent) => parent.join(path),
+            None => {
+                warn("couldn't get relative_to's parent");
+                return None;
+            }
+        };
+
+        // Now the file path may have relative elements in it (eg. ../../some/thing); we need a canonical form of the
+        // path in order to strip the repo root.  This will fail if the file doesn't exist.
+        let target_path = match target_path.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(e) => {
+                warn(&format!("error occurred in canonicalize: {e:?}"));
+                return None;
+            }
+        };
+
+        // Now we strip the repo root so that we get to the repo-relative path to the included file, which is the form
+        // that we'll later look for this file when we do a git diff to see changed files.
+        let target_path = match target_path.strip_prefix(repo_root) {
+            Ok(stripped) => stripped,
+            Err(e) => {
+                warn(&format!("error occurred stripping repo root: {e:?}"));
+                return None;
+            }
+        };
+
+        Some(PathBuf::from(target_path))
     }
 }
 
@@ -694,43 +757,22 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
                 for target_path in Self::find_compile_time_includes(file)? {
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
+                    let target_path = Self::normalize_path(
+                        &target_path,
+                        file,
+                        &repo_root,
+                        |warning| {
+                            warn!("file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}");
+                        },
+                    );
 
-                    // Target path within the referencing file will be relative to the target file; so first we pretend
-                    // we're in the referencing file's path and join in the target file name...
-                    let target_path = match file.parent() {
-                        Some(parent) => parent.join(&target_path),
-                        None => {
-                            warn!("file {file:?} had an include/include_str/include_bytes macro, but couldn't get the file's parent directory?; reference will not be followed");
-                            continue;
-                        }
-                    };
-
-                    // Now the file path may have relative elements in it (eg. ../../some/thing); we need a canonical
-                    // form of the path in order to strip the repo root.  This will fail if the file doesn't exist.
-                    let target_path = match target_path.canonicalize() {
-                        Ok(canonical) => canonical,
-                        Err(e) => {
-                            warn!("file {file:?} had an include/include_str/include_bytes macro, but error occurred while canonicalize path: {e:?}; reference will not be followed");
-                            continue;
-                        }
-                    };
-
-                    // Now we strip the repo root so that we get to the repo-relative path to the included file, which
-                    // is the form that we'll later look for this file when we do a git diff to see changed files.
-                    let target_path = match target_path.strip_prefix(&repo_root) {
-                        Ok(stripped) => stripped,
-                        Err(e) => {
-                            warn!("file {file:?} had an include/include_str/include_bytes macro, but error occurred while stripping repo root: {e:?}; reference will not be followed");
-                            continue;
-                        }
-                    };
-
-                    coverage_data.add_file_reference(FileReference {
-                        referencing_file: file.clone(),
-                        target_file: PathBuf::from(target_path),
-                    });
-
-                    found_references = true;
+                    if let Some(target_path) = target_path {
+                        coverage_data.add_file_reference(FileReference {
+                            referencing_file: file.clone(),
+                            target_file: target_path,
+                        });
+                        found_references = true;
+                    }
                 }
 
                 if !found_references {
@@ -818,7 +860,6 @@ mod tests {
         let res = RustTestPlatform::find_compile_time_includes(&PathBuf::from(
             "tests/rust_parse_examples/sequences.rs",
         ));
-        println!("res: {res:?}");
         assert!(res.is_ok());
         let res = res.unwrap();
         assert_eq!(res.len(), 4, "correct # of files read");
