@@ -6,7 +6,6 @@ use dashmap::DashMap;
 use log::warn;
 use rand::{thread_rng, Rng};
 use serde::Serialize;
-use serde::Serializer;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -17,6 +16,8 @@ use tracing::{
     span::{Attributes, Id, Record},
     Event, Metadata, Subscriber,
 };
+
+use crate::util::duration_to_seconds;
 
 // FIXME: in the future it might make more sense to use the tracing-subscriber library to create a "Layer" that does
 // this performance tracing work.  That would allow us to have a truely useful tracing subscriber for the traditional
@@ -43,14 +44,6 @@ impl Visit for SpanData {
 
 pub struct PerformanceStorage {
     span_storage: DashMap<Id, SpanData>,
-}
-
-// FIXME: duplicated between here and simulate_history.rs
-fn duration_to_seconds<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_f64(duration.as_secs_f64())
 }
 
 #[derive(Serialize)]

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{collections::HashSet, marker::PhantomData, path::PathBuf, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, marker::PhantomData, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use log::{error, info};
@@ -159,17 +159,11 @@ where
     info!("successfully ran tests");
 
     if save_coverage_data {
-        // FIXME: this is weird; this variable is being used just so the inner match arm can take a reference to a value
-        // that lives long enough -- feels like there should be a better way
-        let mut _all_files: Option<HashSet<PathBuf>> = None;
         let files_changed = match test_cases.files_changed {
-            Some(ref files_changed) => files_changed,
-            None => {
-                _all_files = Some(scm.get_all_repo_files()?);
-                &_all_files.unwrap()
-            }
+            Some(ref files_changed) => Cow::Borrowed(files_changed),
+            None => Cow::Owned(scm.get_all_repo_files()?),
         };
-        TP::analyze_changed_files(files_changed, &mut coverage_data)?;
+        TP::analyze_changed_files(&files_changed, &mut coverage_data)?;
 
         let commit_sha = scm.get_commit_identifier(&scm.get_head_commit()?);
 

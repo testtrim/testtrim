@@ -10,8 +10,8 @@ use std::{
 
 use anyhow::Result;
 use log::{error, info, trace, warn};
+use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde::{de::DeserializeOwned, Serializer};
 
 use crate::{
     cmd::run_tests::run_tests,
@@ -23,6 +23,7 @@ use crate::{
     },
     scm::{git::GitScm, Scm, ScmCommit},
     timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
+    util::duration_to_seconds,
 };
 
 use super::cli::{GetTestIdentifierMode, SourceMode};
@@ -42,13 +43,6 @@ pub fn cli(num_commits: &u16, jobs: &u16) {
             error!("error occurred in simulate_history: {:?}", err)
         }
     }
-}
-
-fn duration_to_seconds<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_f64(duration.as_secs_f64())
 }
 
 #[derive(Serialize)]

@@ -108,31 +108,25 @@ where
             ancestor_search_mode,
             &mut (DieselCoverageDatabase::<TI, CI>::new_sqlite_from_default_path()),
         )? {
-            Some((a, b)) => (Some(a), Some(b)),
-            None => (None, None),
+            Some((ancestor_commit, coverage_data)) => {
+                info!(
+                    "relevant test cases will be computed base upon commit {:?}",
+                    scm.get_commit_identifier(&ancestor_commit)
+                );
+                (ancestor_commit, coverage_data)
+            }
+            None => {
+                warn!("no base commit identified with coverage data to work from");
+                return Ok(TargetTestCases {
+                    all_test_cases: all_test_cases.clone(),
+                    target_test_cases: all_test_cases.clone(),
+                    ancestor_commit: None,
+                    files_changed: None,
+                    external_dependencies_changed: None,
+                    test_identifier_type: PhantomData,
+                });
+            }
         };
-    let ancestor_commit = match ancestor_commit {
-        Some(ancestor_commit) => {
-            info!(
-                "relevant test cases will be computed base upon commit {:?}",
-                scm.get_commit_identifier(&ancestor_commit)
-            );
-            ancestor_commit
-        }
-        None => {
-            warn!("no base commit identified with coverage data to work from");
-            return Ok(TargetTestCases {
-                all_test_cases: all_test_cases.clone(),
-                target_test_cases: all_test_cases.clone(),
-                ancestor_commit: None,
-                files_changed: None,
-                external_dependencies_changed: None,
-                test_identifier_type: PhantomData,
-            });
-        }
-    };
-    // FIXME: variable unwrapping here feels like we're not handling the match cases above well
-    let coverage_data = coverage_data.unwrap(); // must have been provided or we'd have exited in last match block
 
     let changed_files = scm.get_changed_files(&ancestor_commit)?;
     trace!("changed files: {:?}", changed_files);
@@ -359,7 +353,7 @@ mod tests {
         db::CoverageDatabase,
         full_coverage_data::FullCoverageData,
         platform::rust::{
-            RustCoverageIdentifier, RustTestBinary, RustTestCase, RustTestIdentifier,
+            RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary, RustTestIdentifier,
         },
         scm::Scm,
     };
@@ -388,8 +382,8 @@ mod tests {
                 test_name: "test1".to_string(),
             }
         };
-        static ref sample_test_case_1: RustTestCase = {
-            RustTestCase {
+        static ref sample_test_case_1: RustConcreteTestIdentifier = {
+            RustConcreteTestIdentifier {
                 test_binary: RustTestBinary {
                     rel_src_path: PathBuf::from("src/lib.rs"),
                     executable_path: PathBuf::from("target/crate/debug/crate-test"),
@@ -398,8 +392,8 @@ mod tests {
                 test_identifier: test1.clone(),
             }
         };
-        static ref sample_test_case_2: RustTestCase = {
-            RustTestCase {
+        static ref sample_test_case_2: RustConcreteTestIdentifier = {
+            RustConcreteTestIdentifier {
                 test_binary: RustTestBinary {
                     rel_src_path: PathBuf::from("src/lib.rs"),
                     executable_path: PathBuf::from("target/crate/debug/crate-test"),

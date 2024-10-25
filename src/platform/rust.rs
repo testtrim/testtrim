@@ -35,11 +35,11 @@ use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
 use crate::full_coverage_data::FullCoverageData;
-use crate::rust_llvm::{CoverageLibrary, ProfilingData};
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::{sys_trace_command, trace::Trace};
 
 use super::{
+    rust_llvm::{CoverageLibrary, ProfilingData},
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
     TestIdentifierCore, TestPlatform,
 };
@@ -83,16 +83,13 @@ pub struct RustTestBinary {
     pub manifest_path: PathBuf,
 }
 
-// FIXME: rename to ConcreteRustTestIdentifier -- name is horrible... this is more like a "concrete" version of a
-// RustTestIdentifier, w/ specific knowledge required to execute this test, rather than the abstract system-to-system
-// reusable test identifier that RustTestIdentifier is
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
-pub struct RustTestCase {
+pub struct RustConcreteTestIdentifier {
     pub test_binary: RustTestBinary,
     pub test_identifier: RustTestIdentifier,
 }
 
-impl ConcreteTestIdentifier<RustTestIdentifier> for RustTestCase {
+impl ConcreteTestIdentifier<RustTestIdentifier> for RustConcreteTestIdentifier {
     fn test_identifier(&self) -> &RustTestIdentifier {
         &self.test_identifier
     }
@@ -100,18 +97,21 @@ impl ConcreteTestIdentifier<RustTestIdentifier> for RustTestCase {
 
 pub struct RustTestDiscovery {
     test_binaries: HashSet<RustTestBinary>,
-    all_test_cases: HashSet<RustTestCase>,
+    all_test_cases: HashSet<RustConcreteTestIdentifier>,
 }
 
-impl TestDiscovery<RustTestCase, RustTestIdentifier> for RustTestDiscovery {
-    fn all_test_cases(&self) -> &HashSet<RustTestCase> {
+impl TestDiscovery<RustConcreteTestIdentifier, RustTestIdentifier> for RustTestDiscovery {
+    fn all_test_cases(&self) -> &HashSet<RustConcreteTestIdentifier> {
         &self.all_test_cases
     }
 
-    fn map_ti_to_cti(&self, test_identifier: RustTestIdentifier) -> Option<RustTestCase> {
+    fn map_ti_to_cti(
+        &self,
+        test_identifier: RustTestIdentifier,
+    ) -> Option<RustConcreteTestIdentifier> {
         for test_binary in &self.test_binaries {
             if test_binary.rel_src_path == test_identifier.test_src_path {
-                let new_test_case = RustTestCase {
+                let new_test_case = RustConcreteTestIdentifier {
                     test_identifier: test_identifier.clone(),
                     test_binary: test_binary.clone(),
                 };
@@ -297,9 +297,9 @@ impl RustTestPlatform {
 
     fn get_all_test_cases(
         test_binaries: &HashSet<RustTestBinary>,
-    ) -> Result<HashSet<RustTestCase>> {
+    ) -> Result<HashSet<RustConcreteTestIdentifier>> {
         let tmp_dir = TempDir::new("testtrim")?;
-        let mut result: HashSet<RustTestCase> = HashSet::new();
+        let mut result: HashSet<RustConcreteTestIdentifier> = HashSet::new();
 
         for binary in test_binaries {
             let output = Command::new(&binary.executable_path)
@@ -326,7 +326,7 @@ impl RustTestPlatform {
                 .filter(|line| line.ends_with(": test"))
                 .map(|line| line.trim_end_matches(": test"))
             {
-                result.insert(RustTestCase {
+                result.insert(RustConcreteTestIdentifier {
                     test_binary: binary.clone(),
                     test_identifier: RustTestIdentifier {
                         test_src_path: binary.rel_src_path.clone(),
@@ -341,7 +341,7 @@ impl RustTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_profiling_data(
-        test_case: &RustTestCase,
+        test_case: &RustConcreteTestIdentifier,
         profile_file: &PathBuf,
         coverage_library: &CoverageLibrary,
         coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
@@ -427,7 +427,7 @@ impl RustTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_trace_data(
-        test_case: &RustTestCase,
+        test_case: &RustConcreteTestIdentifier,
         trace: &Trace,
         current_dir: &Path,
         coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
@@ -461,7 +461,7 @@ impl RustTestPlatform {
     }
 
     fn run_test(
-        test_case: &RustTestCase,
+        test_case: &RustConcreteTestIdentifier,
         tmp_path: &Path,
         binaries: &DashSet<PathBuf>,
         coverage_library: Arc<RwLock<CoverageLibrary>>,
@@ -620,8 +620,13 @@ impl RustTestPlatform {
     }
 }
 
-impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery, RustTestCase>
-    for RustTestPlatform
+impl
+    TestPlatform<
+        RustTestIdentifier,
+        RustCoverageIdentifier,
+        RustTestDiscovery,
+        RustConcreteTestIdentifier,
+    > for RustTestPlatform
 {
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     fn discover_tests() -> Result<RustTestDiscovery> {
@@ -677,8 +682,8 @@ impl TestPlatform<RustTestIdentifier, RustCoverageIdentifier, RustTestDiscovery,
         jobs: u16,
     ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestsErrors>
     where
-        I: IntoIterator<Item = &'a RustTestCase>,
-        RustTestCase: 'a,
+        I: IntoIterator<Item = &'a RustConcreteTestIdentifier>,
+        RustConcreteTestIdentifier: 'a,
     {
         let tmp_dir = TempDir::new("testtrim")?;
 

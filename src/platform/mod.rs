@@ -18,6 +18,7 @@ use crate::{
 };
 
 pub mod rust;
+mod rust_llvm;
 
 /// TestIdentifier is a machine-independent way to reference a test in a project.
 ///

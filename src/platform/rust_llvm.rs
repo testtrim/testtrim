@@ -76,49 +76,44 @@ impl CoverageLibrary {
         &self,
         point: &InstrumentationPoint,
     ) -> Result<Option<InstrumentationPointMetadata>> {
-        match (point.rec.name_hash, point.rec.hash) {
-            (Some(name_hash), Some(fn_hash)) => {
-                match self.lookup_map.get(point.binary_path) {
-                    Some(object_file_lookup_map) => {
-                        match object_file_lookup_map
-                            .get(&CoverageFunctionLocator { name_hash, fn_hash })
-                        {
-                            Some(r) => {
-                                let object_file = self
-                                    .object_files
-                                    .get(point.binary_path)
-                                    .expect("must be stored in both internal members");
-                                match object_file.cov_map.get(&r.0) {
-                                    Some(file) => {
-                                        // FIXME: I don't know if the multiple file paths here are right... need to
-                                        // create some synthetic test cases and verify that the references make sense to
-                                        // me, and maybe verify some of the test-project cases to understand them.
-                                        Ok(Some(InstrumentationPointMetadata {
-                                            file_paths: file.clone(),
-                                            function_name: point.rec.name.clone().unwrap(),
-                                        }))
-                                    }
-                                    None => {
-                                        // coverage point didn't have any files asociated with it
-                                        Ok(None)
-                                    }
-                                }
-                            }
-                            None => {
-                                // coverage point found in profiling data was not found in binary's coverage map
-                                Err(RustLlvmError::CoverageMismatch.into())
-                            }
-                        }
-                    }
-                    None => {
-                        Err(RustLlvmError::LibraryMissingBinary(point.binary_path.clone()).into())
-                        // Err(anyhow!("attempted to read data about a binary file that was not in the coverage library: {:?}", point.binary_path))
-                    }
-                }
-            }
+        let (name_hash, fn_hash) = match (point.rec.name_hash, point.rec.hash) {
+            (Some(name_hash), Some(fn_hash)) => (name_hash, fn_hash),
             _ => {
                 // Function point didn't have a hash; this comes pretty straight from the llvm parser so I don't think
                 // there's much to do here.
+                return Ok(None);
+            }
+        };
+
+        let object_file_lookup_map = self
+            .lookup_map
+            .get(point.binary_path)
+            // binary provided was never loaded in?
+            .ok_or_else(|| RustLlvmError::LibraryMissingBinary(point.binary_path.clone()))?;
+
+        let coverage_locator = CoverageFunctionLocator { name_hash, fn_hash };
+        let filenames_ref = object_file_lookup_map
+            .get(&coverage_locator)
+            // coverage point found in profiling data was not found in binary's coverage map
+            .ok_or(RustLlvmError::CoverageMismatch)?;
+
+        let object_file = self
+            .object_files
+            .get(point.binary_path)
+            .expect("must be stored in both internal members");
+
+        match object_file.cov_map.get(&filenames_ref.0) {
+            Some(file) => {
+                // FIXME: I don't know if the multiple file paths here are right... need to create some synthetic test
+                // cases and verify that the references make sense to me, and maybe verify some of the test-project
+                // cases to understand them.
+                Ok(Some(InstrumentationPointMetadata {
+                    file_paths: file.clone(),
+                    function_name: point.rec.name.clone().unwrap(),
+                }))
+            }
+            None => {
+                // coverage point didn't have any files asociated with it
                 Ok(None)
             }
         }
