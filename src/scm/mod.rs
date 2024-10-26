@@ -20,7 +20,7 @@ pub trait Scm<Commit: ScmCommit> {
     fn get_commit_identifier(&self, commit: &Commit) -> String;
     fn get_commit_parents(&self, commit: &Commit) -> Result<Vec<Commit>>;
     /// Operates similarly to the `git merge-base` command, which finds the most recent common ancestor between multiple
-    /// commits.  The expectation is that when get_commit_parents returns multiple parents, this function can be used to
+    /// commits.  The expectation is that when `get_commit_parents` returns multiple parents, this function can be used to
     /// "skip" the diverging history and get to the shared ancestor of both commits.
     fn get_best_common_ancestor(&self, commits: &[Commit]) -> Result<Option<Commit>>;
     fn fetch_file_content(&self, commit: &Commit, path: &Path) -> Result<Vec<u8>>;
@@ -32,7 +32,7 @@ pub trait Scm<Commit: ScmCommit> {
     ///
     /// Typically this means files that (a) aren't part of the source tree, and (b) were ignored in one commit but not
     /// in another commit.  For example, if commit-a had a "target" directory with build output, but in a later commit-b
-    /// that directory was renamed to "build_target" and the scm's ignore files were updated to match, that's the kind
+    /// that directory was renamed to `build_target` and the scm's ignore files were updated to match, that's the kind
     /// of file we want to cleanup.  `git clean -fd` will perform this in git -- no `-x` (cleaning ignored files).
     fn clean_lightly(&self) -> Result<()>;
 }

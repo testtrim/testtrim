@@ -11,7 +11,7 @@ use std::{
 
 use crate::platform::TestIdentifier;
 
-/// CommitCoverageData represents the coverage data that could be collected from test execution on a single commit;
+/// `CommitCoverageData` represents the coverage data that could be collected from test execution on a single commit;
 /// importantly this may represent data from only a partial execution of tests that were appropriate to that commit,
 /// rather than a complete test run.
 #[derive(Debug, Clone)]

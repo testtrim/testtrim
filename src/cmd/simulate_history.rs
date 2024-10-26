@@ -30,7 +30,7 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(num_commits: &u16, jobs: &u16) {
+pub fn cli(num_commits: u16, jobs: u16) {
     match simulate_history::<_, _, _, _, _, _, RustTestPlatform>(&GitScm {}, num_commits, jobs) {
         Ok(out) => {
             let mut wtr = csv::Writer::from_writer(io::stdout());
@@ -40,7 +40,7 @@ pub fn cli(num_commits: &u16, jobs: &u16) {
             }
         }
         Err(err) => {
-            error!("error occurred in simulate_history: {:?}", err)
+            error!("error occurred in simulate_history: {err:?}");
         }
     }
 }
@@ -107,8 +107,8 @@ pub struct SimulateHistoryOutput<Commit: ScmCommit> {
 
 fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
-    num_commits: &u16,
-    jobs: &u16,
+    num_commits: u16,
+    jobs: u16,
 ) -> Result<SimulateHistoryOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -176,7 +176,7 @@ where
 fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     commit: Commit,
-    jobs: &u16,
+    jobs: u16,
 ) -> Result<SimulateCommitOutput<Commit>>
 where
     Commit: ScmCommit,

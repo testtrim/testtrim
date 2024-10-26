@@ -47,9 +47,9 @@ use super::{
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct RustTestIdentifier {
     /// Project-relative source path that defines the binary which contains the test.  For example,
-    /// some_module/src/lib.rs.
+    /// `some_module/src/lib.rs`
     pub test_src_path: PathBuf,
-    /// Name of the test.  For example, basic_ops::tests::test_add.
+    /// Name of the test.  For example, `basic_ops::tests::test_add`
     pub test_name: String,
 }
 
@@ -168,9 +168,11 @@ impl RustTestPlatform {
 
         let mut changed_external_dependencies = 0;
         for old in ancestor_lock.packages {
-            let relevant_change = match current_lock_map.get(old.name.as_str()) {
-                Some(current_version) => {
-                    if *current_version != old.version {
+            let relevant_change =
+                if let Some(current_version) = current_lock_map.get(old.name.as_str()) {
+                    if *current_version == old.version {
+                        false
+                    } else {
                         trace!(
                             "Cargo.lock package changed {}, old: {}, current: {}",
                             old.name,
@@ -178,15 +180,11 @@ impl RustTestPlatform {
                             current_version
                         );
                         true
-                    } else {
-                        false
                     }
-                }
-                None => {
+                } else {
                     trace!("Cargo.lock package removed {}", old.name);
                     true
-                }
-            };
+                };
 
             if relevant_change {
                 info!(
@@ -313,7 +311,7 @@ impl RustTestPlatform {
 
             if !output.status.success() {
                 return Err(SubcommandErrors::SubcommandFailed {
-                    command: format!("{:?} --list", binary).to_string(),
+                    command: format!("{binary:?} --list").to_string(),
                     status: output.status,
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 }
@@ -464,7 +462,7 @@ impl RustTestPlatform {
         test_case: &RustConcreteTestIdentifier,
         tmp_path: &Path,
         binaries: &DashSet<PathBuf>,
-        coverage_library: Arc<RwLock<CoverageLibrary>>,
+        coverage_library: &Arc<RwLock<CoverageLibrary>>,
     ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestError> {
         let mut coverage_data = CommitCoverageData::new();
 
@@ -493,10 +491,10 @@ impl RustTestPlatform {
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
             .or_else(|e| {
-                if e.kind() != io::ErrorKind::AlreadyExists {
-                    Err(e)
-                } else {
+                if e.kind() == io::ErrorKind::AlreadyExists {
                     Ok(())
+                } else {
+                    Err(e)
                 }
             })
             .context("Failed to create coverage directory")?;
@@ -570,13 +568,13 @@ impl RustTestPlatform {
         Ok(result)
     }
 
-    /// Given a path which is referenced from relative_to (eg. "src/module/lib.rs"), normalize it to a relative
-    /// reference within the absolute path repo_root where the files exist.
+    /// Given a path which is referenced from `relative_to` (eg. "src/module/lib.rs"), normalize it to a relative
+    /// reference within the absolute path `repo_root` where the files exist.
     ///
     /// The path is canonicalized, and therefore the file must exist.
     ///
-    /// For example, if path is "../blah.txt", relative_to is "src/module/lib.rs", then "src/blah.txt" would be
-    /// returned.  repo_root is used to ensure that the path reference stays within the repo.
+    /// For example, if path is "../blah.txt", `relative_to` is "src/module/lib.rs", then "src/blah.txt" would be
+    /// returned.  `repo_root` is used to ensure that the path reference stays within the repo.
     ///
     /// The expectation is that problems, if they occur, are not errors but might be warnings.  Therefore the parameter
     /// `warn` represents a function that can be called to provide contextual warnings about the problem.
@@ -588,12 +586,11 @@ impl RustTestPlatform {
     ) -> Option<PathBuf> {
         // Target path within the referencing file will be relative to the target file; so first we pretend we're in the
         // referencing file's path and join in the target file name...
-        let target_path = match relative_to.parent() {
-            Some(parent) => parent.join(path),
-            None => {
-                warn("couldn't get relative_to's parent");
-                return None;
-            }
+        let target_path = if let Some(parent) = relative_to.parent() {
+            parent.join(path)
+        } else {
+            warn("couldn't get relative_to's parent");
+            return None;
         };
 
         // Now the file path may have relative elements in it (eg. ../../some/thing); we need a canonical form of the
@@ -719,7 +716,7 @@ impl
                 let dispatcher = dispatcher.clone();
                 pool.execute(move || {
                     dispatcher::with_default(&dispatcher, || {
-                        tx.send(RustTestPlatform::run_test(&tc, &tmp_path, &b, cl))
+                        tx.send(RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl))
                             .unwrap();
                     });
                 });
@@ -742,10 +739,10 @@ impl
             outstanding_tests -= 1;
         }
 
-        if !failed_test_results.is_empty() {
-            Err(RunTestsErrors::TestExecutionFailures(failed_test_results))
-        } else {
+        if failed_test_results.is_empty() {
             Ok(coverage_data)
+        } else {
+            Err(RunTestsErrors::TestExecutionFailures(failed_test_results))
         }
     }
 
@@ -781,11 +778,11 @@ impl
                 }
 
                 if !found_references {
-                    coverage_data.mark_file_makes_no_references(file.clone())
+                    coverage_data.mark_file_makes_no_references(file.clone());
                 }
             } else {
                 // This probably isn't necessary since it would've never been marked as making references
-                coverage_data.mark_file_makes_no_references(file.clone())
+                coverage_data.mark_file_makes_no_references(file.clone());
             }
         }
 
@@ -798,7 +795,7 @@ lazy_static! {
         Regex::new(r"^(?<package_name>.+)-(?<package_version>[0-9]+\..*)$").unwrap();
 }
 
-/// Parse a path from .cargo/registry/src/*/... (eg. ws2_32-sys-0.2.1) and return the package name ("ws2_32") and
+/// Parse a path from .cargo/registry/src/*/... (eg. `ws2_32-sys-0.2.1`) and return the package name (`ws2_32`) and
 /// version ("0.2.1") if they could be distinguished.
 ///
 /// Some awkward examples:

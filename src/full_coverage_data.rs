@@ -12,7 +12,7 @@ use crate::{
     platform::TestIdentifier,
 };
 
-/// FullCoverageData represents coverage data that encompasses the entire project's test suite.  It will typically be
+/// `FullCoverageData` represents coverage data that encompasses the entire project's test suite.  It will typically be
 /// coalesced and merged from multiple test runs over time.
 #[derive(Debug, Clone)]
 pub struct FullCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {

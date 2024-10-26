@@ -67,7 +67,7 @@ pub enum RunTestsErrors {
     #[error("one or more tests failed")]
     TestExecutionFailures(Vec<FailedTestResult>),
 
-    /// Any RunTestError other than a TestExecutionFailure will be passed-through via UnexpectedTestError.
+    /// Any `RunTestError` other than a `TestExecutionFailure` will be passed-through via `UnexpectedTestError`.
     #[error(transparent)]
     UnexpectedTestError(#[from] RunTestError),
 }

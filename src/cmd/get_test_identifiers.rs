@@ -101,32 +101,29 @@ where
         });
     }
 
-    let (ancestor_commit, coverage_data) =
-        match find_ancestor_commit_with_coverage_data::<Commit, MyScm, TI, CI>(
+    let (ancestor_commit, coverage_data) = if let Some((ancestor_commit, coverage_data)) =
+        find_ancestor_commit_with_coverage_data::<Commit, MyScm, TI, CI>(
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
             &mut (DieselCoverageDatabase::<TI, CI>::new_sqlite_from_default_path()),
         )? {
-            Some((ancestor_commit, coverage_data)) => {
-                info!(
-                    "relevant test cases will be computed base upon commit {:?}",
-                    scm.get_commit_identifier(&ancestor_commit)
-                );
-                (ancestor_commit, coverage_data)
-            }
-            None => {
-                warn!("no base commit identified with coverage data to work from");
-                return Ok(TargetTestCases {
-                    all_test_cases: all_test_cases.clone(),
-                    target_test_cases: all_test_cases.clone(),
-                    ancestor_commit: None,
-                    files_changed: None,
-                    external_dependencies_changed: None,
-                    test_identifier_type: PhantomData,
-                });
-            }
-        };
+        info!(
+            "relevant test cases will be computed base upon commit {:?}",
+            scm.get_commit_identifier(&ancestor_commit)
+        );
+        (ancestor_commit, coverage_data)
+    } else {
+        warn!("no base commit identified with coverage data to work from");
+        return Ok(TargetTestCases {
+            all_test_cases: all_test_cases.clone(),
+            target_test_cases: all_test_cases.clone(),
+            ancestor_commit: None,
+            files_changed: None,
+            external_dependencies_changed: None,
+            test_identifier_type: PhantomData,
+        });
+    };
 
     let changed_files = scm.get_changed_files(&ancestor_commit)?;
     trace!("changed files: {:?}", changed_files);
@@ -151,11 +148,10 @@ where
 
     Ok(TargetTestCases {
         all_test_cases: all_test_cases.clone(),
-        target_test_cases: HashSet::from_iter(
-            relevant_test_cases
-                .into_iter()
-                .filter_map(|ti| test_discovery.map_ti_to_cti(ti)),
-        ),
+        target_test_cases: relevant_test_cases
+            .into_iter()
+            .filter_map(|ti| test_discovery.map_ti_to_cti(ti))
+            .collect::<HashSet<_>>(),
         ancestor_commit: Some(ancestor_commit),
         files_changed: Some(changed_files),
         external_dependencies_changed: platform_specific.external_dependencies_changed,
@@ -212,17 +208,14 @@ where
         } else if parents.len() > 1 {
             // If the commit had multiple parents, try to find their common ancestor and continue looking for coverage
             // data at that point.
-            match scm.get_best_common_ancestor(&parents) {
-                Ok(Some(common_ancestor)) => {
-                    commit = common_ancestor;
-                }
-                Err(_) | Ok(None) => {
-                    warn!(
-                        "unable to identify common ancestor for parent commits of {}",
-                        scm.get_commit_identifier(&commit)
-                    );
-                    return Ok(None);
-                }
+            if let Ok(Some(common_ancestor)) = scm.get_best_common_ancestor(&parents) {
+                commit = common_ancestor;
+            } else {
+                warn!(
+                    "unable to identify common ancestor for parent commits of {}",
+                    scm.get_commit_identifier(&commit)
+                );
+                return Ok(None);
             }
         } else {
             commit = parents.remove(0);
@@ -259,7 +252,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
 ) -> Result<HashSet<TI>> {
     let mut retval = HashSet::new();
 
-    compute_all_new_test_cases(eval_target_test_cases, coverage_data, &mut retval)?;
+    compute_all_new_test_cases(eval_target_test_cases, coverage_data, &mut retval);
     trace!(
         "relevant test cases after searching for new tests: {:?}",
         retval
@@ -290,14 +283,13 @@ fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     coverage_data: &FullCoverageData<TI, CI>,
     retval: &mut HashSet<TI>,
-) -> Result<()> {
+) {
     for tc in eval_target_test_cases {
         if !coverage_data.all_tests().contains(tc) {
             trace!("test case {:?} was not found in parent coverage data and so will be run as a new test", tc);
             retval.insert(tc.clone());
         }
     }
-    Ok(())
 }
 
 fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(

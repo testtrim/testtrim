@@ -14,7 +14,7 @@ use std::{
 
 use super::{trace::Trace, SysTraceCommand};
 
-/// Implementation of SysTraceCommand that uses the `strace` command to trace all the relevant system calls.
+/// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
 pub struct STraceSysTraceCommand;
 
 lazy_static! {

@@ -404,7 +404,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             &GetTestIdentifierMode::Relevant,
             &scm,
             &SourceMode::Automatic,
-            &0,
+            0,
         )?;
 
         Ok(())

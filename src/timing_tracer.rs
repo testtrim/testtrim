@@ -166,9 +166,10 @@ impl Subscriber for PerformanceStoringTracingSubscriber {
     }
 
     fn record(&self, span: &Id, values: &Record<'_>) {
-        match self.storage.span_storage.get_mut(span) {
-            Some(mut span_data) => values.record(span_data.value_mut()),
-            None => warn!("record({span:?}) referenced a span that was not stored in span_storage"),
+        if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
+            values.record(span_data.value_mut());
+        } else {
+            warn!("record({span:?}) referenced a span that was not stored in span_storage");
         }
     }
 
@@ -177,20 +178,18 @@ impl Subscriber for PerformanceStoringTracingSubscriber {
     fn event(&self, _event: &Event<'_>) {}
 
     fn enter(&self, span: &Id) {
-        match self.storage.span_storage.get_mut(span) {
-            Some(mut span_data) => {
-                span_data.entered_at = Some(Instant::now());
-            }
-            None => warn!("enter({span:?}) referenced a span that was not stored in span_storage"),
+        if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
+            span_data.entered_at = Some(Instant::now());
+        } else {
+            warn!("enter({span:?}) referenced a span that was not stored in span_storage");
         }
     }
 
     fn exit(&self, span: &Id) {
-        match self.storage.span_storage.get_mut(span) {
-            Some(mut span_data) => {
-                span_data.exited_at = Some(Instant::now());
-            }
-            None => warn!("exit({span:?}) referenced a span that was not stored in span_storage"),
+        if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
+            span_data.exited_at = Some(Instant::now());
+        } else {
+            warn!("exit({span:?}) referenced a span that was not stored in span_storage");
         }
     }
 }

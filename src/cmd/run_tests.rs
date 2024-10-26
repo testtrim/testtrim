@@ -26,7 +26,7 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode, jobs: &u16) {
+pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode, jobs: u16) {
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
@@ -60,18 +60,18 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode
                             ref stderr,
                         } => {
                             if let Some(ref exit_code) = exit_code {
-                                println!("\tprocess exited with code {}", exit_code);
+                                println!("\tprocess exited with code {exit_code}");
                             }
                             if !stdout.is_empty() {
                                 println!("\tstdout:");
                                 for line in stdout.lines() {
-                                    println!("\t{}", line);
+                                    println!("\t{line}");
                                 }
                             }
                             if !stderr.is_empty() {
                                 println!("\tstderr:");
                                 for line in stderr.lines() {
-                                    println!("\t{}", line);
+                                    println!("\t{line}");
                                 }
                             }
                         }
@@ -79,7 +79,7 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode
                 }
             }
             Err(err) => {
-                error!("error occurred in run_tests: {:?}", err)
+                error!("error occurred in run_tests: {err:?}");
             }
         }
     });
@@ -106,7 +106,7 @@ pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     mode: &GetTestIdentifierMode,
     scm: &MyScm,
     source_mode: &SourceMode,
-    jobs: &u16,
+    jobs: u16,
 ) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>
 where
     Commit: ScmCommit,
@@ -122,9 +122,8 @@ where
         SourceMode::CleanCommit => {
             if !scm.is_working_dir_clean()? {
                 return Err(RunTestsCommandErrors::CleanCommitWorkingDirectoryDirty);
-            } else {
-                true
             }
+            true
         }
         SourceMode::OverrideCleanCommit => true,
         SourceMode::WorkingTree => false,
@@ -151,7 +150,7 @@ where
     let test_cases =
         get_target_test_cases::<Commit, MyScm, _, _, _, _, TP>(mode, scm, ancestor_search_mode)?;
 
-    let mut coverage_data = TP::run_tests(&test_cases.target_test_cases, *jobs)?;
+    let mut coverage_data = TP::run_tests(&test_cases.target_test_cases, jobs)?;
     for tc in &test_cases.all_test_cases {
         coverage_data.add_existing_test(tc.test_identifier().clone());
     }

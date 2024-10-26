@@ -115,7 +115,7 @@ impl<
         test_case: &TI,
         coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
-        use crate::schema::*;
+        use crate::schema::test_case_file_covered;
 
         if let Some(files_covered) = coverage_data.executed_test_to_files_map().get(test_case) {
             let mut tuples = vec![];
@@ -124,7 +124,7 @@ impl<
                     test_case_file_covered::dsl::test_case_execution_id
                         .eq(test_case_execution_id.to_string()),
                     test_case_file_covered::dsl::file_identifier.eq(tc.to_string_lossy()), // FIXME: lossy?
-                ))
+                ));
             }
             for chunk in tuples.chunks(10000) {
                 // HACK: avoid "too many SQL variables"
@@ -144,7 +144,7 @@ impl<
         test_case: &TI,
         coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
-        use crate::schema::*;
+        use crate::schema::test_case_function_covered;
 
         if let Some(functions_covered) = coverage_data
             .executed_test_to_functions_map()
@@ -156,7 +156,7 @@ impl<
                     test_case_function_covered::dsl::test_case_execution_id
                         .eq(test_case_execution_id.to_string()),
                     test_case_function_covered::dsl::function_identifier.eq(tc),
-                ))
+                ));
             }
             for chunk in tuples.chunks(10000) {
                 // HACK: avoid "too many SQL variables"
@@ -176,7 +176,7 @@ impl<
         test_case: &TI,
         coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
-        use crate::schema::*;
+        use crate::schema::test_case_coverage_identifier_covered;
 
         if let Some(coverage_identifiers) = coverage_data
             .executed_test_to_coverage_identifier_map()
@@ -189,7 +189,7 @@ impl<
                         .eq(test_case_execution_id.to_string()),
                     test_case_coverage_identifier_covered::dsl::coverage_identifier
                         .eq(serde_json::to_string(&tc)?),
-                ))
+                ));
             }
             for chunk in tuples.chunks(10000) {
                 // HACK: avoid "too many SQL variables"
@@ -203,25 +203,28 @@ impl<
         Ok(())
     }
 
-    /// Now we build a comprehensive full test map by reading the ancestor commit's coverage_map_test_case_executed, and
-    /// replacing any test cases in it from the commit that we just ran.  If there was no ancestor commit test map, then
-    /// our current test suite should-be/must-be complete and we use that for coverage_map_test_case_executed.
+    /// Now we build a comprehensive full test map by reading the ancestor commit's `coverage_map_test_case_executed`,
+    /// and replacing any test cases in it from the commit that we just ran.  If there was no ancestor commit test map,
+    /// then our current test suite should-be/must-be complete and we use that for `coverage_map_test_case_executed`.
     ///
     /// Hypothetically this entire operation could be done DB-side with a few commands, but:
-    /// - SQLite doesn't have a server-side UUID generate function, preventing this from working with creating new IDs
+    /// - `SQLite` doesn't have a server-side UUID generate function, preventing this from working with creating new IDs
     ///   in the denormalized tables
     /// - It's moderately complex to do in SQL, and when operating through the wet-noodle of a query builder it's even
     ///   more complex
     fn save_coverage_map(
         conn: &mut SqliteConnection,
         scm_commit_id: Uuid,
-        ancestor_scm_commit_id: Option<String>,
+        ancestor_scm_commit_id: Option<&String>,
         test_case_id_to_test_case_map: &HashMap<Uuid, &TI>,
         test_case_to_test_case_id_map: &HashMap<&TI, Uuid>,
         test_case_to_test_case_execution_id_map: &HashMap<&TI, Uuid>,
         coverage_data: &CommitCoverageData<TI, CI>,
     ) -> Result<()> {
-        use crate::schema::*;
+        use crate::schema::{
+            commit_file_reference, coverage_map, coverage_map_test_case_executed,
+            test_case_execution,
+        };
 
         let coverage_map_id = Uuid::new_v4();
         diesel::insert_into(coverage_map::dsl::coverage_map)
@@ -245,7 +248,7 @@ impl<
                         coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
                             .inner_join(test_case_execution::dsl::test_case_execution),
                     )
-                    .filter(coverage_map::dsl::scm_commit_id.eq(&ancestor_scm_commit_id))
+                    .filter(coverage_map::dsl::scm_commit_id.eq(ancestor_scm_commit_id))
                     .select(TestCaseExecution::as_select())
                     .get_results(conn)
                     .context("loading coverage_map_test_case_executed from ancestor_commit_sha")?;
@@ -280,7 +283,7 @@ impl<
         }
 
         let mut insertables = vec![];
-        for (_, test_case_execution_id) in coverage_map_test_case_executed.iter() {
+        for test_case_execution_id in coverage_map_test_case_executed.values() {
             insertables.push((
                 coverage_map_test_case_executed::dsl::coverage_map_id
                     .eq(coverage_map_id.to_string()),
@@ -309,7 +312,7 @@ impl<
                 Some(ref ancestor_scm_commit_id) => {
                     let scm_commit_id = commit_file_reference::dsl::commit_file_reference
                         .filter(
-                            commit_file_reference::dsl::scm_commit_id.eq(&ancestor_scm_commit_id),
+                            commit_file_reference::dsl::scm_commit_id.eq(ancestor_scm_commit_id),
                         )
                         .select(CommitFileReference::as_select())
                         .order(commit_file_reference::dsl::referencing_filepath)
@@ -372,7 +375,10 @@ impl<
         commit_sha: &str,
         ancestor_commit_sha: Option<&str>,
     ) -> Result<()> {
-        use crate::schema::*;
+        use crate::schema::{
+            commit_test_case, commit_test_case_executed, project, scm_commit, test_case,
+            test_case_execution,
+        };
 
         let conn = self.get_connection()?;
 
@@ -546,7 +552,7 @@ impl<
         DieselCoverageDatabase::save_coverage_map(
             conn,
             scm_commit_id,
-            ancestor_scm_commit_id,
+            ancestor_scm_commit_id.as_ref(),
             &test_case_id_to_test_case_map,
             &test_case_to_test_case_id_map,
             &test_case_to_test_case_execution_id_map,
@@ -557,7 +563,11 @@ impl<
     }
 
     fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>> {
-        use crate::schema::*;
+        use crate::schema::{
+            commit_file_reference, coverage_map, coverage_map_test_case_executed, scm_commit,
+            test_case, test_case_coverage_identifier_covered, test_case_execution,
+            test_case_file_covered, test_case_function_covered,
+        };
 
         let conn = self.get_connection()?;
 
@@ -715,14 +725,14 @@ impl<
             coverage_data.add_file_reference(FileReference {
                 referencing_file: fr.referencing_filepath.into(),
                 target_file: fr.target_filepath.into(),
-            })
+            });
         }
 
         Ok(Some(coverage_data))
     }
 
     fn has_any_coverage_data(&mut self) -> Result<bool> {
-        use crate::schema::*;
+        use crate::schema::{coverage_map, scm_commit};
 
         let conn = self.get_connection()?;
 
@@ -743,7 +753,12 @@ impl<
     }
 
     fn clear_project_data(&mut self) -> Result<()> {
-        use crate::schema::*;
+        use crate::schema::{
+            commit_test_case, commit_test_case_executed, coverage_map,
+            coverage_map_test_case_executed, project, scm_commit, test_case,
+            test_case_coverage_identifier_covered, test_case_execution, test_case_file_covered,
+            test_case_function_covered,
+        };
 
         let conn = self.get_connection()?;
 

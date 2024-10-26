@@ -113,7 +113,9 @@ pub fn run_cli() {
             test_selection_mode,
             source_mode,
             jobs,
-        } => run_tests::cli(test_selection_mode, source_mode, jobs),
-        Commands::SimulateHistory { num_commits, jobs } => simulate_history::cli(num_commits, jobs),
+        } => run_tests::cli(test_selection_mode, source_mode, *jobs),
+        Commands::SimulateHistory { num_commits, jobs } => {
+            simulate_history::cli(*num_commits, *jobs);
+        }
     }
 }

@@ -20,19 +20,19 @@ use crate::{
 pub mod rust;
 mod rust_llvm;
 
-/// TestIdentifier is a machine-independent way to reference a test in a project.
+/// `TestIdentifier` is a machine-independent way to reference a test in a project.
 ///
 /// It must contain data such that, if it was serialized between machines, it could be picked up and contain relevant
 /// data to find and execute the test on another host.
 pub trait TestIdentifier: Eq + Hash + Clone + Debug {}
 
-/// An alternate trait of TestIdentifier which can be used with dynamic dispatch.  Test identifiers must implement both
-/// traits.
+/// An alternate trait of `TestIdentifier` which can be used with dynamic dispatch.  Test identifiers must implement
+/// both traits.
 pub trait TestIdentifierCore: Debug + Send + Sync + Display {}
 
 /// Represents a machine-dependent reference to a test.
 ///
-/// ConcreteTestIdentifier is "ready to execute" on the current machine, as compared to `TestIdentifier` which may be
+/// `ConcreteTestIdentifier` is "ready to execute" on the current machine, as compared to `TestIdentifier` which may be
 /// missing information, such as specific pathing or tooling references, to be able to be executed.
 pub trait ConcreteTestIdentifier<TI: TestIdentifier>: Eq + Hash + Clone + Debug {
     fn test_identifier(&self) -> &TI;

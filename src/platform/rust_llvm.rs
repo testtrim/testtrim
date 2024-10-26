@@ -76,13 +76,10 @@ impl CoverageLibrary {
         &self,
         point: &InstrumentationPoint,
     ) -> Result<Option<InstrumentationPointMetadata>> {
-        let (name_hash, fn_hash) = match (point.rec.name_hash, point.rec.hash) {
-            (Some(name_hash), Some(fn_hash)) => (name_hash, fn_hash),
-            _ => {
-                // Function point didn't have a hash; this comes pretty straight from the llvm parser so I don't think
-                // there's much to do here.
-                return Ok(None);
-            }
+        let (Some(name_hash), Some(fn_hash)) = (point.rec.name_hash, point.rec.hash) else {
+            // Function point didn't have a hash; this comes pretty straight from the llvm parser so I don't think
+            // there's much to do here.
+            return Ok(None);
         };
 
         let object_file_lookup_map = self
@@ -120,8 +117,9 @@ impl CoverageLibrary {
     }
 }
 
-/// ProfilingData is currently just a wrapper around llvm_profparser's InstrumentationProfile.  Wrapping these objects
-/// lightly in the rust_llvm module allows future complexity (which will likely be needed) to be isolated here.
+/// `ProfilingData` is currently just a wrapper around `llvm_profparser`'s `InstrumentationProfile`.  Wrapping these
+/// objects lightly in the `rust_llvm` module allows future complexity (which will likely be needed) to be isolated
+/// here.
 pub struct ProfilingData {
     instrumentation_profile: InstrumentationProfile,
     binary_path: PathBuf,
@@ -156,8 +154,8 @@ impl ProfilingData {
     }
 }
 
-/// Wrapper around NamedInstrProfRecord, which represents an instrumentation codepoint that may have been hit during an
-/// instrumented profiling run.
+/// Wrapper around `NamedInstrProfRecord`, which represents an instrumentation codepoint that may have been hit during
+/// an instrumented profiling run.
 #[derive(Debug)]
 pub struct InstrumentationPoint<'a> {
     rec: NamedInstrProfRecord,
