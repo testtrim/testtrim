@@ -47,7 +47,7 @@ pub enum RunTestError {
     #[error(transparent)]
     IoError(#[from] io::Error),
 
-    #[error("test was executed but failed")]
+    #[error("test was executed but failed: {0:?}")]
     TestExecutionFailure(FailedTestResult),
 
     #[error(transparent)]
@@ -64,7 +64,7 @@ pub enum RunTestsErrors {
     RecvError(#[from] std::sync::mpsc::RecvError),
 
     /// TestExecutionFailure(s) from the test suite will be consolidated into this enum value.
-    #[error("one or more tests failed")]
+    #[error("one or more tests failed: {0:?}")]
     TestExecutionFailures(Vec<FailedTestResult>),
 
     /// Any `RunTestError` other than a `TestExecutionFailure` will be passed-through via `UnexpectedTestError`.

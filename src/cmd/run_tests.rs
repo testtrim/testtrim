@@ -60,7 +60,9 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode
                             ref stderr,
                         } => {
                             if let Some(ref exit_code) = exit_code {
-                                println!("\tprocess exited with code {exit_code}");
+                                println!(
+                                    "\ttest failed when test process exited with code {exit_code}"
+                                );
                             }
                             if !stdout.is_empty() {
                                 println!("\tstdout:");
