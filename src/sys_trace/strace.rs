@@ -4,7 +4,6 @@
 
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
-use log::trace;
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -93,18 +92,6 @@ lazy_static! {
 }
 
 #[derive(Debug, PartialEq)]
-enum SyscallState {
-    Complete,
-    Unfinished(String), // pid for completion // FIXME: don't really need this
-}
-
-#[derive(Debug, PartialEq)]
-enum SyscallResult {
-    Success,
-    Failure,
-}
-
-#[derive(Debug, PartialEq)]
 enum CloneParse {
     FinishedError,
     FinishedSuccess {
@@ -114,6 +101,29 @@ enum CloneParse {
     Unfinished {
         parent_pid: String,
     },
+}
+
+#[derive(Debug, PartialEq)]
+enum OpenParse {
+    FinishedError { pid: String },
+    FinishedSuccess { pid: String, path: PathBuf },
+    FinishedPreviousSuccessfully { pid: String },
+    Unfinished { pid: String, path: PathBuf },
+}
+
+#[derive(Debug, PartialEq)]
+enum ChdirParse {
+    FinishedError { pid: String },
+    FinishedSuccess { pid: String, path: PathBuf },
+    FinishedPreviousSuccessfully { pid: String },
+    Unfinished { pid: String, path: PathBuf },
+}
+
+#[derive(Debug, PartialEq)]
+enum ParseLine {
+    Open(OpenParse),
+    Chdir(ChdirParse),
+    Clone(CloneParse),
 }
 
 impl STraceSysTraceCommand {
@@ -129,7 +139,7 @@ impl STraceSysTraceCommand {
         STraceSysTraceCommand {}
     }
 
-    fn parse_openat(trace: &str) -> Option<(String, String, SyscallState)> {
+    fn parse_openat(trace: &str) -> Option<OpenParse> {
         // Note: only openat w/ AT_FDCWD is supported, which opens a path from the current working directory (unless
         // absolute).  Opening a directory, then opening a file in it, isn't supported by this.  FIXME: It *should*
         // probably be detected and either a warning or error generated though, so that it's not silently ignored.
@@ -139,49 +149,61 @@ impl STraceSysTraceCommand {
                 // Un-escape any escaped double-quotes
                 .replace("\\\"", "\"");
             if cap["end"].starts_with(')') {
-                (pid, path, SyscallState::Complete)
+                OpenParse::FinishedSuccess {
+                    pid,
+                    path: PathBuf::from(path),
+                }
             } else {
-                (pid.clone(), path, SyscallState::Unfinished(pid))
+                OpenParse::Unfinished {
+                    pid,
+                    path: PathBuf::from(path),
+                }
             }
         })
     }
 
-    fn parse_openat_resumed(trace: &str) -> Option<(String, SyscallResult)> {
+    fn parse_openat_resumed(trace: &str) -> Option<OpenParse> {
         openat_resumed.captures(trace).map(|cap| {
             let pid = String::from(&cap["pid"]);
             let retval = String::from(&cap["retval"]);
             if retval.starts_with('-') {
                 // negative retval
-                (pid, SyscallResult::Failure)
+                OpenParse::FinishedError { pid }
             } else {
-                (pid, SyscallResult::Success)
+                OpenParse::FinishedPreviousSuccessfully { pid }
             }
         })
     }
 
-    fn parse_chdir(trace: &str) -> Option<(String, String, SyscallState)> {
+    fn parse_chdir(trace: &str) -> Option<ChdirParse> {
         chdir.captures(trace).map(|cap| {
             let pid = String::from(&cap["pid"]);
             let path = String::from(&cap["path"])
                 // Un-escape any escaped double-quotes
                 .replace("\\\"", "\"");
             if cap["end"].starts_with(')') {
-                (pid, path, SyscallState::Complete)
+                ChdirParse::FinishedSuccess {
+                    pid,
+                    path: PathBuf::from(path),
+                }
             } else {
-                (pid.clone(), path, SyscallState::Unfinished(pid))
+                ChdirParse::Unfinished {
+                    pid,
+                    path: PathBuf::from(path),
+                }
             }
         })
     }
 
-    fn parse_chdir_resumed(trace: &str) -> Option<(String, SyscallResult)> {
+    fn parse_chdir_resumed(trace: &str) -> Option<ChdirParse> {
         chdir_resumed.captures(trace).map(|cap| {
             let pid = String::from(&cap["pid"]);
             let retval = String::from(&cap["retval"]);
             if retval.starts_with('-') {
                 // negative retval
-                (pid, SyscallResult::Failure)
+                ChdirParse::FinishedError { pid }
             } else {
-                (pid, SyscallResult::Success)
+                ChdirParse::FinishedPreviousSuccessfully { pid }
             }
         })
     }
@@ -221,6 +243,28 @@ impl STraceSysTraceCommand {
         })
     }
 
+    fn parse_line(trace: &str) -> Option<ParseLine> {
+        if let Some(clone_parse) = Self::parse_clone(trace) {
+            return Some(ParseLine::Clone(clone_parse));
+        }
+        if let Some(clone_parse) = Self::parse_clone_resumed(trace) {
+            return Some(ParseLine::Clone(clone_parse));
+        }
+        if let Some(chdir_parse) = Self::parse_chdir(trace) {
+            return Some(ParseLine::Chdir(chdir_parse));
+        }
+        if let Some(chdir_parse) = Self::parse_chdir_resumed(trace) {
+            return Some(ParseLine::Chdir(chdir_parse));
+        }
+        if let Some(open_parse) = Self::parse_openat(trace) {
+            return Some(ParseLine::Open(open_parse));
+        }
+        if let Some(open_parse) = Self::parse_openat_resumed(trace) {
+            return Some(ParseLine::Open(open_parse));
+        }
+        None
+    }
+
     fn read_trace_file(trace: &mut Trace, trace_file: &Path) -> Result<()> {
         let file = File::open(trace_file)?;
         Self::read_trace(trace, BufReader::new(file))
@@ -236,46 +280,32 @@ impl STraceSysTraceCommand {
 
         for line in lines {
             let line = line?;
-            match Self::parse_openat(&line) {
-                Some((pid, filepath, SyscallState::Complete)) => {
-                    // FIXME: if we weren't reading this content as UTF-8, we likely wouldn't need to go 'backwards' from a
-                    // String to a PathBuf here
 
-                    // FIXME: duplicate between interrupted and complete codepaths
-                    let mut filepath = PathBuf::from(&filepath);
+            let Some(parse_result) = Self::parse_line(&line) else {
+                continue;
+            };
+
+            match parse_result {
+                ParseLine::Open(OpenParse::FinishedSuccess { pid, mut path }) => {
                     if let Some(cwd) = pid_cwd.get(&pid) {
-                        trace!("trace openat accessed {filepath:?} relative to {cwd:?}");
-                        filepath = cwd.join(filepath);
-                    } else {
-                        trace!(
-                            "trace openat accessed {filepath:?} from pid {pid:?} with no known cwd"
-                        );
+                        path = cwd.join(path);
                     }
-
-                    trace.add_open(filepath);
-                    continue;
+                    trace.add_open(path);
                 }
-                Some((pid, filepath, SyscallState::Unfinished(_pid))) => {
-                    // this openat might fail, and if so we don't want to trace it
-                    let mut filepath = PathBuf::from(&filepath);
+                ParseLine::Open(OpenParse::FinishedError { pid }) => {
+                    pid_openat_in_progress.remove(&pid);
+                }
+                ParseLine::Open(OpenParse::Unfinished { pid, mut path }) => {
                     if let Some(cwd) = pid_cwd.get(&pid) {
-                        trace!(
-                            "trace openat accessed {filepath:?} relative to {cwd:?}; unfinished"
-                        );
-                        filepath = cwd.join(filepath);
-                    } else {
-                        trace!(
-                            "trace openat accessed {filepath:?} from pid {pid:?} with no known cwd"
-                        );
+                        path = cwd.join(path);
                     }
-                    pid_openat_in_progress.insert(pid, PathBuf::from(&filepath));
-                    continue;
+                    let prev = pid_openat_in_progress.insert(pid, path);
+                    assert!(
+                        prev.is_none(),
+                        "pid_openat_in_progress shouldn't be in-progress multiple times"
+                    );
                 }
-                None => {}
-            }
-
-            match Self::parse_openat_resumed(&line) {
-                Some((pid, SyscallResult::Success)) => {
+                ParseLine::Open(OpenParse::FinishedPreviousSuccessfully { pid }) => {
                     let path = pid_openat_in_progress.remove(&pid);
                     if let Some(path) = path {
                         trace.add_open(path);
@@ -284,31 +314,24 @@ impl STraceSysTraceCommand {
                             "pid openat was resumed but no unfinished syscall was found"
                         ));
                     }
-                    continue;
                 }
-                Some((pid, SyscallResult::Failure)) => {
-                    pid_openat_in_progress.remove(&pid);
-                    continue;
-                }
-                None => {}
-            }
 
-            match Self::parse_chdir(&line) {
-                Some((pid, filepath, SyscallState::Complete)) => {
+                ParseLine::Chdir(ChdirParse::FinishedSuccess { pid, path }) => {
                     let previous_path = pid_cwd.remove(&pid).unwrap_or(PathBuf::from(""));
-                    let new_path = previous_path.join(filepath);
+                    let new_path = previous_path.join(path);
                     pid_cwd.insert(pid, new_path);
                 }
-                Some((pid, filepath, SyscallState::Unfinished(_pid))) => {
-                    // this chdir might fail, and if so we don't want to trace it
-                    pid_cwd_in_progress.insert(pid, PathBuf::from(&filepath));
-                    continue;
+                ParseLine::Chdir(ChdirParse::Unfinished { pid, path }) => {
+                    let prev = pid_cwd_in_progress.insert(pid, PathBuf::from(&path));
+                    assert!(
+                        prev.is_none(),
+                        "pid_cwd_in_progress shouldn't be in-progress multiple times"
+                    );
                 }
-                None => {}
-            }
-
-            match Self::parse_chdir_resumed(&line) {
-                Some((pid, SyscallResult::Success)) => {
+                ParseLine::Chdir(ChdirParse::FinishedError { pid }) => {
+                    pid_cwd_in_progress.remove(&pid);
+                }
+                ParseLine::Chdir(ChdirParse::FinishedPreviousSuccessfully { pid }) => {
                     let path = pid_cwd_in_progress.remove(&pid);
                     if let Some(filepath) = path {
                         // FIXME: code duplication between interrupted and direct path
@@ -320,24 +343,18 @@ impl STraceSysTraceCommand {
                             "pid openat was resumed but no unfinished syscall was found"
                         ));
                     }
-                    continue;
                 }
-                Some((pid, SyscallResult::Failure)) => {
-                    pid_openat_in_progress.remove(&pid);
-                    continue;
-                }
-                None => {}
-            }
 
-            if let Some(CloneParse::FinishedSuccess {
-                parent_pid,
-                child_pid,
-            }) = Self::parse_clone(&line).or_else(|| Self::parse_clone_resumed(&line))
-            {
-                // Inherit working directory
-                if let Some(cwd) = pid_cwd.get(&parent_pid) {
-                    pid_cwd.insert(child_pid, cwd.clone());
+                ParseLine::Clone(CloneParse::FinishedSuccess {
+                    parent_pid,
+                    child_pid,
+                }) => {
+                    // Inherit working directory
+                    if let Some(cwd) = pid_cwd.get(&parent_pid) {
+                        pid_cwd.insert(child_pid, cwd.clone());
+                    }
                 }
+                ParseLine::Clone(_) => {}
             }
         }
 
@@ -397,11 +414,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("2892755"),
-                String::from("test_data/Fibonacci_Sequence.txt"),
-                SyscallState::Complete
-            ))
+            Some(OpenParse::FinishedSuccess {
+                pid: String::from("2892755"),
+                path: PathBuf::from("test_data/Fibonacci_Sequence.txt"),
+            })
         );
 
         let res = STraceSysTraceCommand::parse_openat(
@@ -409,11 +425,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("2892755"),
-                String::from("test_data/\"Fibonacci\"_Sequence.txt"),
-                SyscallState::Complete
-            ))
+            Some(OpenParse::FinishedSuccess {
+                pid: String::from("2892755"),
+                path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
+            })
         );
 
         let res = STraceSysTraceCommand::parse_openat(
@@ -421,11 +436,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("2892755"),
-                String::from("test_data/\"Fibonacci\"_Sequence.txt"),
-                SyscallState::Complete
-            ))
+            Some(OpenParse::FinishedSuccess {
+                pid: String::from("2892755"),
+                path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
+            })
         );
 
         let res = STraceSysTraceCommand::parse_openat(
@@ -434,11 +448,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("6503"),
-                String::from("/proc/self/maps"),
-                SyscallState::Complete
-            ))
+            Some(OpenParse::FinishedSuccess {
+                pid: String::from("6503"),
+                path: PathBuf::from("/proc/self/maps"),
+            })
         );
 
         let res = STraceSysTraceCommand::parse_openat(
@@ -447,11 +460,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("189531"),
-                String::from("README.md"),
-                SyscallState::Unfinished(String::from("189531"))
-            ))
+            Some(OpenParse::Unfinished {
+                pid: String::from("189531"),
+                path: PathBuf::from("README.md"),
+            })
         );
     }
 
@@ -460,11 +472,21 @@ mod tests {
         let res = STraceSysTraceCommand::parse_openat_resumed(
             r"189531 <... openat resumed>)            = 4",
         );
-        assert_eq!(res, Some((String::from("189531"), SyscallResult::Success)));
+        assert_eq!(
+            res,
+            Some(OpenParse::FinishedPreviousSuccessfully {
+                pid: String::from("189531")
+            })
+        );
         let res = STraceSysTraceCommand::parse_openat_resumed(
             r"189531 <... openat resumed>)            = -1 ENOENT (No such file or directory)",
         );
-        assert_eq!(res, Some((String::from("189531"), SyscallResult::Failure)));
+        assert_eq!(
+            res,
+            Some(OpenParse::FinishedError {
+                pid: String::from("189531")
+            })
+        );
     }
 
     #[test]
@@ -473,11 +495,10 @@ mod tests {
             STraceSysTraceCommand::parse_chdir(r#"152738 chdir("/home/mfenniak")          = 0"#);
         assert_eq!(
             res,
-            Some((
-                String::from("152738"),
-                String::from("/home/mfenniak"),
-                SyscallState::Complete
-            ))
+            Some(ChdirParse::FinishedSuccess {
+                pid: String::from("152738"),
+                path: PathBuf::from("/home/mfenniak")
+            })
         );
 
         let res = STraceSysTraceCommand::parse_chdir(
@@ -485,11 +506,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("152738"),
-                String::from("test_data/\"Fibonacci\"_Sequence.txt"),
-                SyscallState::Complete
-            ))
+            Some(ChdirParse::FinishedSuccess {
+                pid: String::from("152738"),
+                path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
+            })
         );
 
         let res = STraceSysTraceCommand::parse_chdir(
@@ -497,11 +517,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Some((
-                String::from("189532"),
-                String::from("/home/mfenniak/Dev"),
-                SyscallState::Unfinished(String::from("189532"))
-            ))
+            Some(ChdirParse::Unfinished {
+                pid: String::from("189532"),
+                path: PathBuf::from("/home/mfenniak/Dev"),
+            })
         );
 
         let res = STraceSysTraceCommand::parse_chdir(
@@ -515,11 +534,21 @@ mod tests {
         let res = STraceSysTraceCommand::parse_chdir_resumed(
             r"189532 <... chdir resumed>)             = 0",
         );
-        assert_eq!(res, Some((String::from("189532"), SyscallResult::Success)));
+        assert_eq!(
+            res,
+            Some(ChdirParse::FinishedPreviousSuccessfully {
+                pid: String::from("189532")
+            })
+        );
         let res = STraceSysTraceCommand::parse_chdir_resumed(
             r"189531 <... chdir resumed>)             = -1 ENOENT (No such file or directory)",
         );
-        assert_eq!(res, Some((String::from("189531"), SyscallResult::Failure)));
+        assert_eq!(
+            res,
+            Some(ChdirParse::FinishedError {
+                pid: String::from("189531")
+            })
+        );
     }
 
     #[test]
