@@ -412,8 +412,8 @@ mod tests {
 
     impl MockScm {
         fn get_commit(&self, commit_id: &String) -> Option<MockScmCommit> {
-            for commit in self.commits.iter() {
-                if self.get_commit_identifier(&commit) == *commit_id {
+            for commit in &self.commits {
+                if self.get_commit_identifier(commit) == *commit_id {
                     return Some(commit.clone());
                 }
             }
@@ -442,8 +442,8 @@ mod tests {
 
         fn get_commit_parents(&self, commit: &MockScmCommit) -> anyhow::Result<Vec<MockScmCommit>> {
             let mut retval = vec![];
-            for parent in commit.parents.iter() {
-                match self.get_commit(&parent) {
+            for parent in &commit.parents {
+                match self.get_commit(parent) {
                     Some(commit) => retval.push(commit),
                     None => return Err(anyhow::anyhow!("test error: no parent commit found")),
                 }
@@ -457,7 +457,7 @@ mod tests {
         ) -> anyhow::Result<Option<MockScmCommit>> {
             // best common ancestor will just be stored on the commits for mock testing; we'll just sanity check that the mock data isn't broken
             let bce: Option<String> = commits[0].best_common_ancestor.clone();
-            for commit in commits[1..].iter() {
+            for commit in &commits[1..] {
                 if commit.best_common_ancestor != bce {
                     return Err(anyhow::anyhow!("test error: best common ancestor mismatch"));
                 }

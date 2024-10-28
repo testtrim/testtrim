@@ -873,7 +873,6 @@ mod tests {
         ));
         assert!(res.is_ok());
         let res = res.unwrap();
-        println!("res: {res:?}");
         assert_eq!(res.len(), 5, "correct # of files read");
         assert!(res.contains(&PathBuf::from("../test_data/Factorial_Vec.txt")));
         assert!(res.contains(&PathBuf::from(

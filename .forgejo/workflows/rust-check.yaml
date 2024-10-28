@@ -26,6 +26,8 @@ jobs:
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
       - name: verify clippy warning-free
         run: nix develop .# --command cargo clippy -- -D warnings
+      - name: verify clippy on tests warning-free
+        run: nix develop .# --command cargo clippy --tests -- -D warnings
       - name: verify rust format correct
         run: nix develop .# --command cargo fmt --all -- --check
       - name: copyright checks

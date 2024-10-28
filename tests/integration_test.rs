@@ -57,7 +57,7 @@ fn git_clone() -> Result<()> {
     };
 
     let output = Command::new("git")
-        .args(&["clone", &repo_url])
+        .args(["clone", &repo_url])
         .output()
         .expect("Failed to execute cargo test command");
 
@@ -76,7 +76,7 @@ fn git_clone() -> Result<()> {
 
 fn git_checkout(commit: &str) -> Result<()> {
     let output = Command::new("git")
-        .args(&["checkout", commit])
+        .args(["checkout", commit])
         .output()
         .expect("Failed to execute cargo test command");
 
@@ -363,7 +363,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         )?
         .target_test_cases;
         assert_eq!(
-            all_test_cases.iter().count(),
+            all_test_cases.len(),
             commit_test_data.all_test_cases.len(),
             "unexpected count of all tests in {} commit",
             commit_test_data.test_commit,
@@ -385,7 +385,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         )?
         .target_test_cases;
         assert_eq!(
-            relevant_test_cases.iter().count(),
+            relevant_test_cases.len(),
             commit_test_data.relevant_test_cases.len(),
             "unexpected count of tests-to-run in {} commit",
             commit_test_data.test_commit,

@@ -458,11 +458,11 @@ mod tests {
     #[test]
     fn parse_openat_resumed() {
         let res = STraceSysTraceCommand::parse_openat_resumed(
-            r#"189531 <... openat resumed>)            = 4"#,
+            r"189531 <... openat resumed>)            = 4",
         );
         assert_eq!(res, Some((String::from("189531"), SyscallResult::Success)));
         let res = STraceSysTraceCommand::parse_openat_resumed(
-            r#"189531 <... openat resumed>)            = -1 ENOENT (No such file or directory)"#,
+            r"189531 <... openat resumed>)            = -1 ENOENT (No such file or directory)",
         );
         assert_eq!(res, Some((String::from("189531"), SyscallResult::Failure)));
     }
@@ -513,11 +513,11 @@ mod tests {
     #[test]
     fn parse_chdir_resumed() {
         let res = STraceSysTraceCommand::parse_chdir_resumed(
-            r#"189532 <... chdir resumed>)             = 0"#,
+            r"189532 <... chdir resumed>)             = 0",
         );
         assert_eq!(res, Some((String::from("189532"), SyscallResult::Success)));
         let res = STraceSysTraceCommand::parse_chdir_resumed(
-            r#"189531 <... chdir resumed>)             = -1 ENOENT (No such file or directory)"#,
+            r"189531 <... chdir resumed>)             = -1 ENOENT (No such file or directory)",
         );
         assert_eq!(res, Some((String::from("189531"), SyscallResult::Failure)));
     }
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn parse_clone() {
         let res = STraceSysTraceCommand::parse_clone(
-            r#"337651 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653"#,
+            r"337651 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653",
         );
         assert_eq!(
             res,
@@ -536,7 +536,7 @@ mod tests {
         );
 
         let res = STraceSysTraceCommand::parse_clone(
-            r#"416671 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7fcdb7d7f990, parent_tid=0x7fcdb7d7f990, exit_signal=0, stack=0x7fcdb7b7f000, stack_size=0x1fff00, tls=0x7fcdb7d7f6c0} => {parent_tid=[416676]}, 88) = 416676"#,
+            r"416671 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7fcdb7d7f990, parent_tid=0x7fcdb7d7f990, exit_signal=0, stack=0x7fcdb7b7f000, stack_size=0x1fff00, tls=0x7fcdb7d7f6c0} => {parent_tid=[416676]}, 88) = 416676",
         );
         assert_eq!(
             res,
@@ -547,12 +547,12 @@ mod tests {
         );
 
         let res = STraceSysTraceCommand::parse_clone(
-            r#"337651 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = -1"#,
+            r"337651 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = -1",
         );
         assert_eq!(res, Some(CloneParse::FinishedError));
 
         let res = STraceSysTraceCommand::parse_clone(
-            r#"337651 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD <unfinished ...>"#,
+            r"337651 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD <unfinished ...>",
         );
         assert_eq!(
             res,
@@ -562,7 +562,7 @@ mod tests {
         );
 
         let res = STraceSysTraceCommand::parse_clone(
-            r#"416676 clone3({flags=CLONE_VM|CLONE_VFORK|CLONE_CLEAR_SIGHAND, exit_signal=SIGCHLD, stack=0x7fcdb7b73000, stack_size=0x9000}, 88 <unfinished ...>"#,
+            r"416676 clone3({flags=CLONE_VM|CLONE_VFORK|CLONE_CLEAR_SIGHAND, exit_signal=SIGCHLD, stack=0x7fcdb7b73000, stack_size=0x9000}, 88 <unfinished ...>",
         );
         assert_eq!(
             res,
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn parse_clone_resumed() {
         let res = STraceSysTraceCommand::parse_clone_resumed(
-            r#"337651 <... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654"#,
+            r"337651 <... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654",
         );
         assert_eq!(
             res,
@@ -591,7 +591,7 @@ mod tests {
         );
 
         let res = STraceSysTraceCommand::parse_clone_resumed(
-            r#"416676 <... clone3 resumed>)            = 416677"#,
+            r"416676 <... clone3 resumed>)            = 416677",
         );
         assert_eq!(
             res,
@@ -602,7 +602,7 @@ mod tests {
         );
 
         let res = STraceSysTraceCommand::parse_clone_resumed(
-            r#"337651 <... clone resumed>, child_tidptr=0x0) = -1 EAGAIN (Some text here)"#,
+            r"337651 <... clone resumed>, child_tidptr=0x0) = -1 EAGAIN (Some text here)",
         );
         assert_eq!(res, Some(CloneParse::FinishedError));
 

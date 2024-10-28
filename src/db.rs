@@ -825,7 +825,7 @@ mod tests {
         let result = db.has_any_coverage_data();
         assert!(result.is_ok());
         let result = result.unwrap();
-        assert_eq!(result, false);
+        assert!(!result);
     }
 
     #[test]
@@ -851,7 +851,7 @@ mod tests {
         let result = db.has_any_coverage_data();
         assert!(result.is_ok());
         let result = result.unwrap();
-        assert_eq!(result, true);
+        assert!(result);
     }
 
     #[test]

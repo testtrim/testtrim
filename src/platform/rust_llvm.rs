@@ -181,19 +181,19 @@ mod tests {
     use super::*;
     use std::env::current_exe;
 
-    /// The unit test rust_llvm::tests::load_binary works by loading this executable and verifying that we can read Rust
-    /// binary coverage data with the rust_llvm module.  For this to work, the binary has to be compiled with
-    /// RUSTFLAGS="-C instrument-coverage".  As a side-effect of that, running testtrim itself will output profiling
-    /// data to the path $LLVM_PROFILE_FILE, which defaults to "default_%m_%p.profraw" if not provided.
-    ///
-    /// This causes any run of testtrim which takes place inside a project directory to create garbage which makes it
-    /// dirty, which then affects the testtrim's detection of whether the project is dirty.
-    ///
-    /// I attempted a few workarounds; (a) setting LLVM_PROFILE_FILE automatically in main.rs, no effect; (b) disabling
-    /// the RUSTFLAGS in .cargo/config.toml and Cargo.toml conditionally but there's no supported way; (c) a Rust build
-    /// script but there's no supported way.
-    ///
-    /// Well, since this test works currently, the current workaround is to leave it ignored.
+    // The unit test rust_llvm::tests::load_binary works by loading this executable and verifying that we can read Rust
+    // binary coverage data with the rust_llvm module.  For this to work, the binary has to be compiled with
+    // RUSTFLAGS="-C instrument-coverage".  As a side-effect of that, running testtrim itself will output profiling data
+    // to the path $LLVM_PROFILE_FILE, which defaults to "default_%m_%p.profraw" if not provided.
+    //
+    // This causes any run of testtrim which takes place inside a project directory to create garbage which makes it
+    // dirty, which then affects the testtrim's detection of whether the project is dirty.
+    //
+    // I attempted a few workarounds; (a) setting LLVM_PROFILE_FILE automatically in main.rs, no effect; (b) disabling
+    // the RUSTFLAGS in .cargo/config.toml and Cargo.toml conditionally but there's no supported way; (c) a Rust build
+    // script but there's no supported way.
+    //
+    // Well, since this test works currently, the current workaround is to leave it ignored.
     #[test]
     #[ignore = "needs testtrim to be build with instrument-coverage"]
     fn load_binary() {
@@ -202,8 +202,8 @@ mod tests {
             .expect("failed to load binary");
     }
 
-    /// This is a sentinel test that doesn't reach outside of this module, and should only have this file (eg.
-    /// rust_llvm.rs) as a dependency for execution.
+    // This is a sentinel test that doesn't reach outside of this module, and should only have this file (eg.
+    // rust_llvm.rs) as a dependency for execution.
     #[test]
     fn sentinel_local_file() {
         let x = 1 + 1;
