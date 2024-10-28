@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::path::{Component, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -125,7 +125,17 @@ impl TestDiscovery<RustConcreteTestIdentifier, RustTestIdentifier> for RustTestD
 
 lazy_static! {
     static ref include_regex: Regex = Regex::new(
-        r#"[\s=](include|include_str|include_bytes)!\(\s*"(?<path>(?:[^"\\]|\\.)*)"\s*\)"#
+        r#"(?xs)
+        [\s=]
+        (include|include_str|include_bytes)!
+        \(
+            (?:[\s\n]*) # optional whitespace or linebreak
+            "
+            (?<path>(?:[^"\\]|\\.)*)
+            "
+            (?:[\s\n]*) # optional whitespace or linebreak
+        *\)
+        "#
     )
     .unwrap();
 }
@@ -555,17 +565,13 @@ impl RustTestPlatform {
         let mut result = HashSet::new();
 
         let file = File::open(file)?;
-        let lines = BufReader::new(file).lines();
+        let content = io::read_to_string(BufReader::new(file))?;
 
-        for line in lines {
-            let line = line?;
-
-            if let Some(cap) = include_regex.captures(&line) {
-                let path = String::from(&cap["path"])
-                    // Un-escape any escaped double-quotes
-                    .replace("\\\"", "\"");
-                result.insert(PathBuf::from(path));
-            }
+        for cap in include_regex.captures_iter(&content) {
+            let path = String::from(&cap["path"])
+                // Un-escape any escaped double-quotes
+                .replace("\\\"", "\"");
+            result.insert(PathBuf::from(path));
         }
 
         Ok(result)
@@ -867,8 +873,12 @@ mod tests {
         ));
         assert!(res.is_ok());
         let res = res.unwrap();
-        assert_eq!(res.len(), 4, "correct # of files read");
+        println!("res: {res:?}");
+        assert_eq!(res.len(), 5, "correct # of files read");
         assert!(res.contains(&PathBuf::from("../test_data/Factorial_Vec.txt")));
+        assert!(res.contains(&PathBuf::from(
+            "/this-is-not-a-file-path-that-really-exists-but-it-is-quite-long-wouldnt-you-say?"
+        )));
         assert!(res.contains(&PathBuf::from("abc.txt ")));
         assert!(res.contains(&PathBuf::from("file\"with\"quotes.txt")));
         assert!(res.contains(&PathBuf::from("/proc/cpuinfo")));

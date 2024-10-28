@@ -16,6 +16,10 @@ mod tests {
     #[test]
     fn test_factorial_include() {
         let vec = include!("../test_data/Factorial_Vec.txt");
+        // intentionally stupid to cause include! to break into multiple lines...
+        let vec2 = include!(
+            "/this-is-not-a-file-path-that-really-exists-but-it-is-quite-long-wouldnt-you-say?"
+        );
         let garbage = include_str!("abc.txt ");
         let this_isnt_real_code = include_bytes!("file\"with\"quotes.txt");
         let abs_path = include_bytes!("/proc/cpuinfo");
