@@ -433,8 +433,11 @@ impl RustTestPlatform {
         let repo_root = env::current_dir()?;
 
         for path in trace.get_open_paths() {
-            if path.is_relative() {
-                trace!("found test {test_case:?} accessed local file {path:?}");
+            if path.is_relative() || path.starts_with(&repo_root) {
+                debug!(
+                    "found test {} accessed local file {path:?}",
+                    test_case.test_identifier
+                );
 
                 let target_path = Self::normalize_path(
                     path,
