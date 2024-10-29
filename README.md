@@ -14,6 +14,7 @@ I've also published an introductory video:
 
 [Deep-dive Introduction Video, 37 minutes](https://youtu.be/YQKc58dTR1M)
 
+
 # testtrim's Equation
 
 ## Core
@@ -32,7 +33,7 @@ This is the core concept behind [testtrim](https://codeberg.org/testtrim/testtri
 
 Some tests might access data files while they're running, in order to have a file that contains the expected input or output from a test.  In order to accomodate this, testtrim runs all the tests with syscall tracing (only supported on Linux presently) in order to detect which local files are needed by which tests.  In the future if those local files change, then the tests that read then will be targeted for re-execution.
 
-Some tests might embed local files during their compile; in Rust, using the `include_str!`, `include_bytes!`, or `include!` compiler macros.  Those aren't supported yet, but will be soon (#26).
+Some tests might embed local files during their compile; in Rust, using the `include_str!`, `include_bytes!`, or `include!` compiler macros.  testtrim inspects the code to find those include macros, and in the future if those local files are modified, the appropriate tests are targeted for re-execution.
 
 ### Network Access
 
@@ -76,6 +77,37 @@ The same evaluation was performed on [ripgrep](https://github.com/BurntSushi/rip
 | P90 Tests to Run per Commit:         | **12.7%** |
 
 These results are also great, but suffer from some of the same reasons listed above for why it may not be generalizable to every project
+
+
+# Known Issues
+
+## Limited Scope
+
+I'd love for testtrim to have a larger scope of applicability.
+
+Scope today:
+- Works for Rust applications
+
+Scope planned for the future:
+- Integrate with third-party test runners, rather than owning the entire test execution process
+- Coverage database (allowing partial test runs) is only available on the local workstation and [can't be shared](https://codeberg.org/testtrim/testtrim/issues/4) or [accessed as a service](https://codeberg.org/testtrim/testtrim/issues/5)
+- More platforms (eg. JavaScript, Java, Python, C#, etc.)
+- Track changes to external dependencies that are [accessed over a network](https://codeberg.org/testtrim/testtrim/issues/27), and allow running only relevant tests when they change
+- Perform more granular [function-level tracing](https://codeberg.org/testtrim/testtrim/issues/16) to reduce targeted test suite
+
+## Known Known Issues
+
+Significant problems that are known to exist within the scope described above, and should be known to any users:
+
+- testtrim can be fooled [when a `pub const` value is modified](https://codeberg.org/testtrim/testtrim/issues/52), and target fewer tests than required.
+- testtrim isn't published as a released tool and must be checked out and built from source.
+
+## Known Unknown Issues
+
+Unknowns within the scope described above, which should be considered with skepticism for the moment:
+
+- testtrim hasn't been [tested with macros](https://codeberg.org/testtrim/testtrim/issues/40) to ensure that changes that touch them are appropriately tested.  It's probably fine though.
+
 
 # How to use?
 
