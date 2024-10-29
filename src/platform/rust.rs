@@ -54,7 +54,11 @@ pub struct RustTestIdentifier {
 }
 
 impl TestIdentifier for RustTestIdentifier {}
-impl TestIdentifierCore for RustTestIdentifier {}
+impl TestIdentifierCore for RustTestIdentifier {
+    fn lightly_unique_name(&self) -> String {
+        self.test_name.clone()
+    }
+}
 
 impl fmt::Display for RustTestIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

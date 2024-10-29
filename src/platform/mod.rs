@@ -28,7 +28,16 @@ pub trait TestIdentifier: Eq + Hash + Clone + Debug {}
 
 /// An alternate trait of `TestIdentifier` which can be used with dynamic dispatch.  Test identifiers must implement
 /// both traits.
-pub trait TestIdentifierCore: Debug + Send + Sync + Display {}
+pub trait TestIdentifierCore: Debug + Send + Sync + Display {
+    /// Returns the name of this test.
+    ///
+    /// This should only be used in testtrim's integration tests -- for runtime execution the identity of the
+    /// `TestIdentifier` *is* the identity of the test, which might contain multiple data fields and dimensions to
+    /// uniquely identify the test.  But for testtrim's own testing, a "lightly unique" name is handy.
+    ///
+    /// `#[cfg(test)]` would be ideal but can't be accessed by integration tests.
+    fn lightly_unique_name(&self) -> String;
+}
 
 /// Represents a machine-dependent reference to a test.
 ///

@@ -14,7 +14,7 @@
 pub mod cmd;
 mod commit_coverage_data;
 mod db;
-mod errors;
+pub mod errors;
 mod full_coverage_data;
 pub mod platform;
 mod schema;
