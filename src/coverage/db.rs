@@ -31,12 +31,6 @@ use super::CoverageDatabase;
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 const DEFAULT_PROJECT_ID: Uuid = uuid!("b4574300-9d65-4099-8383-1e1d9f69254e");
 
-#[derive(diesel::MultiConnection)]
-enum DbConnection {
-    Sqlite(SqliteConnection),
-    Pg(PgConnection),
-}
-
 struct DbLogger;
 
 impl Instrumentation for DbLogger {
