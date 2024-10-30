@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
+use crate::coverage::db::new_sqlite_from_default_path;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -107,7 +108,7 @@ where
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
-            &mut (DieselCoverageDatabase::<TI, CI>::new_sqlite_from_default_path()),
+            &mut (new_sqlite_from_default_path()),
         )? {
         info!(
             "relevant test cases will be computed base upon commit {:?}",
