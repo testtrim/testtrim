@@ -27,14 +27,14 @@ use threadpool::ThreadPool;
 use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
-use crate::commit_coverage_data::{
+use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
     HeuristicCoverage,
 };
+use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
-use crate::full_coverage_data::FullCoverageData;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::{sys_trace_command, trace::Trace};
 
@@ -661,10 +661,7 @@ impl
         eval_target_changed_files: &std::collections::HashSet<PathBuf>,
         scm: &MyScm,
         ancestor_commit: &Commit,
-        coverage_data: &crate::full_coverage_data::FullCoverageData<
-            RustTestIdentifier,
-            RustCoverageIdentifier,
-        >,
+        coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
     ) -> anyhow::Result<PlatformSpecificRelevantTestCaseData<RustTestIdentifier>> {
         let mut test_cases = HashSet::new();
 
@@ -834,7 +831,7 @@ mod tests {
     use std::{collections::HashSet, ffi::OsStr, path::PathBuf};
 
     use crate::{
-        commit_coverage_data::CommitCoverageData,
+        coverage::commit_coverage_data::CommitCoverageData,
         platform::{rust::RustTestPlatform, TestPlatform},
     };
 

@@ -11,9 +11,9 @@ use std::{
 };
 
 use crate::{
-    commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
+    coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
+    coverage::full_coverage_data::FullCoverageData,
     errors::RunTestsErrors,
-    full_coverage_data::FullCoverageData,
     scm::{Scm, ScmCommit},
 };
 
