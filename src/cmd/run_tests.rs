@@ -12,8 +12,9 @@ use tracing::info_span;
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
-    commit_coverage_data::CoverageIdentifier,
-    db::{CoverageDatabase, DieselCoverageDatabase},
+    coverage::commit_coverage_data::CoverageIdentifier,
+    coverage::db::DieselCoverageDatabase,
+    coverage::CoverageDatabase,
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,

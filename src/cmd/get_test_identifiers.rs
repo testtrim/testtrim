@@ -14,9 +14,10 @@ use tracing::instrument;
 
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
-    commit_coverage_data::CoverageIdentifier,
-    db::{CoverageDatabase, DieselCoverageDatabase},
-    full_coverage_data::FullCoverageData,
+    coverage::{
+        commit_coverage_data::CoverageIdentifier, db::DieselCoverageDatabase,
+        full_coverage_data::FullCoverageData, CoverageDatabase,
+    },
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
     },
@@ -341,9 +342,9 @@ mod tests {
             compute_relevant_test_cases, find_ancestor_commit_with_coverage_data,
             AncestorSearchMode,
         },
-        commit_coverage_data::{CommitCoverageData, FileCoverage},
-        db::CoverageDatabase,
-        full_coverage_data::FullCoverageData,
+        coverage::commit_coverage_data::{CommitCoverageData, FileCoverage},
+        coverage::full_coverage_data::FullCoverageData,
+        coverage::CoverageDatabase,
         platform::rust::{
             RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary, RustTestIdentifier,
         },

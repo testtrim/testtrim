@@ -8,7 +8,9 @@ use std::{
 };
 
 use crate::{
-    commit_coverage_data::{CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage},
+    coverage::commit_coverage_data::{
+        CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
+    },
     platform::TestIdentifier,
 };
 

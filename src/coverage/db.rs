@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::{
-    commit_coverage_data::{
+    coverage::commit_coverage_data::{
         CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
     },
-    full_coverage_data::FullCoverageData,
+    coverage::full_coverage_data::FullCoverageData,
     platform::TestIdentifier,
 };
 
@@ -26,21 +26,15 @@ use std::{
 use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::{uuid, Uuid};
 
+use super::CoverageDatabase;
+
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 const DEFAULT_PROJECT_ID: Uuid = uuid!("b4574300-9d65-4099-8383-1e1d9f69254e");
 
-pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
-    fn save_coverage_data(
-        &mut self,
-        coverage_data: &CommitCoverageData<TI, CI>,
-        // FIXME: should take an `impl ScmCommit`?
-        commit_sha: &str,
-        // FIXME: should take an `impl ScmCommit`?
-        ancestor_commit_sha: Option<&str>,
-    ) -> Result<()>;
-    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>>;
-    fn has_any_coverage_data(&mut self) -> Result<bool>;
-    fn clear_project_data(&mut self) -> Result<()>;
+#[derive(diesel::MultiConnection)]
+enum DbConnection {
+    Sqlite(SqliteConnection),
+    Pg(PgConnection),
 }
 
 struct DbLogger;
@@ -790,7 +784,7 @@ impl<
 mod tests {
     use super::*;
     use crate::{
-        commit_coverage_data::{CommitCoverageData, HeuristicCoverage},
+        coverage::commit_coverage_data::{CommitCoverageData, HeuristicCoverage},
         platform::rust::{RustCoverageIdentifier, RustExternalDependency, RustTestIdentifier},
     };
     use lazy_static::lazy_static;

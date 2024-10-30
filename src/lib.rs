@@ -12,10 +12,8 @@
 #![allow(clippy::too_many_lines)] // probably the right thing to warn on, but somewhat arbitrary
 
 pub mod cmd;
-mod commit_coverage_data;
-mod db;
+mod coverage;
 pub mod errors;
-mod full_coverage_data;
 pub mod platform;
 mod schema;
 pub mod scm;

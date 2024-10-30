@@ -15,8 +15,9 @@ use serde::Serialize;
 
 use crate::{
     cmd::run_tests::run_tests,
-    commit_coverage_data::CoverageIdentifier,
-    db::{CoverageDatabase, DieselCoverageDatabase},
+    coverage::commit_coverage_data::CoverageIdentifier,
+    coverage::db::DieselCoverageDatabase,
+    coverage::CoverageDatabase,
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
