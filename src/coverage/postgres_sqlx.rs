@@ -7,7 +7,7 @@ use async_std::task;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres, Transaction};
-use std::{collections::HashMap, env, marker::PhantomData, path::PathBuf};
+use std::{collections::HashMap, marker::PhantomData, path::PathBuf};
 use uuid::{uuid, Uuid};
 
 use crate::platform::TestIdentifier;
@@ -23,6 +23,7 @@ use super::{
 const DEFAULT_PROJECT_ID: Uuid = uuid!("b4574300-9d65-4099-8383-1e1d9f69254e");
 
 pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
+    database_url: String,
     connection: Option<Pool<Postgres>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
@@ -36,8 +37,9 @@ where
     TI: TestIdentifier + Serialize + DeserializeOwned,
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
-    pub fn new() -> PostgresCoverageDatabase<TI, CI> {
+    pub fn new(database_url: String) -> PostgresCoverageDatabase<TI, CI> {
         PostgresCoverageDatabase {
+            database_url,
             connection: None,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
@@ -47,12 +49,10 @@ where
     fn get_pool(&mut self) -> Result<&Pool<Postgres>> {
         // Check if the connection already exists
         if self.connection.is_none() {
-            let db_url = env::var("DATABASE_URL")?;
-
             let pool = task::block_on(async {
                 PgPoolOptions::new()
                     .max_connections(5)
-                    .connect(&db_url)
+                    .connect(&self.database_url)
                     .await
             })?;
             task::block_on(async { sqlx::migrate!("./db/postgres/migrations").run(&pool).await })?;
@@ -963,7 +963,7 @@ where
 mod tests {
     use async_std::task;
     use lazy_static::lazy_static;
-    use std::sync::Mutex;
+    use std::{env, sync::Mutex};
 
     use crate::{
         coverage::{
@@ -980,7 +980,7 @@ mod tests {
         static ref DB_MUTEX: Mutex<i32> = Mutex::new(0);
     }
     fn create_test_db() -> PostgresCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> {
-        PostgresCoverageDatabase::new()
+        PostgresCoverageDatabase::new(env::var("TESTTRIM_DATABASE_URL").unwrap())
     }
 
     fn cleanup() {

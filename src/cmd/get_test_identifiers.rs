@@ -108,7 +108,7 @@ where
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
-            create_db::<TI, CI>(),
+            create_db::<TI, CI>()?,
         )? {
         info!(
             "relevant test cases will be computed base upon commit {:?}",

@@ -4,7 +4,7 @@
 
 use std::env;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
 use full_coverage_data::FullCoverageData;
 use postgres_sqlx::PostgresCoverageDatabase;
@@ -34,15 +34,24 @@ pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     fn clear_project_data(&mut self) -> Result<()>;
 }
 
-pub fn create_db<TI, CI>() -> Box<dyn CoverageDatabase<TI, CI>>
+pub fn create_db<TI, CI>() -> Result<Box<dyn CoverageDatabase<TI, CI>>>
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
 {
-    // FIXME: this probably isn't the right strategy, but for now it causes both of the PG & SQLite code paths to avoid
-    // compiler errors about one of them not being referenced, so that's the goal right now
-    match env::var("DATABASE_URL") {
-        Ok(_db_url) => Box::new(PostgresCoverageDatabase::new()),
-        Err(_) => Box::new(DieselCoverageDatabase::new_sqlite_from_default_path()),
+    match env::var("TESTTRIM_DATABASE_URL") {
+        Ok(db_url) if db_url.starts_with("postgres") => {
+            Ok(Box::new(PostgresCoverageDatabase::new(db_url)))
+        }
+        Ok(db_url) if db_url.starts_with("file://") => {
+            Ok(Box::new(DieselCoverageDatabase::new_sqlite(db_url)))
+        }
+        Ok(db_url) if db_url.starts_with(":memory:") => {
+            Ok(Box::new(DieselCoverageDatabase::new_sqlite(db_url)))
+        }
+        Ok(db_url) => Err(anyhow!("unsupported database url: {db_url}")),
+        Err(_) => Ok(Box::new(
+            DieselCoverageDatabase::new_sqlite_from_default_url()?,
+        )),
     }
 }

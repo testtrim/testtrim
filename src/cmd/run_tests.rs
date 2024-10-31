@@ -173,7 +173,7 @@ where
             .map(|c| scm.get_commit_identifier(c));
 
         info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
-            create_db().save_coverage_data(
+            create_db()?.save_coverage_data(
                 &coverage_data,
                 &commit_sha,
                 ancestor_commit_sha.as_deref(),

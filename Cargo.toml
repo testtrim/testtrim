@@ -33,3 +33,6 @@ threadpool = "*"
 time = "*"
 tracing = "*"
 uuid = { version = "*", features = ["v4"] }
+
+[profile.dev.package.sqlx-macros]
+opt-level = 3

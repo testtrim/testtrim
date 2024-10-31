@@ -20,6 +20,7 @@ use log::trace;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::HashMap,
+    env, fs, io,
     marker::PhantomData,
     path::{Path, PathBuf},
 };
@@ -51,21 +52,33 @@ impl<
         CI: CoverageIdentifier + Serialize + DeserializeOwned,
     > DieselCoverageDatabase<TI, CI>
 {
-    pub fn new_sqlite_from_default_path() -> DieselCoverageDatabase<TI, CI> {
-        // FIXME: hard-coded... ideally this could be overriden by CLI and ENV var and use different DBs, but this is a stopgap
-        DieselCoverageDatabase::new_sqlite(
-            // FIXME: ~/testtrim.db is clearly a bad place
-            &Path::join(
-                Path::new(&std::env::var_os("HOME").expect("HOME env var")),
-                "testtrim.db",
-            )
-            .to_string_lossy(),
-        )
+    pub fn new_sqlite_from_default_url() -> Result<DieselCoverageDatabase<TI, CI>> {
+        let target = match env::var("XDG_CACHE_HOME") {
+            Ok(xdg) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
+            Err(_) => Path::new(&env::var("HOME")?)
+                .join(".cache")
+                .join("testtrim")
+                .join("testtrim.db"),
+        };
+
+        fs::create_dir_all(target.parent().unwrap())
+            .or_else(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .context("Failed to create coverage directory")?;
+
+        Ok(DieselCoverageDatabase::new_sqlite(String::from(
+            target.to_string_lossy(),
+        )))
     }
 
-    pub fn new_sqlite(path: &str) -> DieselCoverageDatabase<TI, CI> {
+    pub fn new_sqlite(database_url: String) -> DieselCoverageDatabase<TI, CI> {
         DieselCoverageDatabase {
-            database_url: String::from(path),
+            database_url,
             connection: None,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
@@ -785,7 +798,7 @@ mod tests {
     #[test]
     fn has_any_coverage_data_false() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::has_any_coverage_data_false(db);
     }
@@ -793,7 +806,7 @@ mod tests {
     #[test]
     fn save_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::save_empty(db);
     }
@@ -801,7 +814,7 @@ mod tests {
     #[test]
     fn has_any_coverage_data_true() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::has_any_coverage_data_true(db);
     }
@@ -809,7 +822,7 @@ mod tests {
     #[test]
     fn load_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::load_empty(db);
     }
@@ -820,7 +833,7 @@ mod tests {
 
         let mut db =
             DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-                ":memory:",
+                String::from(":memory:"),
             );
 
         let saved_data = CommitCoverageData::new();
@@ -871,7 +884,7 @@ mod tests {
 
     #[test]
     fn save_and_load_no_ancestor() {
-        let db = DieselCoverageDatabase::new_sqlite(":memory:");
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::save_and_load_no_ancestor(db);
     }
 
@@ -879,7 +892,7 @@ mod tests {
     #[test]
     fn save_and_load_new_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::save_and_load_new_case_in_child(db);
     }
@@ -888,7 +901,7 @@ mod tests {
     #[test]
     fn save_and_load_replacement_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::save_and_load_replacement_case_in_child(db);
     }
@@ -897,7 +910,7 @@ mod tests {
     #[test]
     fn save_and_load_removed_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::save_and_load_removed_case_in_child(db);
     }
@@ -906,7 +919,7 @@ mod tests {
     #[test]
     fn remove_file_references_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            ":memory:",
+            String::from(":memory:"),
         );
         db_tests::remove_file_references_in_child(db);
     }

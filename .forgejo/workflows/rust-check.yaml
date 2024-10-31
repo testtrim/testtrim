@@ -21,6 +21,7 @@ jobs:
 
     env:
       DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
+      TESTTRIM_DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
 
     steps:
       - uses: actions/checkout@v3

@@ -152,7 +152,7 @@ Oh, well, I'm not quite sure I'd recommend that right now.  But it could be fun 
 
     Hopefully you'll see the output "relevant test cases" which indicates how many tests were relevant for the change you made.
 
-- Note that testtrim will either pollute your home directory with `~/testtrim.db` (which grows quite large, quite quickly), or uses a PostgreSQL database defined at the environment variable `DATABASE_URL` (which will also grow quite large, quite quickly) to store commit coverage maps.
+- Note that testtrim will by-default store coverage data in `$XDG_CACHE_HOME/testtrim/testtrim.db`, or `$HOME/.cache` if `$XDG_CACHE_HOME` is undefined; or uses a PostgreSQL database defined at the environment variable `TESTTRIM_DATABASE_URL`.  This data allows testtrim to make determinations on what tests need to be executed for future changes.
 
 
 # Development
@@ -161,9 +161,10 @@ testtrim uses [direnv](https://direnv.net/) so that you can just drop into the t
 
 The development dependencies are provided by a [Nix shell](https://nix.dev/), which requires the Nix package manager to be installed.  The Nix shell then provides the correct version of all development tools, eg. rustc, cargo, etc.
 
-testtrim's PostgreSQL tests require a functional PostgreSQL database to be available, referenced at the environment variable `DATABASE_URL`.  In order to keep this available at all times while working on the project, you can define it in a `.localenvrc` file which would not be checked in, and would be local to your workspace.  For example:
+testtrim's PostgreSQL tests require a functional PostgreSQL database to be available.  Awkwardly, this variable is referenced during build-time as `DATABASE_URL` (for sqlx to compile `query!` macros), but then it is referenced at runtime as `TESTTRIM_DATABASE_URL` so that it doesn't conflict with any usage of `DATABASE_URL` in a target project.  In order to keep this available at all times while working on the project, you can define it in a `.localenvrc` file which would not be checked in, and would be local to your workspace.  For example:
 
 ```bash
 $ cat .localenvrc
 export DATABASE_URL="postgres://user:password@localhost/database"
+export TESTTRIM_DATABASE_URL="postgres://user:password@localhost/database"
 ```
