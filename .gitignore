@@ -9,3 +9,4 @@
 *.lcov
 output.txt
 test.db
+.localenvrc

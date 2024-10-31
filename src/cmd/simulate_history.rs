@@ -15,9 +15,7 @@ use serde::Serialize;
 
 use crate::{
     cmd::run_tests::run_tests,
-    coverage::commit_coverage_data::CoverageIdentifier,
-    coverage::db::DieselCoverageDatabase,
-    coverage::CoverageDatabase,
+    coverage::{commit_coverage_data::CoverageIdentifier, create_db},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
@@ -114,14 +112,14 @@ fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI, CI, TD, CTI>,
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
-    (DieselCoverageDatabase::<TI, CI>::new_sqlite_from_default_path()).clear_project_data()?;
+    create_db::<TI, CI>().clear_project_data()?;
 
     // Use git log -> get the target commits from earliest to latest.  When we hit a merge branch, we'll go up each
     // parent's path until we've found enough commits to meet the requested test count.  This might not reach a common
@@ -182,8 +180,8 @@ fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI, CI, TD, CTI>,

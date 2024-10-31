@@ -12,11 +12,12 @@ use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
+use crate::coverage::create_db;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
-        commit_coverage_data::CoverageIdentifier, db::DieselCoverageDatabase,
-        full_coverage_data::FullCoverageData, CoverageDatabase,
+        commit_coverage_data::CoverageIdentifier, full_coverage_data::FullCoverageData,
+        CoverageDatabase,
     },
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
@@ -82,8 +83,8 @@ pub fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI, CI, TD, CTI>,
@@ -107,7 +108,7 @@ where
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
-            &mut (DieselCoverageDatabase::<TI, CI>::new_sqlite_from_default_path()),
+            create_db::<TI, CI>(),
         )? {
         info!(
             "relevant test cases will be computed base upon commit {:?}",
@@ -172,7 +173,7 @@ fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
-    coverage_db: &mut impl CoverageDatabase<TI, CI>,
+    mut coverage_db: Box<dyn CoverageDatabase<TI, CI>>,
 ) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
 where
     Commit: ScmCommit,
@@ -544,9 +545,9 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            &mut MockCoverageDatabase {
+            Box::new(MockCoverageDatabase {
                 commit_data: HashMap::new(),
-            },
+            }),
         );
 
         assert!(result.is_ok());
@@ -577,9 +578,9 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            &mut MockCoverageDatabase {
+            Box::new(MockCoverageDatabase {
                 commit_data: HashMap::from([(String::from("c2"), previous_coverage_data)]),
-            },
+            }),
         );
 
         assert!(result.is_ok());
@@ -636,12 +637,12 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            &mut MockCoverageDatabase {
+            Box::new(MockCoverageDatabase {
                 commit_data: HashMap::from([
                     (String::from("branch-a"), branch_coverage_data),
                     (String::from("ancestor"), ancestor_coverage_data),
                 ]),
-            },
+            }),
         );
 
         assert!(result.is_ok());

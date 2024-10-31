@@ -9,6 +9,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "*"
+async-std = "*"
 cargo-lock = "*"
 clap = { version = "*", features = ["derive"] }
 clap-verbosity-flag = "*"
@@ -25,6 +26,7 @@ regex = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 simplelog = "*"
+sqlx = { version = "*", features = ["runtime-async-std", "postgres", "uuid", "json", "time", "migrate"] }
 tempdir = "*"
 thiserror = "*"
 threadpool = "*"

@@ -49,13 +49,18 @@
             reuse
 
             strace
+
+            sqlx-cli
+
+            # Can locally run the Forgejo action for quicker dev cycles:
+            # act --container-daemon-socket unix:///run/podman/podman.sock -W ./.forgejo/workflows -P docker=node:20-bullseye
+            act
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
 
           shellHook = ''
             export RUST_BACKTRACE=1
-            export DATABASE_URL=file:test.db
           '';
         };
     });

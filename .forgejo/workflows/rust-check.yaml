@@ -11,15 +11,31 @@ jobs:
     runs-on: docker
     container:
       options: --volume nix-forgejo-cache:/nix
+
+    services:
+      pgsql:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testtrim
+          POSTGRES_PASSWORD: testtrim
+
+    env:
+      DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
+
     steps:
       - uses: actions/checkout@v3
-      - run: apt-get update && apt-get install -y sudo awscli # install-nix-actions requires `sudo`...
+      - run: apt-get update && apt-get install -y sudo awscli postgresql-client # install-nix-actions requires `sudo`...
+      - name: verify pgsql service is available
+        run: psql $DATABASE_URL -c "SELECT 1"
       - uses: https://github.com/cachix/install-nix-action@v22
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
       - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
-      - run: nix develop .# --command cargo build
+      - name: sqlx migrate
+        run: nix develop .# --command sqlx migrate run --source ./db/postgres/migrations
+      - name: cargo build
+        run: nix develop .# --command cargo build
       - name: run tests
         run: nix develop .# --command cargo test
         env:

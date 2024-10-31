@@ -12,9 +12,7 @@ use tracing::info_span;
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
-    coverage::commit_coverage_data::CoverageIdentifier,
-    coverage::db::DieselCoverageDatabase,
-    coverage::CoverageDatabase,
+    coverage::{commit_coverage_data::CoverageIdentifier, create_db},
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
@@ -114,8 +112,8 @@ pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI, CI, TD, CTI>,
@@ -175,7 +173,7 @@ where
             .map(|c| scm.get_commit_identifier(c));
 
         info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
-            DieselCoverageDatabase::new_sqlite_from_default_path().save_coverage_data(
+            create_db().save_coverage_data(
                 &coverage_data,
                 &commit_sha,
                 ancestor_commit_sha.as_deref(),
