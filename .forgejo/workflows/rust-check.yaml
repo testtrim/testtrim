@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v3
       - run: apt-get update && apt-get install -y sudo awscli postgresql-client # install-nix-actions requires `sudo`...
       - name: verify pgsql service is available
-        run: run: timeout 30 bash -c 'while ! psql $DATABASE_URL -c "SELECT 1"; do sleep 1; done'
+        run: timeout 30 bash -c 'while ! psql $DATABASE_URL -c "SELECT 1"; do sleep 1; done'
       - uses: https://github.com/cachix/install-nix-action@v22
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
