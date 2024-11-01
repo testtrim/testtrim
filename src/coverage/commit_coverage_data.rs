@@ -11,8 +11,9 @@ use std::{
 
 use crate::platform::TestIdentifier;
 
-/// `CommitCoverageData` represents the coverage data that could be collected from test execution on a single commit;
-/// importantly this may represent data from only a partial execution of tests that were appropriate to that commit,
+/// `CommitCoverageData` represents the coverage data that could be collected from test execution on a single commit.
+///
+/// Importantly this may represent data from only a partial execution of tests that were appropriate to that commit,
 /// rather than a complete test run.
 #[derive(Debug, Clone)]
 pub struct CommitCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
@@ -53,6 +54,7 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> Default for CommitCoverageData<
 }
 
 impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
+    #[must_use]
     pub fn new() -> Self {
         CommitCoverageData {
             all_existing_test_set: HashSet::new(),
@@ -64,26 +66,32 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
         }
     }
 
+    #[must_use]
     pub fn existing_test_set(&self) -> &HashSet<TI> {
         &self.all_existing_test_set
     }
 
+    #[must_use]
     pub fn executed_test_set(&self) -> &HashSet<TI> {
         &self.executed_test_set
     }
 
+    #[must_use]
     pub fn executed_test_to_files_map(&self) -> &HashMap<TI, HashSet<PathBuf>> {
         &self.executed_test_to_files_map
     }
 
+    #[must_use]
     pub fn executed_test_to_functions_map(&self) -> &HashMap<TI, HashSet<String>> {
         &self.executed_test_to_functions_map
     }
 
+    #[must_use]
     pub fn executed_test_to_coverage_identifier_map(&self) -> &HashMap<TI, HashSet<CI>> {
         &self.executed_test_to_coverage_identifier_map
     }
 
+    #[must_use]
     pub fn file_references_files_map(&self) -> &HashMap<PathBuf, HashSet<PathBuf>> {
         &self.file_references_files_map
     }

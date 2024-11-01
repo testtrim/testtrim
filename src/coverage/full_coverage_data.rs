@@ -32,6 +32,7 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> Default for FullCoverageData<TI
 }
 
 impl<TI: TestIdentifier, CI: CoverageIdentifier> FullCoverageData<TI, CI> {
+    #[must_use]
     pub fn new() -> Self {
         FullCoverageData {
             all_tests: HashSet::new(),
@@ -42,22 +43,27 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> FullCoverageData<TI, CI> {
         }
     }
 
+    #[must_use]
     pub fn all_tests(&self) -> &HashSet<TI> {
         &self.all_tests
     }
 
+    #[must_use]
     pub fn file_to_test_map(&self) -> &HashMap<PathBuf, HashSet<TI>> {
         &self.file_to_test_map
     }
 
+    #[must_use]
     pub fn function_to_test_map(&self) -> &HashMap<String, HashSet<TI>> {
         &self.function_to_test_map
     }
 
+    #[must_use]
     pub fn coverage_identifier_to_test_map(&self) -> &HashMap<CI, HashSet<TI>> {
         &self.coverage_identifier_to_test_map
     }
 
+    #[must_use]
     pub fn file_referenced_by_files_map(&self) -> &HashMap<PathBuf, HashSet<PathBuf>> {
         &self.file_referenced_by_files_map
     }

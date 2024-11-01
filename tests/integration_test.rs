@@ -13,8 +13,9 @@ use tempdir::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode};
 use testtrim::cmd::run_tests::run_tests;
+use testtrim::coverage::create_db;
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
-use testtrim::platform::rust::RustTestPlatform;
+use testtrim::platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform};
 use testtrim::scm::git::GitScm;
 use thiserror::Error;
 
@@ -106,6 +107,11 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
 
     git_clone()?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("rust-coverage-specimen")); // FIXME: hack assumes folder name
+
+    create_db::<RustTestIdentifier, RustCoverageIdentifier>(String::from(
+        "rust-coverage-specimen",
+    ))?
+    .clear_project_data()?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a

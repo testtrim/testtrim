@@ -569,8 +569,11 @@ impl RustTestPlatform {
     fn find_compile_time_includes(file: &PathBuf) -> Result<HashSet<PathBuf>> {
         let mut result = HashSet::new();
 
-        let file = File::open(file)?;
-        let content = io::read_to_string(BufReader::new(file))?;
+        let file = File::open(file).context(format!(
+            "error in find_compile_time_includes opening file {file:?}"
+        ))?;
+        let content = io::read_to_string(BufReader::new(file))
+            .context("find_compile_time_includes file read")?;
 
         for cap in include_regex.captures_iter(&content) {
             let path = String::from(&cap["path"])
@@ -651,6 +654,12 @@ impl
         if let Some(package) = manifest.package {
             Ok(package.name)
         } else {
+            if let Some(workspace) = manifest.workspace
+                && !workspace.members.is_empty()
+            {
+                // This is a bit hacky... not sure what the right behavior is yet.
+                return Ok(workspace.members[0].clone());
+            }
             Err(anyhow!("unable to access package metadata in Cargo.toml"))
         }
     }
@@ -782,6 +791,12 @@ impl
         for file in changed_files {
             if file.extension().is_some_and(|ext| ext == "rs") {
                 let mut found_references = false;
+
+                if !fs::exists(file)? {
+                    // A file was considered "changed" but doesn't exist -- indicating a deleted file.
+                    coverage_data.mark_file_makes_no_references(file.clone());
+                    continue;
+                }
 
                 for target_path in Self::find_compile_time_includes(file)? {
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of

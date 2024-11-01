@@ -12,7 +12,7 @@
 #![allow(clippy::too_many_lines)] // probably the right thing to warn on, but somewhat arbitrary
 
 pub mod cmd;
-mod coverage;
+pub mod coverage;
 pub mod errors;
 pub mod platform;
 mod schema;

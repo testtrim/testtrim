@@ -17,8 +17,8 @@ pub mod commit_coverage_data;
 #[cfg(test)]
 mod db_tests;
 pub mod full_coverage_data;
-pub mod postgres_sqlx;
-pub mod sqlite_diesel;
+mod postgres_sqlx;
+mod sqlite_diesel;
 
 pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     fn save_coverage_data(

@@ -975,6 +975,7 @@ where
 mod tests {
     use async_std::task;
     use lazy_static::lazy_static;
+    use serde_json::Value;
     use std::{env, sync::Mutex};
 
     use crate::{
@@ -1000,7 +1001,7 @@ mod tests {
 
     fn cleanup() {
         task::block_on(async {
-            sqlx::query!("DELETE FROM project")
+            sqlx::query!("DELETE FROM project WHERE name = 'testtrim-tests'")
                 .execute(create_test_db().get_pool().unwrap())
                 .await
         })
@@ -1055,7 +1056,13 @@ mod tests {
                     FROM
                         coverage_map
                         INNER JOIN scm_commit ON (scm_commit.id = coverage_map.scm_commit_id)
-                    "
+                        INNER JOIN project ON (project.id = scm_commit.project_id)
+                    WHERE
+                        project.name = $1 AND
+                        scm_commit.scm_identifier = $2
+                    ",
+                    "testtrim-tests",
+                    Value::String(String::from("c1"))
                 )
                 .fetch_optional(pool)
                 .await
