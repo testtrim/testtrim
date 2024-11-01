@@ -2,62 +2,62 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::fmt::Debug;
 
 use super::{get_test_identifiers, run_tests, simulate_history};
 
 #[derive(Parser)]
-#[clap(author, version, about, long_about = None)] // FIXME: are there things that should be customized here?
-pub struct Cli {
+#[command(author, version, about, long_about = None)]
+struct Cli {
     #[command(flatten)]
-    pub verbose: clap_verbosity_flag::Verbosity,
+    verbose: clap_verbosity_flag::Verbosity,
 
-    #[clap(subcommand)]
-    pub command: Commands,
+    #[command(subcommand)]
+    command: Commands,
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
+enum Commands {
     /// Temporary no-operation command
     Noop,
 
     /// List test identifiers in the target project
     GetTestIdentifiers {
-        /// Strategy for test selection
-        #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
-        test_selection_mode: GetTestIdentifierMode,
+        #[command(flatten)]
+        target_parameters: TestTargetingParameters,
     },
 
     /// Execute tests in the target project, recording per-test coverage data
     RunTests {
-        // FIXME: there's probably some kind of sub-structure that could be used to make a common set of arguments
-        // between GetTestIdentifiers & RunTests -- which will likely include test targeting, database access, target
-        // project, etc.
-        /// Strategy for test selection
-        #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
-        test_selection_mode: GetTestIdentifierMode,
+        #[command(flatten)]
+        target_parameters: TestTargetingParameters,
+
+        #[command(flatten)]
+        execution_parameters: TestExecutionParameters,
 
         /// Strategy for treating the working directory and coverage map storage
         #[arg(value_enum, long, default_value_t = SourceMode::Automatic)]
         source_mode: SourceMode,
-
-        /// Number of parallel jobs for test execution; defaults to # of CPUs.
-        #[arg(short, long, default_value_t = 0)]
-        jobs: u16,
     },
 
     /// Run through a series of historical commits and simulate using testtrim
     SimulateHistory {
+        #[command(flatten)]
+        execution_parameters: TestExecutionParameters,
+
         /// Number of historical commits to simulate
         #[arg(short, long, default_value_t = 100)]
         num_commits: u16,
-
-        /// Number of parallel jobs for test execution; defaults to # of CPUs.
-        #[arg(short, long, default_value_t = 0)]
-        jobs: u16,
     },
+}
+
+#[derive(Args, Debug)]
+struct TestTargetingParameters {
+    /// Strategy for test selection
+    #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
+    test_selection_mode: GetTestIdentifierMode,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -66,6 +66,13 @@ pub enum GetTestIdentifierMode {
     All,
     /// Coverage maps and diffs will be used to identify a subset of tests to run
     Relevant,
+}
+
+#[derive(Args, Debug)]
+struct TestExecutionParameters {
+    /// Number of parallel jobs for test execution; defaults to # of CPUs.
+    #[arg(short, long, default_value_t = 0)]
+    jobs: u16,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -106,16 +113,25 @@ pub fn run_cli() {
 
     match &cli.command {
         Commands::Noop => {}
-        Commands::GetTestIdentifiers {
-            test_selection_mode,
-        } => get_test_identifiers::cli(test_selection_mode),
+        Commands::GetTestIdentifiers { target_parameters } => {
+            get_test_identifiers::cli(&target_parameters.test_selection_mode);
+        }
         Commands::RunTests {
-            test_selection_mode,
+            target_parameters,
             source_mode,
-            jobs,
-        } => run_tests::cli(test_selection_mode, source_mode, *jobs),
-        Commands::SimulateHistory { num_commits, jobs } => {
-            simulate_history::cli(*num_commits, *jobs);
+            execution_parameters,
+        } => {
+            run_tests::cli(
+                &target_parameters.test_selection_mode,
+                source_mode,
+                execution_parameters.jobs,
+            );
+        }
+        Commands::SimulateHistory {
+            num_commits,
+            execution_parameters,
+        } => {
+            simulate_history::cli(*num_commits, execution_parameters.jobs);
         }
     }
 }
