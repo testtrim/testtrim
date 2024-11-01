@@ -10,6 +10,7 @@ edition = "2021"
 [dependencies]
 anyhow = "*"
 async-std = "*"
+cargo_toml = "*"
 cargo-lock = "*"
 clap = { version = "*", features = ["derive"] }
 clap-verbosity-flag = "*"

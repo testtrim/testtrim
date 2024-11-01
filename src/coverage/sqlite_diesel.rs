@@ -23,14 +23,14 @@ use std::{
     env, fs, io,
     marker::PhantomData,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 use time::{OffsetDateTime, PrimitiveDateTime};
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 
 use super::CoverageDatabase;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./db/sqlite/migrations");
-const DEFAULT_PROJECT_ID: Uuid = uuid!("b4574300-9d65-4099-8383-1e1d9f69254e");
 
 struct DbLogger;
 
@@ -42,6 +42,7 @@ impl Instrumentation for DbLogger {
 
 pub struct DieselCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
+    project_name: String,
     connection: Option<SqliteConnection>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
@@ -52,7 +53,9 @@ impl<
         CI: CoverageIdentifier + Serialize + DeserializeOwned,
     > DieselCoverageDatabase<TI, CI>
 {
-    pub fn new_sqlite_from_default_url() -> Result<DieselCoverageDatabase<TI, CI>> {
+    pub fn new_sqlite_from_default_url(
+        project_name: String,
+    ) -> Result<DieselCoverageDatabase<TI, CI>> {
         let target = match env::var("XDG_CACHE_HOME") {
             Ok(xdg) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
             Err(_) => Path::new(&env::var("HOME")?)
@@ -71,14 +74,19 @@ impl<
             })
             .context("Failed to create coverage directory")?;
 
-        Ok(DieselCoverageDatabase::new_sqlite(String::from(
-            target.to_string_lossy(),
-        )))
+        Ok(DieselCoverageDatabase::new_sqlite(
+            String::from(target.to_string_lossy()),
+            project_name,
+        ))
     }
 
-    pub fn new_sqlite(database_url: String) -> DieselCoverageDatabase<TI, CI> {
+    pub fn new_sqlite(
+        database_url: String,
+        project_name: String,
+    ) -> DieselCoverageDatabase<TI, CI> {
         DieselCoverageDatabase {
             database_url,
+            project_name,
             connection: None,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
@@ -362,6 +370,31 @@ impl<
 
         Ok(())
     }
+
+    fn ensure_project_id(conn: &mut SqliteConnection, project_name: &String) -> Result<Uuid> {
+        use crate::schema::project;
+
+        let project_id = project::dsl::project
+            .filter(project::dsl::name.eq(project_name))
+            .select(project::dsl::id)
+            .get_result::<String>(conn)
+            .optional()
+            .context("loading project_id")?;
+
+        if let Some(project_id) = project_id {
+            Ok(Uuid::from_str(&project_id)?)
+        } else {
+            let project_id = Uuid::new_v4();
+            diesel::insert_into(project::dsl::project)
+                .values((
+                    project::dsl::id.eq(project_id.to_string()),
+                    project::dsl::name.eq(project_name),
+                ))
+                .execute(conn)
+                .context("insert into project")?;
+            Ok(project_id)
+        }
+    }
 }
 
 impl<
@@ -377,10 +410,10 @@ impl<
         ancestor_commit_sha: Option<&str>,
     ) -> Result<()> {
         use crate::schema::{
-            commit_test_case, commit_test_case_executed, project, scm_commit, test_case,
-            test_case_execution,
+            commit_test_case, commit_test_case_executed, scm_commit, test_case, test_case_execution,
         };
 
+        let project_name = self.project_name.clone();
         let conn = self.get_connection()?;
 
         conn.run_pending_migrations(MIGRATIONS)
@@ -388,13 +421,7 @@ impl<
 
         // FIXME: ideally all of this should happen in a transaction, but I'm not sure it matters for SQLite
 
-        let project_id = DEFAULT_PROJECT_ID;
-        diesel::insert_into(project::dsl::project)
-            .values(project::dsl::id.eq(project_id.to_string()))
-            .on_conflict(project::dsl::id)
-            .do_nothing()
-            .execute(conn)
-            .context("upsert into project")?;
+        let project_id = Self::ensure_project_id(conn, &project_name)?;
 
         // In case this was a "re-run" on a commit, delete the old associated data.  Ideally this delete should
         // cascade...
@@ -570,12 +597,13 @@ impl<
             test_case_file_covered, test_case_function_covered,
         };
 
+        let project_name = self.project_name.clone();
         let conn = self.get_connection()?;
 
         conn.run_pending_migrations(MIGRATIONS)
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
 
-        let project_id = DEFAULT_PROJECT_ID;
+        let project_id = Self::ensure_project_id(conn, &project_name)?;
 
         let coverage_map_id = coverage_map::dsl::coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
@@ -735,12 +763,13 @@ impl<
     fn has_any_coverage_data(&mut self) -> Result<bool> {
         use crate::schema::{coverage_map, scm_commit};
 
+        let project_name = self.project_name.clone();
         let conn = self.get_connection()?;
 
         conn.run_pending_migrations(MIGRATIONS)
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
 
-        let project_id = DEFAULT_PROJECT_ID;
+        let project_id = Self::ensure_project_id(conn, &project_name)?;
         let coverage_map_id = coverage_map::dsl::coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
@@ -765,6 +794,10 @@ impl<
 
         conn.run_pending_migrations(MIGRATIONS)
             .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+
+        // FIXME: this cleanup isn't specific to the project being run, but should be; the problem is that without FK's
+        // being enforced we can't use cascade deletes and instead have to do ugly stuff ourselves.  It's probably
+        // OK-ish.
 
         diesel::delete(coverage_map_test_case_executed::dsl::coverage_map_test_case_executed)
             .execute(conn)?;
@@ -799,6 +832,7 @@ mod tests {
     fn has_any_coverage_data_false() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::has_any_coverage_data_false(db);
     }
@@ -807,6 +841,7 @@ mod tests {
     fn save_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::save_empty(db);
     }
@@ -815,6 +850,7 @@ mod tests {
     fn has_any_coverage_data_true() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::has_any_coverage_data_true(db);
     }
@@ -823,6 +859,7 @@ mod tests {
     fn load_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::load_empty(db);
     }
@@ -834,6 +871,7 @@ mod tests {
         let mut db =
             DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
                 String::from(":memory:"),
+                String::from("testtrim-tests"),
             );
 
         let saved_data = CommitCoverageData::new();
@@ -884,7 +922,10 @@ mod tests {
 
     #[test]
     fn save_and_load_no_ancestor() {
-        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
+        let db = DieselCoverageDatabase::new_sqlite(
+            String::from(":memory:"),
+            String::from("testtrim-tests"),
+        );
         db_tests::save_and_load_no_ancestor(db);
     }
 
@@ -893,6 +934,7 @@ mod tests {
     fn save_and_load_new_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::save_and_load_new_case_in_child(db);
     }
@@ -902,6 +944,7 @@ mod tests {
     fn save_and_load_replacement_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::save_and_load_replacement_case_in_child(db);
     }
@@ -911,6 +954,7 @@ mod tests {
     fn save_and_load_removed_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::save_and_load_removed_case_in_child(db);
     }
@@ -920,6 +964,7 @@ mod tests {
     fn remove_file_references_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
+            String::from("testtrim-tests"),
         );
         db_tests::remove_file_references_in_child(db);
     }

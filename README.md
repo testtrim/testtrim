@@ -118,6 +118,11 @@ Oh, well, I'm not quite sure I'd recommend that right now.  But it could be fun 
     git clone https://codeberg.org/testtrim/testtrim.git
     ```
 
+- Run DB migrations to create a testtrim database; see notes under [Development](#development) below for more information:
+    ```
+    sqlx migrate run --source ./db/postgres/migrations
+    ```
+
 - Build the project with `cargo`; might as well use the release mode for optimizations:
     ```
     cargo build --release

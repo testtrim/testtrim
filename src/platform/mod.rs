@@ -67,6 +67,8 @@ where
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
 {
+    fn project_name() -> Result<String>;
+
     fn discover_tests() -> Result<TD>;
 
     fn run_tests<'a, I>(

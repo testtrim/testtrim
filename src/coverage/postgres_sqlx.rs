@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use async_std::task;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
-use sqlx::{postgres::PgPoolOptions, Pool, Postgres, Transaction};
+use sqlx::{postgres::PgPoolOptions, Executor, Pool, Postgres, Transaction};
 use std::{collections::HashMap, marker::PhantomData, path::PathBuf};
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 
 use crate::platform::TestIdentifier;
 
@@ -20,10 +20,9 @@ use super::{
     CoverageDatabase,
 };
 
-const DEFAULT_PROJECT_ID: Uuid = uuid!("b4574300-9d65-4099-8383-1e1d9f69254e");
-
 pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
+    project_name: String,
     connection: Option<Pool<Postgres>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
@@ -37,9 +36,10 @@ where
     TI: TestIdentifier + Serialize + DeserializeOwned,
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
-    pub fn new(database_url: String) -> PostgresCoverageDatabase<TI, CI> {
+    pub fn new(database_url: String, project_name: String) -> PostgresCoverageDatabase<TI, CI> {
         PostgresCoverageDatabase {
             database_url,
+            project_name,
             connection: None,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
@@ -64,21 +64,27 @@ where
         Ok(self.connection.as_mut().unwrap())
     }
 
-    fn ensure_project_id(tx: &mut Transaction<'static, Postgres>, project_id: &Uuid) -> Result<()> {
-        task::block_on(async {
+    fn upsert_project<'e, E>(executor: E, project_name: &str) -> Result<Uuid>
+    where
+        E: Executor<'e, Database = Postgres> + Send,
+    {
+        let record = task::block_on(async {
             sqlx::query!(
                 r"
-                    INSERT INTO project (id)
-                    VALUES ($1)
-                    ON CONFLICT DO NOTHING
+                    INSERT INTO project (id, name)
+                    VALUES (uuid_generate_v4(), $1)
+                    ON CONFLICT (name)
+                        -- 'do nothing' but returning the record's id rather than omiting row
+                        DO UPDATE SET name = EXCLUDED.name
+                    RETURNING id
                 ",
-                project_id
+                project_name
             )
-            .execute(&mut **tx)
+            .fetch_one(executor)
             .await
         })
         .context("upsert into project")?;
-        Ok(())
+        Ok(record.id)
     }
 
     fn delete_old_commit_data(
@@ -800,8 +806,7 @@ where
         let tx = self.get_pool()?;
         let mut tx = task::block_on(async { tx.begin().await })?;
 
-        let project_id = DEFAULT_PROJECT_ID;
-        Self::ensure_project_id(&mut tx, &project_id)?;
+        let project_id = Self::upsert_project(&mut *tx, &self.project_name)?;
         Self::delete_old_commit_data(&mut tx, &project_id, commit_sha)?;
         let ancestor_scm_commit_id =
             Self::load_ancestor_scm_commit_id(&mut tx, &project_id, ancestor_commit_sha)?;
@@ -856,9 +861,10 @@ where
         &mut self,
         commit_sha: &str,
     ) -> anyhow::Result<Option<FullCoverageData<TI, CI>>> {
+        let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
 
-        let project_id = DEFAULT_PROJECT_ID;
+        let project_id = Self::upsert_project(pool, &project_name)?;
 
         let coverage_map_id = task::block_on(async {
             sqlx::query!(
@@ -927,9 +933,10 @@ where
     }
 
     fn has_any_coverage_data(&mut self) -> anyhow::Result<bool> {
+        let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
 
-        let project_id = DEFAULT_PROJECT_ID;
+        let project_id = Self::upsert_project(pool, &project_name)?;
         let coverage_map_id = task::block_on(async {
             sqlx::query!(
                 r"
@@ -952,9 +959,14 @@ where
     }
 
     fn clear_project_data(&mut self) -> anyhow::Result<()> {
+        let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
-        task::block_on(async { sqlx::query!("DELETE FROM project").execute(pool).await })
-            .expect("delete in clear_project_data");
+        task::block_on(async {
+            sqlx::query!("DELETE FROM project WHERE name = $1", project_name)
+                .execute(pool)
+                .await
+        })
+        .expect("delete in clear_project_data");
         Ok(())
     }
 }
@@ -980,7 +992,10 @@ mod tests {
         static ref DB_MUTEX: Mutex<i32> = Mutex::new(0);
     }
     fn create_test_db() -> PostgresCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> {
-        PostgresCoverageDatabase::new(env::var("TESTTRIM_DATABASE_URL").unwrap())
+        PostgresCoverageDatabase::new(
+            env::var("TESTTRIM_DATABASE_URL").unwrap(),
+            String::from("testtrim-tests"),
+        )
     }
 
     fn cleanup() {

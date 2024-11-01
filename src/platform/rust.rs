@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use cargo_lock::Lockfile;
+use cargo_toml::Manifest;
 use dashmap::DashSet;
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
@@ -638,6 +639,22 @@ impl
         RustConcreteTestIdentifier,
     > for RustTestPlatform
 {
+    fn project_name() -> Result<String> {
+        // It could make more sense to make this method infallible and return an "unknown" tag or something.  But I'm
+        // thinking to start restrictive and see if it ever becomes an issue.
+
+        // We avoid using `Manifest`'s advanced workspace features since we're just trying to read the project name; so
+        // read the Cargo.toml file ourselves and use `from_str` to parse it with the least fuss.
+        let toml_contents = fs::read_to_string("Cargo.toml").context("reading Cargo.toml")?;
+        let manifest = Manifest::from_str(&toml_contents).context("parsing Cargo.toml")?;
+
+        if let Some(package) = manifest.package {
+            Ok(package.name)
+        } else {
+            Err(anyhow!("unable to access package metadata in Cargo.toml"))
+        }
+    }
+
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     fn discover_tests() -> Result<RustTestDiscovery> {
         let test_binaries = RustTestPlatform::find_test_binaries()?;

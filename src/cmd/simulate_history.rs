@@ -119,7 +119,7 @@ where
     TP: TestPlatform<TI, CI, TD, CTI>,
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
-    create_db::<TI, CI>()?.clear_project_data()?;
+    create_db::<TI, CI>(TP::project_name()?)?.clear_project_data()?;
 
     // Use git log -> get the target commits from earliest to latest.  When we hit a merge branch, we'll go up each
     // parent's path until we've found enough commits to meet the requested test count.  This might not reach a common

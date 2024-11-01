@@ -45,6 +45,7 @@ diesel::table! {
 diesel::table! {
     project (id) {
         id -> Text,
+        name -> Text,
     }
 }
 

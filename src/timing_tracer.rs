@@ -4,7 +4,7 @@
 
 use dashmap::DashMap;
 use log::warn;
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, RngCore};
 use serde::Serialize;
 use std::{
     collections::HashMap,

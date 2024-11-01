@@ -34,24 +34,24 @@ pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     fn clear_project_data(&mut self) -> Result<()>;
 }
 
-pub fn create_db<TI, CI>() -> Result<Box<dyn CoverageDatabase<TI, CI>>>
+pub fn create_db<TI, CI>(project_name: String) -> Result<Box<dyn CoverageDatabase<TI, CI>>>
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
 {
     match env::var("TESTTRIM_DATABASE_URL") {
-        Ok(db_url) if db_url.starts_with("postgres") => {
-            Ok(Box::new(PostgresCoverageDatabase::new(db_url)))
-        }
-        Ok(db_url) if db_url.starts_with("file://") => {
-            Ok(Box::new(DieselCoverageDatabase::new_sqlite(db_url)))
-        }
-        Ok(db_url) if db_url.starts_with(":memory:") => {
-            Ok(Box::new(DieselCoverageDatabase::new_sqlite(db_url)))
-        }
+        Ok(db_url) if db_url.starts_with("postgres") => Ok(Box::new(
+            PostgresCoverageDatabase::new(db_url, project_name),
+        )),
+        Ok(db_url) if db_url.starts_with("file://") => Ok(Box::new(
+            DieselCoverageDatabase::new_sqlite(db_url, project_name),
+        )),
+        Ok(db_url) if db_url.starts_with(":memory:") => Ok(Box::new(
+            DieselCoverageDatabase::new_sqlite(db_url, project_name),
+        )),
         Ok(db_url) => Err(anyhow!("unsupported database url: {db_url}")),
         Err(_) => Ok(Box::new(
-            DieselCoverageDatabase::new_sqlite_from_default_url()?,
+            DieselCoverageDatabase::new_sqlite_from_default_url(project_name)?,
         )),
     }
 }
