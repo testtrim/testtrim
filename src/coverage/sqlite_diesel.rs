@@ -260,7 +260,9 @@ impl<
                     .filter(coverage_map::dsl::scm_commit_id.eq(ancestor_scm_commit_id))
                     .select(TestCaseExecution::as_select())
                     .get_results(conn)
-                    .context("loading coverage_map_test_case_executed from ancestor_commit_sha")?;
+                    .context(
+                        "loading coverage_map_test_case_executed from ancestor_commit_identifier",
+                    )?;
                 Some(scm_commit_id)
             }
             None => None,
@@ -326,7 +328,7 @@ impl<
                         .select(CommitFileReference::as_select())
                         .order(commit_file_reference::dsl::referencing_filepath)
                         .get_results(conn)
-                        .context("loading commit_file_reference from ancestor_commit_sha")?;
+                        .context("loading commit_file_reference from ancestor_commit_identifier")?;
                     Some(scm_commit_id)
                 }
                 None => None,
@@ -406,8 +408,8 @@ impl<
     fn save_coverage_data(
         &mut self,
         coverage_data: &CommitCoverageData<TI, CI>,
-        commit_sha: &str,
-        ancestor_commit_sha: Option<&str>,
+        commit_identifier: &str,
+        ancestor_commit_identifier: Option<&str>,
     ) -> Result<()> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, scm_commit, test_case, test_case_execution,
@@ -428,18 +430,19 @@ impl<
         //
         // FIXME: does cascade delete require PRAGMA foreign_keys = ON?
         diesel::delete(
-            scm_commit::dsl::scm_commit.filter(scm_commit::dsl::scm_identifier.eq(commit_sha)),
+            scm_commit::dsl::scm_commit
+                .filter(scm_commit::dsl::scm_identifier.eq(commit_identifier)),
         )
         .execute(conn)
         .context("delete from scm_commit")?;
 
-        let ancestor_scm_commit_id: Option<String> = match ancestor_commit_sha {
-            Some(ancestor_commit_sha) => {
+        let ancestor_scm_commit_id: Option<String> = match ancestor_commit_identifier {
+            Some(ancestor_commit_identifier) => {
                 let scm_commit_id = scm_commit::dsl::scm_commit
-                    .filter(scm_commit::dsl::scm_identifier.eq(ancestor_commit_sha))
+                    .filter(scm_commit::dsl::scm_identifier.eq(ancestor_commit_identifier))
                     .select(scm_commit::dsl::id)
                     .get_result::<String>(conn)
-                    .context("loading scm_commit from ancestor_commit_sha")?;
+                    .context("loading scm_commit from ancestor_commit_identifier")?;
                 Some(scm_commit_id)
             }
             None => None,
@@ -451,7 +454,7 @@ impl<
                 scm_commit::dsl::id.eq(scm_commit_id.to_string()),
                 scm_commit::dsl::project_id.eq(project_id.to_string()),
                 scm_commit::dsl::ancestor_scm_commit_id.eq(&ancestor_scm_commit_id),
-                scm_commit::dsl::scm_identifier.eq(commit_sha),
+                scm_commit::dsl::scm_identifier.eq(commit_identifier),
             ))
             .execute(conn)
             .context("insert into scm_commit")?;
@@ -590,7 +593,10 @@ impl<
         Ok(())
     }
 
-    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>> {
+    fn read_coverage_data(
+        &mut self,
+        commit_identifier: &str,
+    ) -> Result<Option<FullCoverageData<TI, CI>>> {
         use crate::schema::{
             commit_file_reference, coverage_map, coverage_map_test_case_executed, scm_commit,
             test_case, test_case_coverage_identifier_covered, test_case_execution,
@@ -608,7 +614,7 @@ impl<
         let coverage_map_id = coverage_map::dsl::coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
             .select(coverage_map::dsl::id)
             .get_result::<String>(conn)
             .optional()
@@ -636,10 +642,10 @@ impl<
                 ),
             )
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
             .select((test_case::dsl::id, test_case::dsl::test_identifier))
             .get_results::<(String, String)>(conn)
-            .context("loading test cases from coverage_map for commit_sha")?;
+            .context("loading test cases from coverage_map for commit_identifier")?;
 
         let mut coverage_data = FullCoverageData::new();
 
@@ -663,13 +669,15 @@ impl<
                 ),
             ))
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
             .select((
                 test_case_execution::dsl::test_case_id,
                 test_case_file_covered::dsl::file_identifier,
             ))
             .get_results::<(String, String)>(conn)
-            .context("loading from test_case_file_covered for commit_sha via coverage_map")?;
+            .context(
+                "loading from test_case_file_covered for commit_identifier via coverage_map",
+            )?;
         for (test_case_id, file_identifier) in all_files_by_test_case {
             coverage_data.add_file_to_test(FileCoverage {
                 test_identifier: test_case_id_to_test_identifier_map
@@ -693,14 +701,14 @@ impl<
                     ),
                 )
                 .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-                .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+                .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
                 .select((
                     test_case_execution::dsl::test_case_id,
                     test_case_function_covered::dsl::function_identifier,
                 ))
                 .get_results::<(String, String)>(conn)
                 .context(
-                    "loading from test_case_function_covered for commit_sha via coverage_map",
+                    "loading from test_case_function_covered for commit_identifier via coverage_map",
                 )?;
         for (test_case_id, function_identifier) in all_functions_by_test_case {
             coverage_data.add_function_to_test(FunctionCoverage {
@@ -720,13 +728,13 @@ impl<
                 ),
             ))
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
             .select((
                 test_case_execution::dsl::test_case_id,
                 test_case_coverage_identifier_covered::dsl::coverage_identifier,
             ))
             .get_results::<(String, String)>(conn)
-            .context("loading from test_case_coverage_identifier_covered for commit_sha via coverage_map")?;
+            .context("loading from test_case_coverage_identifier_covered for commit_identifier via coverage_map")?;
         for (test_case_id, coverage_identifier) in all_coverage_identifiers_by_test_case {
             coverage_data.add_heuristic_coverage_to_test(
                 test_case_id_to_test_identifier_map
@@ -746,10 +754,10 @@ impl<
         let all_referenced_files = commit_file_reference::dsl::commit_file_reference
             .inner_join(scm_commit::dsl::scm_commit)
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-            .filter(scm_commit::dsl::scm_identifier.eq(&commit_sha))
+            .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
             .select(CommitFileReference::as_select())
             .get_results::<CommitFileReference>(conn)
-            .context("loading from commit_file_reference for commit_sha")?;
+            .context("loading from commit_file_reference for commit_identifier")?;
         for fr in all_referenced_files {
             coverage_data.add_file_reference(FileReference {
                 referencing_file: fr.referencing_filepath.into(),

@@ -24,12 +24,13 @@ pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     fn save_coverage_data(
         &mut self,
         coverage_data: &CommitCoverageData<TI, CI>,
-        // FIXME: should take an `impl ScmCommit`?
-        commit_sha: &str,
-        // FIXME: should take an `impl ScmCommit`?
-        ancestor_commit_sha: Option<&str>,
+        commit_identifier: &str,
+        ancestor_commit_identifier: Option<&str>,
     ) -> Result<()>;
-    fn read_coverage_data(&mut self, commit_sha: &str) -> Result<Option<FullCoverageData<TI, CI>>>;
+    fn read_coverage_data(
+        &mut self,
+        commit_identifier: &str,
+    ) -> Result<Option<FullCoverageData<TI, CI>>>;
     fn has_any_coverage_data(&mut self) -> Result<bool>;
     fn clear_project_data(&mut self) -> Result<()>;
 }

@@ -500,8 +500,8 @@ mod tests {
         fn save_coverage_data(
             &mut self,
             _coverage_data: &CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
-            _commit_sha: &str,
-            _ancestor_commit_sha: Option<&str>,
+            _commit_identifier: &str,
+            _ancestor_commit_identifier: Option<&str>,
         ) -> anyhow::Result<()> {
             // save_coverage_data should never be used on this mock
             unreachable!()
@@ -509,15 +509,13 @@ mod tests {
 
         fn read_coverage_data(
             &mut self,
-            commit_sha: &str,
+            commit_identifier: &str,
         ) -> anyhow::Result<Option<FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>>>
         {
-            match self.commit_data.get(commit_sha) {
+            match self.commit_data.get(commit_identifier) {
                 Some(data) => Ok(Some(data.clone())),
                 None => Ok(None),
             }
-            // Ok(self.commit_data.get(commit_sha).cloned())
-            // todo!()
         }
 
         fn has_any_coverage_data(&mut self) -> anyhow::Result<bool> {

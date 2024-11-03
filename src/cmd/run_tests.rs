@@ -165,9 +165,9 @@ where
         };
         TP::analyze_changed_files(&files_changed, &mut coverage_data)?;
 
-        let commit_sha = scm.get_commit_identifier(&scm.get_head_commit()?);
+        let commit_identifier = scm.get_commit_identifier(&scm.get_head_commit()?);
 
-        let ancestor_commit_sha = test_cases
+        let ancestor_commit_identifier = test_cases
             .ancestor_commit
             .as_ref()
             .map(|c| scm.get_commit_identifier(c));
@@ -175,8 +175,8 @@ where
         info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
             create_db(TP::project_name()?)?.save_coverage_data(
                 &coverage_data,
-                &commit_sha,
-                ancestor_commit_sha.as_deref(),
+                &commit_identifier,
+                ancestor_commit_identifier.as_deref(),
             )
         })?;
     }

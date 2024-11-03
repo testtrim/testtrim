@@ -90,12 +90,12 @@ where
     fn delete_old_commit_data(
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
-        commit_sha: &str,
+        commit_identifier: &str,
     ) -> Result<()> {
         task::block_on(async {
             sqlx::query!(
                 r"DELETE FROM scm_commit WHERE scm_identifier = $1 AND project_id = $2",
-                Value::String(String::from(commit_sha)),
+                Value::String(String::from(commit_identifier)),
                 project_id,
             )
             .execute(&mut **tx)
@@ -108,20 +108,20 @@ where
     fn load_ancestor_scm_commit_id(
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
-        ancestor_commit_sha: Option<&str>,
+        ancestor_commit_identifier: Option<&str>,
     ) -> Result<Option<Uuid>> {
-        match ancestor_commit_sha {
-            Some(ancestor_commit_sha) => {
+        match ancestor_commit_identifier {
+            Some(ancestor_commit_identifier) => {
                 let scm_commit_id = task::block_on(async {
                     sqlx::query!(
                         r"SELECT id FROM scm_commit WHERE scm_identifier = $1 AND project_id = $2",
-                        Value::String(String::from(ancestor_commit_sha)),
+                        Value::String(String::from(ancestor_commit_identifier)),
                         project_id,
                     )
                     .fetch_one(&mut **tx)
                     .await
                 })
-                .context("loading scm_commit from ancestor_commit_sha")?;
+                .context("loading scm_commit from ancestor_commit_identifier")?;
 
                 Ok(Some(scm_commit_id.id))
             }
@@ -133,7 +133,7 @@ where
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
         ancestor_scm_commit_id: Option<Uuid>,
-        commit_sha: &str,
+        commit_identifier: &str,
     ) -> Result<Uuid> {
         Ok(task::block_on(async {
             sqlx::query!(
@@ -146,7 +146,7 @@ where
                     ",
                 project_id,
                 ancestor_scm_commit_id,
-                Value::String(String::from(commit_sha)),
+                Value::String(String::from(commit_identifier)),
             )
             .fetch_one(&mut **tx)
             .await
@@ -760,7 +760,7 @@ where
     fn read_referenced_file_data(
         pool: &Pool<Postgres>,
         project_id: &Uuid,
-        commit_sha: &str,
+        commit_identifier: &str,
         coverage_data: &mut FullCoverageData<TI, CI>,
     ) -> Result<()> {
         let all_referenced_files = task::block_on(async {
@@ -776,7 +776,7 @@ where
                     scm_commit.scm_identifier = $2
                 ",
                 project_id,
-                Value::String(String::from(commit_sha)),
+                Value::String(String::from(commit_identifier)),
             )
             .fetch_all(pool)
             .await
@@ -800,18 +800,22 @@ where
     fn save_coverage_data(
         &mut self,
         coverage_data: &CommitCoverageData<TI, CI>,
-        commit_sha: &str,
-        ancestor_commit_sha: Option<&str>,
+        commit_identifier: &str,
+        ancestor_commit_identifier: Option<&str>,
     ) -> anyhow::Result<()> {
         let tx = self.get_pool()?;
         let mut tx = task::block_on(async { tx.begin().await })?;
 
         let project_id = Self::upsert_project(&mut *tx, &self.project_name)?;
-        Self::delete_old_commit_data(&mut tx, &project_id, commit_sha)?;
+        Self::delete_old_commit_data(&mut tx, &project_id, commit_identifier)?;
         let ancestor_scm_commit_id =
-            Self::load_ancestor_scm_commit_id(&mut tx, &project_id, ancestor_commit_sha)?;
-        let scm_commit_id =
-            Self::create_scm_commit(&mut tx, &project_id, ancestor_scm_commit_id, commit_sha)?;
+            Self::load_ancestor_scm_commit_id(&mut tx, &project_id, ancestor_commit_identifier)?;
+        let scm_commit_id = Self::create_scm_commit(
+            &mut tx,
+            &project_id,
+            ancestor_scm_commit_id,
+            commit_identifier,
+        )?;
 
         let (mut test_case_to_test_case_id_map, mut test_case_id_to_test_case_map) =
             Self::load_relevant_test_case_ids(&mut tx, &project_id, coverage_data)?;
@@ -859,7 +863,7 @@ where
 
     fn read_coverage_data(
         &mut self,
-        commit_sha: &str,
+        commit_identifier: &str,
     ) -> anyhow::Result<Option<FullCoverageData<TI, CI>>> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
@@ -878,7 +882,7 @@ where
                     scm_commit.scm_identifier = $2
                 ",
                 project_id,
-                Value::String(String::from(commit_sha)),
+                Value::String(String::from(commit_identifier)),
             )
             .fetch_optional(pool)
             .await
@@ -927,7 +931,7 @@ where
             &test_case_id_to_test_identifier_map,
         )?;
 
-        Self::read_referenced_file_data(pool, &project_id, commit_sha, &mut coverage_data)?;
+        Self::read_referenced_file_data(pool, &project_id, commit_identifier, &mut coverage_data)?;
 
         Ok(Some(coverage_data))
     }
