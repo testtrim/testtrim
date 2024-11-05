@@ -6,6 +6,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::fmt::Debug;
 
+use crate::coverage::Tag;
+
 use super::{get_test_identifiers, run_tests, simulate_history};
 
 #[derive(Parser)]
@@ -58,6 +60,19 @@ struct TestTargetingParameters {
     /// Strategy for test selection
     #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
     test_selection_mode: GetTestIdentifierMode,
+
+    /// Tags in a key=value format
+    ///
+    /// Tags differentiate coverage storage, allowing the same project to be tested in different configurations.  For
+    /// example, you could run tests with a tag `database=postgresql`, and later tests with a tag `database=mysql`, and
+    /// the two tags would have coverage maps tracked separately.  This would allow a change that only affects one
+    /// codepath to trigger only tests that are related to that codepath.
+    #[arg(long)]
+    tags: Vec<Tag>,
+
+    /// Whether or not to add the `platform` tag automatically to test results
+    #[arg(value_enum, long, default_value_t=PlatformTaggingMode::Automatic)]
+    platform_tagging_mode: PlatformTaggingMode,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -66,6 +81,14 @@ pub enum GetTestIdentifierMode {
     All,
     /// Coverage maps and diffs will be used to identify a subset of tests to run
     Relevant,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum PlatformTaggingMode {
+    /// Automatically add the `platform` tag based upon the target triplet (eg. `x86_64-unknown-linux-gnu`)
+    Automatic,
+    /// Do not automatically add the `platform` tag
+    None,
 }
 
 #[derive(Args, Debug)]
@@ -114,7 +137,13 @@ pub fn run_cli() {
     match &cli.command {
         Commands::Noop => {}
         Commands::GetTestIdentifiers { target_parameters } => {
-            get_test_identifiers::cli(&target_parameters.test_selection_mode);
+            get_test_identifiers::cli(
+                &target_parameters.test_selection_mode,
+                &get_test_identifiers::tags(
+                    &target_parameters.tags,
+                    target_parameters.platform_tagging_mode,
+                ),
+            );
         }
         Commands::RunTests {
             target_parameters,
@@ -125,6 +154,10 @@ pub fn run_cli() {
                 &target_parameters.test_selection_mode,
                 source_mode,
                 execution_parameters.jobs,
+                &get_test_identifiers::tags(
+                    &target_parameters.tags,
+                    target_parameters.platform_tagging_mode,
+                ),
             );
         }
         Commands::SimulateHistory {

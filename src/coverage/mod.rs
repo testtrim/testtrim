@@ -19,6 +19,9 @@ mod db_tests;
 pub mod full_coverage_data;
 mod postgres_sqlx;
 mod sqlite_diesel;
+mod tag;
+
+pub use tag::Tag;
 
 pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     fn save_coverage_data(
@@ -26,10 +29,12 @@ pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
+        tags: &[Tag],
     ) -> Result<()>;
     fn read_coverage_data(
         &mut self,
         commit_identifier: &str,
+        tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>>;
     fn has_any_coverage_data(&mut self) -> Result<bool>;
     fn clear_project_data(&mut self) -> Result<()>;

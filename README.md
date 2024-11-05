@@ -39,6 +39,11 @@ Some tests might embed local files during their compile; in Rust, using the `inc
 
 The long-term goal of testtrim is to work with tests that require network services via distributed tracing using OpenTelemetry.  Presently this capability is on the drawing board only.
 
+### Tags & Platforms
+
+When running tests on different operating systems, it would be common for different code and tests to be executed.  In order to support situations like this, testtrim supports "tagging" the test results with arbitrary key-value entries which will distinguish its coverage data from other test runs.  The platform that the tests are running on is an automatic default tag.
+
+
 # How well does it work?
 
 It's early days for testtrim.  It looks **promising**, but not **promised**.

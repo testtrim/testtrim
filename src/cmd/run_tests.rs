@@ -12,7 +12,7 @@ use tracing::info_span;
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
-    coverage::{commit_coverage_data::CoverageIdentifier, create_db},
+    coverage::{commit_coverage_data::CoverageIdentifier, create_db, Tag},
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
@@ -25,7 +25,12 @@ use super::cli::{GetTestIdentifierMode, SourceMode};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode, jobs: u16) {
+pub fn cli(
+    test_selection_mode: &GetTestIdentifierMode,
+    source_mode: &SourceMode,
+    jobs: u16,
+    tags: &[Tag],
+) {
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
@@ -35,6 +40,7 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, source_mode: &SourceMode
             &GitScm {},
             source_mode,
             jobs,
+            tags,
         ) {
             Ok(out) => {
                 println!("successfully executed tests");
@@ -108,6 +114,7 @@ pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     source_mode: &SourceMode,
     jobs: u16,
+    tags: &[Tag],
 ) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>
 where
     Commit: ScmCommit,
@@ -148,8 +155,12 @@ where
         source_mode, save_coverage_data, ancestor_search_mode
     );
 
-    let test_cases =
-        get_target_test_cases::<Commit, MyScm, _, _, _, _, TP>(mode, scm, ancestor_search_mode)?;
+    let test_cases = get_target_test_cases::<Commit, MyScm, _, _, _, _, TP>(
+        mode,
+        scm,
+        ancestor_search_mode,
+        tags,
+    )?;
 
     let mut coverage_data = TP::run_tests(&test_cases.target_test_cases, jobs)?;
     for tc in &test_cases.all_test_cases {
@@ -177,6 +188,7 @@ where
                 &coverage_data,
                 &commit_identifier,
                 ancestor_commit_identifier.as_deref(),
+                tags,
             )
         })?;
     }

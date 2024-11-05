@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::{
-    coverage::commit_coverage_data::{
-        CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
+    coverage::{
+        commit_coverage_data::{
+            CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
+        },
+        full_coverage_data::FullCoverageData,
+        tag::SortedTagArray,
     },
-    coverage::full_coverage_data::FullCoverageData,
     platform::TestIdentifier,
 };
 
@@ -28,7 +31,7 @@ use std::{
 use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
-use super::CoverageDatabase;
+use super::{CoverageDatabase, Tag};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./db/sqlite/migrations");
 
@@ -410,12 +413,16 @@ impl<
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
+        tags: &[Tag],
     ) -> Result<()> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, scm_commit, test_case, test_case_execution,
         };
 
         let project_name = self.project_name.clone();
+        // SQLite isn't going to do a JSON-aware comparison when searching, so we use a sorted serialization to try to
+        // get consistent outputs that will work for a bare string comparison.
+        let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
         let conn = self.get_connection()?;
 
         conn.run_pending_migrations(MIGRATIONS)
@@ -431,7 +438,8 @@ impl<
         // FIXME: does cascade delete require PRAGMA foreign_keys = ON?
         diesel::delete(
             scm_commit::dsl::scm_commit
-                .filter(scm_commit::dsl::scm_identifier.eq(commit_identifier)),
+                .filter(scm_commit::dsl::scm_identifier.eq(commit_identifier))
+                .filter(scm_commit::dsl::tags.eq(&tags_string)),
         )
         .execute(conn)
         .context("delete from scm_commit")?;
@@ -440,6 +448,7 @@ impl<
             Some(ancestor_commit_identifier) => {
                 let scm_commit_id = scm_commit::dsl::scm_commit
                     .filter(scm_commit::dsl::scm_identifier.eq(ancestor_commit_identifier))
+                    .filter(scm_commit::dsl::tags.eq(&tags_string))
                     .select(scm_commit::dsl::id)
                     .get_result::<String>(conn)
                     .context("loading scm_commit from ancestor_commit_identifier")?;
@@ -455,6 +464,7 @@ impl<
                 scm_commit::dsl::project_id.eq(project_id.to_string()),
                 scm_commit::dsl::ancestor_scm_commit_id.eq(&ancestor_scm_commit_id),
                 scm_commit::dsl::scm_identifier.eq(commit_identifier),
+                scm_commit::dsl::tags.eq(&tags_string),
             ))
             .execute(conn)
             .context("insert into scm_commit")?;
@@ -596,6 +606,7 @@ impl<
     fn read_coverage_data(
         &mut self,
         commit_identifier: &str,
+        tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>> {
         use crate::schema::{
             commit_file_reference, coverage_map, coverage_map_test_case_executed, scm_commit,
@@ -604,6 +615,9 @@ impl<
         };
 
         let project_name = self.project_name.clone();
+        // SQLite isn't going to do a JSON-aware comparison when searching, so we use a sorted serialization to try to
+        // get consistent outputs that will work for a bare string comparison.
+        let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
         let conn = self.get_connection()?;
 
         conn.run_pending_migrations(MIGRATIONS)
@@ -615,6 +629,7 @@ impl<
             .inner_join(scm_commit::dsl::scm_commit)
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
             .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
+            .filter(scm_commit::dsl::tags.eq(&tags_string))
             .select(coverage_map::dsl::id)
             .get_result::<String>(conn)
             .optional()
@@ -883,7 +898,7 @@ mod tests {
             );
 
         let saved_data = CommitCoverageData::new();
-        let result = db.save_coverage_data(&saved_data, "c1", None);
+        let result = db.save_coverage_data(&saved_data, "c1", None, &[]);
         assert!(result.is_ok());
 
         {
@@ -904,7 +919,7 @@ mod tests {
             assert!(data.1.is_none());
         }
 
-        let result = db.read_coverage_data("c1");
+        let result = db.read_coverage_data("c1", &[]);
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
@@ -975,5 +990,15 @@ mod tests {
             String::from("testtrim-tests"),
         );
         db_tests::remove_file_references_in_child(db);
+    }
+
+    /// Test that save and load use independent data based upon tags
+    #[test]
+    fn independent_tags() {
+        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+            String::from(":memory:"),
+            String::from("testtrim-tests"),
+        );
+        db_tests::independent_tags(db);
     }
 }

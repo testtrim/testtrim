@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::{
-    cmd::run_tests::run_tests,
+    cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
     coverage::{commit_coverage_data::CoverageIdentifier, create_db},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
@@ -211,6 +211,7 @@ where
             scm,
             &SourceMode::CleanCommit,
             jobs,
+            &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic), // default tags only
         )
     });
 

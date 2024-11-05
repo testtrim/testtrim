@@ -17,7 +17,8 @@ use super::{
         CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
     },
     full_coverage_data::FullCoverageData,
-    CoverageDatabase,
+    tag::TagArray,
+    CoverageDatabase, Tag,
 };
 
 pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
@@ -91,12 +92,15 @@ where
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
         commit_identifier: &str,
+        tags: &[Tag],
     ) -> Result<()> {
+        let tag_value = serde_json::to_value(TagArray(tags))?;
         task::block_on(async {
             sqlx::query!(
-                r"DELETE FROM scm_commit WHERE scm_identifier = $1 AND project_id = $2",
+                r"DELETE FROM scm_commit WHERE scm_identifier = $1 AND project_id = $2 AND tags = $3",
                 Value::String(String::from(commit_identifier)),
                 project_id,
+                tag_value,
             )
             .execute(&mut **tx)
             .await
@@ -109,14 +113,17 @@ where
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
         ancestor_commit_identifier: Option<&str>,
+        tags: &[Tag],
     ) -> Result<Option<Uuid>> {
+        let tag_value = serde_json::to_value(TagArray(tags))?;
         match ancestor_commit_identifier {
             Some(ancestor_commit_identifier) => {
                 let scm_commit_id = task::block_on(async {
                     sqlx::query!(
-                        r"SELECT id FROM scm_commit WHERE scm_identifier = $1 AND project_id = $2",
+                        r"SELECT id FROM scm_commit WHERE scm_identifier = $1 AND project_id = $2 AND tags = $3",
                         Value::String(String::from(ancestor_commit_identifier)),
                         project_id,
+                        tag_value,
                     )
                     .fetch_one(&mut **tx)
                     .await
@@ -134,19 +141,22 @@ where
         project_id: &Uuid,
         ancestor_scm_commit_id: Option<Uuid>,
         commit_identifier: &str,
+        tags: &[Tag],
     ) -> Result<Uuid> {
+        let tag_value = serde_json::to_value(TagArray(tags))?;
         Ok(task::block_on(async {
             sqlx::query!(
                 r"
                     INSERT INTO scm_commit
-                        (id, project_id, ancestor_scm_commit_id, scm_identifier)
+                        (id, project_id, ancestor_scm_commit_id, scm_identifier, tags)
                     VALUES
-                        (uuid_generate_v4(), $1, $2, $3)
+                        (uuid_generate_v4(), $1, $2, $3, $4)
                     RETURNING id
                     ",
                 project_id,
                 ancestor_scm_commit_id,
                 Value::String(String::from(commit_identifier)),
+                tag_value,
             )
             .fetch_one(&mut **tx)
             .await
@@ -802,19 +812,25 @@ where
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
+        tags: &[Tag],
     ) -> anyhow::Result<()> {
         let tx = self.get_pool()?;
         let mut tx = task::block_on(async { tx.begin().await })?;
 
         let project_id = Self::upsert_project(&mut *tx, &self.project_name)?;
-        Self::delete_old_commit_data(&mut tx, &project_id, commit_identifier)?;
-        let ancestor_scm_commit_id =
-            Self::load_ancestor_scm_commit_id(&mut tx, &project_id, ancestor_commit_identifier)?;
+        Self::delete_old_commit_data(&mut tx, &project_id, commit_identifier, tags)?;
+        let ancestor_scm_commit_id = Self::load_ancestor_scm_commit_id(
+            &mut tx,
+            &project_id,
+            ancestor_commit_identifier,
+            tags,
+        )?;
         let scm_commit_id = Self::create_scm_commit(
             &mut tx,
             &project_id,
             ancestor_scm_commit_id,
             commit_identifier,
+            tags,
         )?;
 
         let (mut test_case_to_test_case_id_map, mut test_case_id_to_test_case_map) =
@@ -864,12 +880,14 @@ where
     fn read_coverage_data(
         &mut self,
         commit_identifier: &str,
+        tags: &[Tag],
     ) -> anyhow::Result<Option<FullCoverageData<TI, CI>>> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
 
         let project_id = Self::upsert_project(pool, &project_name)?;
 
+        let tag_value = serde_json::to_value(TagArray(tags))?;
         let coverage_map_id = task::block_on(async {
             sqlx::query!(
                 r"
@@ -879,10 +897,12 @@ where
                     INNER JOIN scm_commit ON (scm_commit.id = coverage_map.scm_commit_id)
                 WHERE
                     scm_commit.project_id = $1 AND
-                    scm_commit.scm_identifier = $2
+                    scm_commit.scm_identifier = $2 AND
+                    scm_commit.tags = $3
                 ",
                 project_id,
                 Value::String(String::from(commit_identifier)),
+                tag_value,
             )
             .fetch_optional(pool)
             .await
@@ -1082,13 +1102,13 @@ mod tests {
         let mut db = create_test_db();
 
         let saved_data = CommitCoverageData::new();
-        let result = db.save_coverage_data(&saved_data, "c1", None);
+        let result = db.save_coverage_data(&saved_data, "c1", None, &[]);
         assert!(result.is_ok());
 
         let ts = ts_fetcher(&mut db);
         assert!(ts.is_none());
 
-        let result = db.read_coverage_data("c1");
+        let result = db.read_coverage_data("c1", &[]);
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
@@ -1139,5 +1159,14 @@ mod tests {
         cleanup();
         let db = create_test_db();
         db_tests::remove_file_references_in_child(db);
+    }
+
+    /// Test that save and load use independent data based upon tags
+    #[test]
+    fn independent_tags() {
+        let _db_mutex = DB_MUTEX.lock();
+        cleanup();
+        let db = create_test_db();
+        db_tests::independent_tags(db);
     }
 }

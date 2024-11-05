@@ -17,6 +17,7 @@ cargo-lock = "*"
 clap = { version = "*", features = ["derive"] }
 clap-verbosity-flag = "*"
 csv = "*"
+current_platform = "*"
 dashmap = "*"
 diesel = { version = "*", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "uuid", "time"] }
 diesel_migrations = "*"

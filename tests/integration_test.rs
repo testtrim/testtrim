@@ -10,8 +10,8 @@ use std::collections::HashSet;
 use std::process::Command;
 use std::{env, sync::Mutex};
 use tempdir::TempDir;
-use testtrim::cmd::cli::{GetTestIdentifierMode, SourceMode};
-use testtrim::cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode};
+use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
+use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorSearchMode};
 use testtrim::cmd::run_tests::run_tests;
 use testtrim::coverage::create_db;
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
@@ -432,6 +432,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
 
     fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {
         let scm = GitScm {};
+        let tags = &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic);
 
         info!("checking out {}", commit_test_data.test_commit);
         git_checkout(commit_test_data.test_commit)?;
@@ -440,6 +441,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             &GetTestIdentifierMode::All,
             &scm,
             AncestorSearchMode::AllCommits,
+            tags,
         )?
         .target_test_cases;
         assert_eq!(
@@ -462,6 +464,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             &GetTestIdentifierMode::Relevant,
             &scm,
             AncestorSearchMode::AllCommits,
+            tags,
         )?
         .target_test_cases;
         assert_eq!(
@@ -485,6 +488,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
             &scm,
             &SourceMode::Automatic,
             0,
+            tags,
         ) {
             Ok(_) if commit_test_data.expected_failing_test_cases.is_empty() => Ok(()),
             Ok(_) => Err(anyhow!(

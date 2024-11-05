@@ -55,6 +55,7 @@ diesel::table! {
         project_id -> Text,
         ancestor_scm_commit_id -> Nullable<Text>,
         scm_identifier -> Text,
+        tags -> Text,
     }
 }
 

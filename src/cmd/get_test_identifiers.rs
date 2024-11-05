@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
+use current_platform::CURRENT_PLATFORM;
 use log::{error, info, trace, warn};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -12,7 +13,7 @@ use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
-use crate::coverage::create_db;
+use crate::coverage::{create_db, Tag};
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -25,11 +26,11 @@ use crate::{
     scm::{git::GitScm, Scm, ScmCommit},
 };
 
-use super::cli::GetTestIdentifierMode;
+use super::cli::{GetTestIdentifierMode, PlatformTaggingMode};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(test_selection_mode: &GetTestIdentifierMode) {
+pub fn cli(test_selection_mode: &GetTestIdentifierMode, tags: &[Tag]) {
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
@@ -38,6 +39,7 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode) {
             test_selection_mode,
             &GitScm {},
             AncestorSearchMode::AllCommits,
+            tags,
         ) {
             Ok(test_cases) => test_cases,
             Err(err) => {
@@ -54,6 +56,21 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode) {
     // identifiers.
     println!("Performance stats:");
     perf_storage.print();
+}
+
+#[must_use]
+pub fn tags(user_tags: &[Tag], platform_tagging_mode: PlatformTaggingMode) -> Vec<Tag> {
+    let mut retval = Vec::with_capacity(user_tags.len() + 1);
+    if platform_tagging_mode == PlatformTaggingMode::Automatic {
+        retval.push(Tag {
+            key: String::from("platform"),
+            value: String::from(CURRENT_PLATFORM),
+        });
+    }
+    for t in user_tags {
+        retval.push(t.clone());
+    }
+    retval
 }
 
 pub struct TargetTestCases<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTestIdentifier<TI>> {
@@ -79,6 +96,7 @@ pub fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     mode: &GetTestIdentifierMode,
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
+    tags: &[Tag],
 ) -> Result<TargetTestCases<Commit, TI, CTI>>
 where
     Commit: ScmCommit,
@@ -109,6 +127,7 @@ where
             scm.get_head_commit()?,
             ancestor_search_mode,
             create_db::<TI, CI>(TP::project_name()?)?,
+            tags,
         )? {
         info!(
             "relevant test cases will be computed base upon commit {:?}",
@@ -174,6 +193,7 @@ fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
     mut coverage_db: Box<dyn CoverageDatabase<TI, CI>>,
+    tags: &[Tag],
 ) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
 where
     Commit: ScmCommit,
@@ -189,7 +209,7 @@ where
     let commit_identifier = scm.get_commit_identifier(&commit);
     let mut coverage_data = match ancestor_search_mode {
         AncestorSearchMode::AllCommits => {
-            let coverage_data = coverage_db.read_coverage_data(&commit_identifier)?;
+            let coverage_data = coverage_db.read_coverage_data(&commit_identifier, tags)?;
             trace!(
                 "commit (HEAD) id {} had coverage data? {:}",
                 commit_identifier,
@@ -223,7 +243,7 @@ where
             commit = parents.remove(0);
         }
         let commit_identifier = scm.get_commit_identifier(&commit);
-        coverage_data = coverage_db.read_coverage_data(&commit_identifier)?;
+        coverage_data = coverage_db.read_coverage_data(&commit_identifier, tags)?;
         trace!(
             "commit id {} had coverage data? {:}",
             commit_identifier,
@@ -343,9 +363,11 @@ mod tests {
             compute_relevant_test_cases, find_ancestor_commit_with_coverage_data,
             AncestorSearchMode,
         },
-        coverage::commit_coverage_data::{CommitCoverageData, FileCoverage},
-        coverage::full_coverage_data::FullCoverageData,
-        coverage::CoverageDatabase,
+        coverage::{
+            commit_coverage_data::{CommitCoverageData, FileCoverage},
+            full_coverage_data::FullCoverageData,
+            CoverageDatabase, Tag,
+        },
         platform::rust::{
             RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary, RustTestIdentifier,
         },
@@ -502,6 +524,7 @@ mod tests {
             _coverage_data: &CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
             _commit_identifier: &str,
             _ancestor_commit_identifier: Option<&str>,
+            _tags: &[Tag],
         ) -> anyhow::Result<()> {
             // save_coverage_data should never be used on this mock
             unreachable!()
@@ -510,6 +533,7 @@ mod tests {
         fn read_coverage_data(
             &mut self,
             commit_identifier: &str,
+            _tags: &[Tag],
         ) -> anyhow::Result<Option<FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>>>
         {
             match self.commit_data.get(commit_identifier) {
@@ -546,6 +570,7 @@ mod tests {
             Box::new(MockCoverageDatabase {
                 commit_data: HashMap::new(),
             }),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -579,6 +604,7 @@ mod tests {
             Box::new(MockCoverageDatabase {
                 commit_data: HashMap::from([(String::from("c2"), previous_coverage_data)]),
             }),
+            &[],
         );
 
         assert!(result.is_ok());
@@ -641,6 +667,7 @@ mod tests {
                     (String::from("ancestor"), ancestor_coverage_data),
                 ]),
             }),
+            &[],
         );
 
         assert!(result.is_ok());
