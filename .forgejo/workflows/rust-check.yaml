@@ -38,7 +38,7 @@ jobs:
       - name: cargo build
         run: nix develop .# --command cargo build
       - name: run tests
-        run: nix develop .# --command cargo test
+        run: nix develop .# --command cargo nextest run
         env:
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
       - name: verify clippy warning-free

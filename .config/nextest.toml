@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[test-groups]
+serial-integration = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(postgres_sqlx::)'
+test-group = 'serial-integration'
