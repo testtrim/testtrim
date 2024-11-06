@@ -11,6 +11,7 @@ use std::{
 };
 use trace::Trace;
 
+#[cfg(target_os = "linux")]
 mod strace;
 pub mod trace;
 
