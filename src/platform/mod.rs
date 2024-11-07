@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Display},
     hash::Hash,
     path::PathBuf,
@@ -52,9 +52,17 @@ pub trait TestDiscovery<CTI: ConcreteTestIdentifier<TI>, TI: TestIdentifier> {
     fn map_ti_to_cti(&self, test_identifier: TI) -> Option<CTI>;
 }
 
-pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier> {
+#[derive(Debug)]
+pub enum TestReason<CI: CoverageIdentifier> {
+    NoCoverageMap,
+    NewTest,
+    FileChanged(PathBuf),
+    CoverageIdentifier(CI),
+}
+
+pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier, CI: CoverageIdentifier> {
     /// Key data, which additional test cases should be executed
-    pub additional_test_cases: HashSet<TI>,
+    pub additional_test_cases: HashMap<TI, Vec<TestReason<CI>>>,
 
     /// Instrumentation: how many "external dependencies" changed that caused those additional test cases?
     pub external_dependencies_changed: Option<usize>,
@@ -85,7 +93,7 @@ where
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<TI, CI>,
-    ) -> Result<PlatformSpecificRelevantTestCaseData<TI>>;
+    ) -> Result<PlatformSpecificRelevantTestCaseData<TI, CI>>;
 
     fn analyze_changed_files(
         changed_files: &HashSet<PathBuf>,

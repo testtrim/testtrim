@@ -37,8 +37,10 @@ use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
 use crate::scm::{Scm, ScmCommit};
+use crate::sys_trace::trace::UnifiedSocketAddr;
 use crate::sys_trace::{sys_trace_command, trace::Trace};
 
+use super::TestReason;
 use super::{
     rust_llvm::{CoverageLibrary, ProfilingData},
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
@@ -69,15 +71,15 @@ impl fmt::Display for RustTestIdentifier {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RustCoverageIdentifier {
-    ExternalDependency(RustExternalDependency),
-    // Future: information like the rust version used
-    GenericNetwork,
+    // Possible future: rustc version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
+    PackageDependency(RustPackageDependency),
+    NetworkDependency(UnifiedSocketAddr),
 }
 
 impl CoverageIdentifier for RustCoverageIdentifier {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-pub struct RustExternalDependency {
+pub struct RustPackageDependency {
     pub package_name: String,
     pub version: String,
 }
@@ -154,7 +156,7 @@ impl RustTestPlatform {
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
-        test_cases: &mut HashSet<RustTestIdentifier>,
+        test_cases: &mut HashMap<RustTestIdentifier, Vec<TestReason<RustCoverageIdentifier>>>,
     ) -> Result<usize> {
         // I think there might be plausible cases where Cargo.lock loading from the previous commit would fail, but we
         // wouldn't want to error out... for example, if Cargo.lock was added since the ancestor commit?.  But I'm not
@@ -209,7 +211,7 @@ impl RustTestPlatform {
                 );
                 changed_external_dependencies += 1;
                 let coverage_identifier =
-                    RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+                    RustCoverageIdentifier::PackageDependency(RustPackageDependency {
                         package_name: String::from(old.name.as_str()),
                         version: old.version.to_string(),
                     });
@@ -221,7 +223,10 @@ impl RustTestPlatform {
                     for test in tests {
                         if eval_target_test_cases.contains(test) {
                             debug!("test {test:?} needs rerun");
-                            test_cases.insert(test.clone());
+                            test_cases
+                                .entry(test.clone())
+                                .or_default()
+                                .push(TestReason::CoverageIdentifier(coverage_identifier.clone()));
                         }
                     }
                 }
@@ -402,8 +407,8 @@ impl RustTestPlatform {
                                 trace!("Found package reference to {} / {}", package_name, version);
                                 coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
                                     test_identifier: test_case.test_identifier.clone(),
-                                    coverage_identifier: RustCoverageIdentifier::ExternalDependency(
-                                        RustExternalDependency {
+                                    coverage_identifier: RustCoverageIdentifier::PackageDependency(
+                                        RustPackageDependency {
                                             package_name,
                                             version,
                                         },
@@ -475,10 +480,10 @@ impl RustTestPlatform {
             // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
         }
 
-        if !trace.get_connect_sockets().is_empty() {
+        for sockaddr in trace.get_connect_sockets() {
             coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
                 test_identifier: test_case.test_identifier.clone(),
-                coverage_identifier: RustCoverageIdentifier::GenericNetwork,
+                coverage_identifier: RustCoverageIdentifier::NetworkDependency(sockaddr.clone()),
             });
         }
 
@@ -697,8 +702,11 @@ impl
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
-    ) -> anyhow::Result<PlatformSpecificRelevantTestCaseData<RustTestIdentifier>> {
-        let mut test_cases = HashSet::new();
+    ) -> anyhow::Result<
+        PlatformSpecificRelevantTestCaseData<RustTestIdentifier, RustCoverageIdentifier>,
+    > {
+        let mut test_cases: HashMap<RustTestIdentifier, Vec<TestReason<RustCoverageIdentifier>>> =
+            HashMap::new();
 
         let mut external_dependencies_changed = None;
         // FIXME: I'm not confident that this check is right -- could there be multiple lock files in a realistic repo?
@@ -713,13 +721,15 @@ impl
             )?);
         }
 
-        if let Some(tests) = coverage_data
-            .coverage_identifier_to_test_map()
-            .get(&RustCoverageIdentifier::GenericNetwork)
-        {
-            for test in tests {
-                if eval_target_test_cases.contains(test) {
-                    test_cases.insert(test.clone());
+        for ci in coverage_data.coverage_identifier_to_test_map() {
+            if let (RustCoverageIdentifier::NetworkDependency(_sockaddr), tests) = ci {
+                for test in tests {
+                    if eval_target_test_cases.contains(test) {
+                        test_cases
+                            .entry(test.clone())
+                            .or_default()
+                            .push(TestReason::CoverageIdentifier(ci.0.clone()));
+                    }
                 }
             }
         }

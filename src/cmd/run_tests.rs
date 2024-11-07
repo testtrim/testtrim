@@ -162,7 +162,7 @@ where
         tags,
     )?;
 
-    let mut coverage_data = TP::run_tests(&test_cases.target_test_cases, jobs)?;
+    let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs)?;
     for tc in &test_cases.all_test_cases {
         coverage_data.add_existing_test(tc.test_identifier().clone());
     }
@@ -195,7 +195,7 @@ where
 
     Ok(RunTestsOutput {
         all_test_cases: test_cases.all_test_cases,
-        target_test_cases: test_cases.target_test_cases,
+        target_test_cases: test_cases.target_test_cases.keys().cloned().collect(),
         ancestor_commit: test_cases.ancestor_commit,
 
         files_changed: test_cases.files_changed,

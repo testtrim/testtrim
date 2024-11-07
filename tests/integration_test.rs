@@ -518,7 +518,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         for expected_test_name in commit_test_data.all_test_cases.iter() {
             assert_eq!(
                 all_test_cases
-                    .iter()
+                    .keys()
                     .filter(|tc| tc.test_identifier.test_name == *expected_test_name)
                     .count(),
                 1
@@ -541,7 +541,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
         for expected_test_name in commit_test_data.relevant_test_cases.iter() {
             assert_eq!(
                 relevant_test_cases
-                    .iter()
+                    .keys()
                     .filter(|tc| tc.test_identifier.test_name == *expected_test_name)
                     .count(),
                 1

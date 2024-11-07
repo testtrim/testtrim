@@ -7,6 +7,7 @@ use current_platform::CURRENT_PLATFORM;
 use log::{error, info, trace, warn};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
 use crate::coverage::{create_db, Tag};
+use crate::platform::TestReason;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -47,8 +49,11 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, tags: &[Tag]) {
                 return;
             }
         };
-        for test_case in test_cases.target_test_cases {
-            println!("{:?}", test_case.test_identifier);
+        for (cti, reasons) in test_cases.target_test_cases {
+            println!("{:?}", cti.test_identifier);
+            for reason in reasons {
+                println!("\t{reason:?}");
+            }
         }
     });
 
@@ -73,10 +78,15 @@ pub fn tags(user_tags: &[Tag], platform_tagging_mode: PlatformTaggingMode) -> Ve
     retval
 }
 
-pub struct TargetTestCases<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTestIdentifier<TI>> {
+pub struct TargetTestCases<
+    Commit: ScmCommit,
+    TI: TestIdentifier,
+    CTI: ConcreteTestIdentifier<TI>,
+    CI: CoverageIdentifier,
+> {
     // Test discovery and analysis results
     pub all_test_cases: HashSet<CTI>,
-    pub target_test_cases: HashSet<CTI>,
+    pub target_test_cases: HashMap<CTI, Vec<TestReason<CI>>>,
     pub ancestor_commit: Option<Commit>,
 
     // Change discovery results
@@ -97,7 +107,7 @@ pub fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
     tags: &[Tag],
-) -> Result<TargetTestCases<Commit, TI, CTI>>
+) -> Result<TargetTestCases<Commit, TI, CTI, CI>>
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
@@ -113,7 +123,10 @@ where
     if *mode == GetTestIdentifierMode::All {
         return Ok(TargetTestCases {
             all_test_cases: all_test_cases.clone(),
-            target_test_cases: all_test_cases.clone(),
+            target_test_cases: all_test_cases
+                .iter()
+                .map(|tc| (tc.clone(), vec![TestReason::NoCoverageMap]))
+                .collect(),
             ancestor_commit: None,
             files_changed: None,
             external_dependencies_changed: None,
@@ -138,7 +151,10 @@ where
         warn!("no base commit identified with coverage data to work from");
         return Ok(TargetTestCases {
             all_test_cases: all_test_cases.clone(),
-            target_test_cases: all_test_cases.clone(),
+            target_test_cases: all_test_cases
+                .iter()
+                .map(|tc| (tc.clone(), vec![TestReason::NoCoverageMap]))
+                .collect(),
             ancestor_commit: None,
             files_changed: None,
             external_dependencies_changed: None,
@@ -163,7 +179,9 @@ where
         &ancestor_commit,
         &coverage_data,
     )?;
-    relevant_test_cases.extend(platform_specific.additional_test_cases);
+    for (ti, reasons) in platform_specific.additional_test_cases {
+        relevant_test_cases.entry(ti).or_default().extend(reasons);
+    }
 
     trace!("relevant_test_cases: {:?}", relevant_test_cases);
 
@@ -171,8 +189,8 @@ where
         all_test_cases: all_test_cases.clone(),
         target_test_cases: relevant_test_cases
             .into_iter()
-            .filter_map(|ti| test_discovery.map_ti_to_cti(ti))
-            .collect::<HashSet<_>>(),
+            .filter_map(|(ti, reasons)| test_discovery.map_ti_to_cti(ti).map(|cti| (cti, reasons)))
+            .collect::<HashMap<_, _>>(),
         ancestor_commit: Some(ancestor_commit),
         files_changed: Some(changed_files),
         external_dependencies_changed: platform_specific.external_dependencies_changed,
@@ -271,8 +289,8 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     eval_target_changed_files: &HashSet<PathBuf>,
     coverage_data: &FullCoverageData<TI, CI>,
-) -> Result<HashSet<TI>> {
-    let mut retval = HashSet::new();
+) -> Result<HashMap<TI, Vec<TestReason<CI>>>> {
+    let mut retval = HashMap::new();
 
     compute_all_new_test_cases(eval_target_test_cases, coverage_data, &mut retval);
     trace!(
@@ -304,12 +322,15 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
 fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     coverage_data: &FullCoverageData<TI, CI>,
-    retval: &mut HashSet<TI>,
+    retval: &mut HashMap<TI, Vec<TestReason<CI>>>,
 ) {
     for tc in eval_target_test_cases {
         if !coverage_data.all_tests().contains(tc) {
             trace!("test case {:?} was not found in parent coverage data and so will be run as a new test", tc);
-            retval.insert(tc.clone());
+            retval
+                .entry(tc.clone())
+                .or_default()
+                .push(TestReason::NewTest);
         }
     }
 }
@@ -318,7 +339,7 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     eval_target_changed_files: &HashSet<PathBuf>,
     coverage_data: &FullCoverageData<TI, CI>,
-    retval: &mut HashSet<TI>,
+    retval: &mut HashMap<TI, Vec<TestReason<CI>>>,
     recurse_ignore_files: &mut HashSet<PathBuf>,
 ) -> Result<()> {
     for changed_file in eval_target_changed_files {
@@ -332,7 +353,10 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
                 // Even if this test covered this file in the past, if the test doesn't exist in the current eval target
                 // then we can't run it anymore; typically happens when a test case is removed.
                 if eval_target_test_cases.contains(test) {
-                    retval.insert(test.clone());
+                    retval
+                        .entry(test.clone())
+                        .or_default()
+                        .push(TestReason::FileChanged(changed_file.clone()));
                 }
             }
         }
@@ -704,7 +728,7 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains(&test1));
+        assert!(result.contains_key(&test1));
     }
 
     #[test]
@@ -746,7 +770,7 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains(&test2));
+        assert!(result.contains_key(&test2));
     }
 
     #[test]
@@ -774,7 +798,7 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains(&test1));
+        assert!(result.contains_key(&test1));
     }
 
     #[test]
@@ -807,7 +831,7 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains(&test1));
+        assert!(result.contains_key(&test1));
     }
 
     #[test]
@@ -841,6 +865,6 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains(&test2));
+        assert!(result.contains_key(&test2));
     }
 }

@@ -110,7 +110,7 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> FullCoverageData<TI, CI> {
 #[cfg(test)]
 mod tests {
     use crate::platform::rust::{
-        RustCoverageIdentifier, RustExternalDependency, RustTestIdentifier,
+        RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier,
     };
 
     use super::*;
@@ -262,11 +262,11 @@ mod tests {
     #[test]
     fn add_heuristic_coverage_to_test() {
         let mut coverage_data = FullCoverageData::new();
-        let thiserror = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+        let thiserror = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
             package_name: String::from("thiserror"),
             version: String::from("0.1"),
         });
-        let regex = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+        let regex = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
             package_name: String::from("regex"),
             version: String::from("0.1"),
         });

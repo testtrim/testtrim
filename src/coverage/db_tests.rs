@@ -11,7 +11,7 @@ use crate::{
         },
         Tag,
     },
-    platform::rust::{RustCoverageIdentifier, RustExternalDependency, RustTestIdentifier},
+    platform::rust::{RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier},
 };
 use lazy_static::lazy_static;
 
@@ -76,11 +76,11 @@ pub fn save_and_load_no_ancestor(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut saved_data = CommitCoverageData::new();
-    let thiserror = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+    let thiserror = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
         package_name: String::from("thiserror"),
         version: String::from("0.1"),
     });
-    let regex = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+    let regex = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
         package_name: String::from("regex"),
         version: String::from("0.1"),
     });
@@ -705,7 +705,7 @@ pub fn remove_file_references_in_child(
 /// Test that save and load use independent data based upon tags
 pub fn independent_tags(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
     let mut saved_data = CommitCoverageData::new();
-    let windows = RustCoverageIdentifier::ExternalDependency(RustExternalDependency {
+    let windows = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
         package_name: String::from("windows-sys"),
         version: String::from("0.1"),
     });
