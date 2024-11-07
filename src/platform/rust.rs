@@ -71,6 +71,7 @@ impl fmt::Display for RustTestIdentifier {
 pub enum RustCoverageIdentifier {
     ExternalDependency(RustExternalDependency),
     // Future: information like the rust version used
+    GenericNetwork,
 }
 
 impl CoverageIdentifier for RustCoverageIdentifier {}
@@ -473,6 +474,14 @@ impl RustTestPlatform {
             }
             // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
         }
+
+        if !trace.get_connect_sockets().is_empty() {
+            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                test_identifier: test_case.test_identifier.clone(),
+                coverage_identifier: RustCoverageIdentifier::GenericNetwork,
+            });
+        }
+
         Ok(())
     }
 
@@ -702,6 +711,17 @@ impl
                 coverage_data,
                 &mut test_cases,
             )?);
+        }
+
+        if let Some(tests) = coverage_data
+            .coverage_identifier_to_test_map()
+            .get(&RustCoverageIdentifier::GenericNetwork)
+        {
+            for test in tests {
+                if eval_target_test_cases.contains(test) {
+                    test_cases.insert(test.clone());
+                }
+            }
         }
 
         Ok(PlatformSpecificRelevantTestCaseData {

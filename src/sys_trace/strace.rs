@@ -11,9 +11,13 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Output},
+    str::FromStr,
 };
 
-use super::{trace::Trace, SysTraceCommand};
+use super::{
+    trace::{Trace, UnifiedSocketAddr},
+    SysTraceCommand,
+};
 
 /// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
 pub struct STraceSysTraceCommand;
@@ -89,6 +93,62 @@ lazy_static! {
         $"
     )
     .unwrap();
+
+    // 337651 connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0
+    // 337651 connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINPROGRESS (Operation now in progress)
+    // 337651 connect(17, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16) = 0
+    static ref connect: Regex = Regex::new(
+        r#"(?x)
+        ^(?<pid>[0-9]+)
+        \s+
+        connect\(                         # call & arguments
+            (?<fd>\d+),                   # file descriptor (socket)
+            \s+
+            (
+                \{
+                    sa_family=AF_UNIX,
+                    \s+
+                    sun_path="(?<unix_path>(?:[^"\\]|\\.)*)"
+                \}
+                |
+                \{
+                    sa_family=AF_INET6,
+                    \s+
+                    sin6_port=htons\((?<sin6_port>\d+)\),
+                    \s+
+                    sin6_flowinfo=htonl\((?<sin6_flowinfo>\d+)\),
+                    \s+
+                    inet_pton\(
+                        AF_INET6,
+                        \s+
+                        "(?<sin6_addr>[^"]+)",
+                        \s+
+                        &sin6_addr
+                    \),
+                    \s+
+                    sin6_scope_id=(?<sin6_scope_id>\d+)
+                \}
+                |
+                \{
+                    sa_family=AF_INET,
+                    \s+
+                    sin_port=htons\((?<sin_port>\d+)\),
+                    \s+
+                    sin_addr=inet_addr\("(?<sin_addr>[^"]+)"\)
+                \}
+            ),
+            \s+
+            \d+                           # addrlen
+        (?<end>
+            \)\s+=\s+(?<retval>-?\d+)
+            .*                         # possible errno output
+            |
+            \s+
+            <unfinished\s\.\.\.>
+        )
+        $"#
+    )
+    .unwrap();
 }
 
 #[derive(Debug, PartialEq)]
@@ -120,10 +180,25 @@ enum ChdirParse {
 }
 
 #[derive(Debug, PartialEq)]
+enum ConnectParse {
+    // connect is a trickier syscall than the others we've handled because it is typically used with non-blocking
+    // sockets, and so connect() is likely to return EINPROGRESS immediately and then be followed-up with poll() calls
+    // to check if the socket is available.  I think it doesn't matter if connect succeeds, fails, becomes an unfinished
+    // syscall, or returns EINPROGRESS or EAGAIN -- all of them mean the same thing, this strace tried to reach outside
+    // of its process through the network and therefore we'll report that it has an external dependency.  This
+    // simplifies the implementation here and seems more-or-less right.
+    //
+    // So rather than all the states that other parses will have, we'll just have an indeterminate state with the socket
+    // address that was accessed.
+    IndeterminateResult { socket_addr: UnifiedSocketAddr },
+}
+
+#[derive(Debug, PartialEq)]
 enum ParseLine {
     Open(OpenParse),
     Chdir(ChdirParse),
     Clone(CloneParse),
+    Connect(ConnectParse),
 }
 
 impl STraceSysTraceCommand {
@@ -243,6 +318,41 @@ impl STraceSysTraceCommand {
         })
     }
 
+    fn parse_connect(trace: &str) -> Option<ConnectParse> {
+        connect.captures(trace).map(|cap| {
+            #[allow(clippy::manual_map)] // more extensible with current pattern
+            let socket_addr = if let Some(unix_path) = cap.name("unix_path") {
+                Some(UnifiedSocketAddr::Unix(
+                    std::os::unix::net::SocketAddr::from_pathname(unix_path.as_str()).unwrap(),
+                ))
+            } else if let Some(sin6_addr) = cap.name("sin6_addr") {
+                Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
+                    std::net::SocketAddrV6::new(
+                        std::net::Ipv6Addr::from_str(sin6_addr.as_str()).unwrap(),
+                        u16::from_str(&cap["sin6_port"]).unwrap(),
+                        u32::from_str(&cap["sin6_flowinfo"]).unwrap(),
+                        u32::from_str(&cap["sin6_scope_id"]).unwrap(),
+                    ),
+                )))
+            } else if let Some(sin_addr) = cap.name("sin_addr") {
+                Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
+                    std::net::SocketAddrV4::new(
+                        std::net::Ipv4Addr::from_str(sin_addr.as_str()).unwrap(),
+                        u16::from_str(&cap["sin_port"]).unwrap(),
+                    ),
+                )))
+            } else {
+                None
+            };
+
+            let socket_addr = socket_addr.expect(
+                "must have parsed socket_addr or else our regex isn't matching the strace output",
+            );
+
+            ConnectParse::IndeterminateResult { socket_addr }
+        })
+    }
+
     fn parse_line(trace: &str) -> Option<ParseLine> {
         if let Some(clone_parse) = Self::parse_clone(trace) {
             return Some(ParseLine::Clone(clone_parse));
@@ -261,6 +371,9 @@ impl STraceSysTraceCommand {
         }
         if let Some(open_parse) = Self::parse_openat_resumed(trace) {
             return Some(ParseLine::Open(open_parse));
+        }
+        if let Some(connect_parse) = Self::parse_connect(trace) {
+            return Some(ParseLine::Connect(connect_parse));
         }
         None
     }
@@ -355,6 +468,10 @@ impl STraceSysTraceCommand {
                     }
                 }
                 ParseLine::Clone(_) => {}
+
+                ParseLine::Connect(ConnectParse::IndeterminateResult { socket_addr }) => {
+                    trace.add_connect(socket_addr);
+                }
             }
         }
 
@@ -367,7 +484,7 @@ impl SysTraceCommand for STraceSysTraceCommand {
         let mut new_cmd = Command::new("strace");
         new_cmd
             .arg("--follow-forks")
-            .arg("--trace=chdir,openat,clone,clone3")
+            .arg("--trace=chdir,openat,clone,clone3,connect")
             .arg("--output")
             .arg(tmp);
 
@@ -405,6 +522,8 @@ impl SysTraceCommand for STraceSysTraceCommand {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+
     use super::*;
 
     #[test]
@@ -642,6 +761,83 @@ mod tests {
     }
 
     #[test]
+    fn parse_connect() {
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
+        );
+        assert_eq!(
+            res,
+            Some(ConnectParse::IndeterminateResult {
+                socket_addr: UnifiedSocketAddr::Unix(
+                    std::os::unix::net::SocketAddr::from_pathname("/var/run/nscd/socket").unwrap(),
+                ),
+            })
+        );
+
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = 0"#,
+        );
+        assert_eq!(
+            res,
+            Some(ConnectParse::IndeterminateResult {
+                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(SocketAddrV6::new(
+                    Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
+                    443,
+                    0,
+                    0
+                ))),
+            })
+        );
+
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(17, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#,
+        );
+        assert_eq!(
+            res,
+            Some(ConnectParse::IndeterminateResult {
+                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::new(100, 100, 100, 100),
+                    53
+                ))),
+            })
+        );
+
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(17, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16 <unfinished ...>"#,
+        );
+        assert_eq!(
+            res,
+            Some(ConnectParse::IndeterminateResult {
+                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::new(100, 100, 100, 100),
+                    53
+                ))),
+            })
+        );
+
+        //
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINPROGRESS (Operation now in progress)"#,
+        );
+        assert_eq!(
+            res,
+            Some(ConnectParse::IndeterminateResult {
+                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(SocketAddrV6::new(
+                    Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
+                    443,
+                    0,
+                    0
+                ))),
+            })
+        );
+
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337653 chdir("/home/mfenniak/Dev" <unfinished ...>"#,
+        );
+        assert_eq!(res, None);
+    }
+
+    #[test]
     fn multiprocess_cwd() {
         // trace_raw contains an strace that was generated by running scripts/generate-strace-multiproc-chdir.py under
         // strace.  This script accesses these files, but all in separate processes with `chdir` commands to the parent
@@ -654,7 +850,14 @@ mod tests {
         // - "/nix/store/0019vid273mjmsm95vwjk6zjp50g66xa-openssl-3.0.11/etc/ssl/openssl.cnf"
         // - "/home/mfenniak/Dev/test.txt"
         //
-        // These files aren't required to make this test work; read_trace doesn't canonicalize the paths.
+        // The files listed above are not required to be present to make this test work; read_trace doesn't canonicalize
+        // the paths.
+        //
+        // Regenerating this file (if needed?) is done by...
+        // - run: strace --follow-forks --trace=chdir,openat,clone,clone3,connect --output
+        //   tests/test_data/strace-multiproc-chdir.txt python scripts/generate-strace-multiproc-chdir.py
+        // - verify: check to ensure that <...unfinished> cases exist in the newly generated file; this may randomly
+        //   *not* happen, and if that's the case then we'd be missing some testing scope.
         let trace_raw = include_bytes!("../../tests/test_data/strace-multiproc-chdir.txt");
 
         let mut trace = Trace::new();
@@ -677,5 +880,47 @@ mod tests {
         // and then starts a subprocess which inherits that directory, and then accesses "test.txt".  So if this test
         // case is failing, it's the inheritence of the cwd from parent processes that is to blame (probably).
         assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/test.txt")));
+    }
+
+    #[test]
+    fn connect_trace_read() {
+        // trace_raw contains an strace that was generated by running `curl https://www.google.com/` under an strace.
+        //
+        // Regenerating this file (if needed?) is done by...
+        // - run: strace --follow-forks --trace=chdir,openat,clone,clone3,connect --output
+        //   tests/test_data/strace-connect.txt curl https://www.google.com/
+        let trace_raw = include_bytes!("../../tests/test_data/strace-connect.txt");
+
+        let mut trace = Trace::new();
+
+        let res = STraceSysTraceCommand::read_trace(&mut trace, &trace_raw[..]);
+        assert!(res.is_ok());
+
+        let sockets = trace.get_connect_sockets();
+
+        assert!(sockets.contains(&UnifiedSocketAddr::Unix(
+            std::os::unix::net::SocketAddr::from_pathname("/var/run/nscd/socket").unwrap(),
+        )));
+
+        assert!(
+            sockets.contains(&UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
+                SocketAddrV4::new(Ipv4Addr::new(142, 250, 217, 100), 443)
+            )))
+        );
+
+        // assert!(paths.contains(&PathBuf::from("flake.nix")));
+        // assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/testtrim/README.md")));
+        // assert!(paths.contains(&PathBuf::from(
+        //     "/home/mfenniak/Dev/wifi-fix-standalone-0.3.1.tar.gz"
+        // )));
+        // assert!(paths.contains(&PathBuf::from("/home/mfenniak/.zsh_history")));
+        // assert!(paths.contains(&PathBuf::from(
+        //     "/nix/store/0019vid273mjmsm95vwjk6zjp50g66xa-openssl-3.0.11/etc/ssl/openssl.cnf"
+        // )));
+
+        // // test.txt is accessed in an unusual way compared to above cases; one process chdir's into /home/mfenniak/Dev,
+        // // and then starts a subprocess which inherits that directory, and then accesses "test.txt".  So if this test
+        // // case is failing, it's the inheritence of the cwd from parent processes that is to blame (probably).
+        // assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/test.txt")));
     }
 }
