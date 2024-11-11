@@ -14,16 +14,19 @@ use serde::{
 pub enum UnifiedSocketAddr {
     Inet(std::net::SocketAddr),
 
-    // FIXME: since this is going to compile-time disappear on non-unix platforms, but the type is serializable, then it
-    // won't be deserializable on other platforms and instead we'll get runtime errors...
     #[cfg(unix)]
     Unix(std::os::unix::net::SocketAddr),
+    // In order to support deserialization of this type, when using a shared testtrim DB with someone on another
+    // platform, we still put Unix socket types in here, but just not as a SocketAddr...
+    #[cfg(not(unix))]
+    Unix(PathBuf),
 }
 
 impl PartialEq for UnifiedSocketAddr {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Inet(l0), Self::Inet(r0)) => l0 == r0,
+            #[cfg(unix)]
             (Self::Unix(l0), Self::Unix(r0)) => {
                 if let Some(lpath) = l0.as_pathname()
                     && let Some(rpath) = r0.as_pathname()
@@ -32,6 +35,8 @@ impl PartialEq for UnifiedSocketAddr {
                 }
                 false // assuming all unnamed sockets are also not the same as each other
             }
+            #[cfg(not(unix))]
+            (Self::Unix(l0), Self::Unix(r0)) => l0 == r0,
             _ => false,
         }
     }
@@ -43,6 +48,7 @@ impl Hash for UnifiedSocketAddr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
             UnifiedSocketAddr::Inet(addr) => addr.hash(state),
+            #[cfg(unix)]
             UnifiedSocketAddr::Unix(addr) => {
                 if let Some(path) = addr.as_pathname() {
                     path.hash(state);
@@ -50,6 +56,8 @@ impl Hash for UnifiedSocketAddr {
                     state.write(&[0, 1, 2, 3]);
                 }
             }
+            #[cfg(not(unix))]
+            UnifiedSocketAddr::Unix(addr) => addr.hash(state),
         }
     }
 }
@@ -77,6 +85,11 @@ impl Serialize for UnifiedSocketAddr {
                         .to_str()
                         .ok_or_else(|| serde::ser::Error::custom("Non-UTF8 Unix socket path"))?,
                 )?;
+            }
+            #[cfg(not(unix))]
+            UnifiedSocketAddr::Unix(ref addr) => {
+                state.serialize_field("type", "Unix")?;
+                state.serialize_field("addr", &addr.to_string_lossy())?;
             }
         }
         state.end()
@@ -133,9 +146,8 @@ impl<'de> Deserialize<'de> for UnifiedSocketAddr {
                         }
                         #[cfg(not(unix))]
                         {
-                            Err(de::Error::custom(
-                                "Unix socket addresses are not supported on this platform",
-                            ))
+                            let unix_addr = PathBuf::from(addr);
+                            Ok(UnifiedSocketAddr::Unix(unix_addr))
                         }
                     }
                     _ => Err(de::Error::custom("unknown addr type")),
@@ -164,10 +176,12 @@ impl Trace {
         }
     }
 
+    #[allow(dead_code)] // may not be used on a platform that doesn't support tracing yet
     pub fn add_open(&mut self, path: PathBuf) {
         self.open_paths.insert(path);
     }
 
+    #[allow(dead_code)] // may not be used on a platform that doesn't support tracing yet
     pub fn add_connect(&mut self, socket: UnifiedSocketAddr) {
         self.connect_sockets.insert(socket);
     }
