@@ -24,7 +24,7 @@ jobs:
       TESTTRIM_DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: apt-get update && apt-get install -y sudo awscli postgresql-client # install-nix-actions requires `sudo`...
       - name: verify pgsql service is available
         run: timeout 30 bash -c 'while ! psql $DATABASE_URL -c "SELECT 1"; do sleep 1; done'
