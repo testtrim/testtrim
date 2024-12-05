@@ -398,7 +398,7 @@ impl DotnetTestPlatform {
         let mut retval = vec![];
         for entry in fs::read_dir(".")? {
             let path = entry?.path();
-            if path.extension().map_or(false, |ext| ext == "sln") && path.is_file() {
+            if path.extension().is_some_and(|ext| ext == "sln") && path.is_file() {
                 retval.push(path);
             }
         }
