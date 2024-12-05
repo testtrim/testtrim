@@ -14,7 +14,7 @@ jobs:
 
     services:
       pgsql:
-        image: postgres:17
+        image: postgres:17@sha256:fe4efc6901dda0d952306fd962643d8022d7bb773ffe13fe8a21551b9276e50c
         env:
           POSTGRES_USER: testtrim
           POSTGRES_PASSWORD: testtrim
@@ -24,11 +24,11 @@ jobs:
       TESTTRIM_DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - run: apt-get update && apt-get install -y sudo awscli postgresql-client # install-nix-actions requires `sudo`...
       - name: verify pgsql service is available
         run: timeout 30 bash -c 'while ! psql $DATABASE_URL -c "SELECT 1"; do sleep 1; done'
-      - uses: https://github.com/cachix/install-nix-action@v30
+      - uses: https://github.com/cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
