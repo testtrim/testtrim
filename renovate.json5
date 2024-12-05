@@ -1,0 +1,12 @@
+// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  }
+}
