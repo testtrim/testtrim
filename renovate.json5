@@ -7,7 +7,7 @@
   "timezone": "America/Edmonton",
   "nix": {"enabled": true},
   "extends": [
-    "config:recommended",
+    "config:best-practices",
     ":dependencyDashboard",
     ":maintainLockFilesWeekly",
     ":automergeMinor"
