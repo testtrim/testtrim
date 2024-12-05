@@ -18,6 +18,31 @@
         "type": "github"
       }
     },
+    "mfenniak": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "dir": "flake",
+        "lastModified": 1733256836,
+        "narHash": "sha256-GHkEbyAzTgZmuRa1kCl1birflpyUyEzG2F7K0rCF30o=",
+        "owner": "mfenniak",
+        "repo": "custom-nixpkgs",
+        "rev": "856b7ee6d931d2565184e4316d0614a1eeef01ef",
+        "type": "github"
+      },
+      "original": {
+        "dir": "flake",
+        "owner": "mfenniak",
+        "repo": "custom-nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1730200266,
@@ -53,6 +78,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "mfenniak": "mfenniak",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

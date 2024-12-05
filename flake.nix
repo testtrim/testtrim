@@ -9,9 +9,14 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
+    mfenniak = {
+      url = "github:mfenniak/custom-nixpkgs?dir=flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, mfenniak, ... }:
     flake-utils.lib.eachDefaultSystem (system: let
       overlays = [ (import rust-overlay) ];
       pkgs = import nixpkgs {
@@ -63,6 +68,7 @@
             # resolve because when testtrim is being used normally, it would be someone else's responsibility to get dev
             # tools in place that are relevant to the project.
             dotnet-sdk  # for dotnet-coverage-specimen
+            mfenniak.packages.${system}.dotnet-symbol
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;

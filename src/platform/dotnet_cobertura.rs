@@ -44,9 +44,8 @@ pub struct Packages {
 pub struct Package {
     #[serde(rename = "@name", default)]
     pub name: String,
-    // TODO: external dependency tracking
-    // #[serde(rename = "@line-rate", default)]
-    // pub line_rate: f64,
+    #[serde(rename = "@line-rate", default)]
+    pub line_rate: f64,
     // #[serde(rename = "@branch-rate", default)]
     // branch_rate: f64,
     // #[serde(rename = "@complexity", default)]
@@ -133,11 +132,11 @@ mod tests {
 
         let pkg = &coverage.packages.package[0];
         assert_eq!(pkg.name, "Microsoft.VisualStudio.TestPlatform.ObjectModel");
-        // assert!((pkg.line_rate - 0.3411).abs() < 0.01, "line_rate == 0.3411"); // TODO: external dependency tracking
+        assert!((pkg.line_rate - 0.3411).abs() < 0.01, "line_rate == 0.3411");
 
         let pkg = &coverage.packages.package[12];
         assert_eq!(pkg.name, "MathFunctions");
-        // assert!((pkg.line_rate - 0.9565).abs() < 0.01, "line_rate == 0.9565"); // TODO: external dependency tracking
+        assert!((pkg.line_rate - 0.9565).abs() < 0.01, "line_rate == 0.9565");
 
         assert_eq!(pkg.classes.class.len(), 2);
 
