@@ -151,6 +151,18 @@ lazy_static! {
 pub struct RustTestPlatform;
 
 impl RustTestPlatform {
+    #[must_use]
+    pub fn autodetect() -> bool {
+        if fs::exists("Cargo.toml")
+            .expect("autodetect test project type failed when checking Cargo.toml existence")
+        {
+            trace!("Detected Cargo.toml; auto-detect result: Rust test project");
+            true
+        } else {
+            false
+        }
+    }
+
     fn rust_cargo_deps_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
         eval_target_test_cases: &HashSet<RustTestIdentifier>,
         scm: &MyScm,

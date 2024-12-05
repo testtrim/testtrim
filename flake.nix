@@ -57,6 +57,12 @@
             act
 
             cargo-nextest
+
+            # FIXME: integration tests rely on having development tools available for each system that they operate
+            # under -- ideally they would load such a thing from the target repo.  But this isn't a critical issue to
+            # resolve because when testtrim is being used normally, it would be someone else's responsibility to get dev
+            # tools in place that are relevant to the project.
+            dotnet-sdk  # for dotnet-coverage-specimen
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;

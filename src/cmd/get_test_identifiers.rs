@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use current_platform::CURRENT_PLATFORM;
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -15,6 +15,7 @@ use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
 use crate::coverage::{create_db, Tag};
+use crate::platform::dotnet::DotnetTestPlatform;
 use crate::platform::TestReason;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
@@ -28,16 +29,46 @@ use crate::{
     scm::{git::GitScm, Scm, ScmCommit},
 };
 
-use super::cli::{GetTestIdentifierMode, PlatformTaggingMode};
+use super::cli::{
+    autodetect_test_project_type, GetTestIdentifierMode, PlatformTaggingMode, TestProjectType,
+};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(test_selection_mode: &GetTestIdentifierMode, tags: &[Tag]) {
+pub fn cli(
+    test_project_type: TestProjectType,
+    test_selection_mode: GetTestIdentifierMode,
+    tags: &[Tag],
+) {
+    let test_project_type = if test_project_type == TestProjectType::AutoDetect {
+        autodetect_test_project_type()
+    } else {
+        test_project_type
+    };
+    match test_project_type {
+        TestProjectType::AutoDetect => panic!("autodetect failed"),
+        TestProjectType::Rust => {
+            specific_cli::<_, _, _, _, RustTestPlatform>(test_selection_mode, tags);
+        }
+        TestProjectType::Dotnet => {
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags);
+        }
+    }
+}
+
+fn specific_cli<TI, CI, TD, CTI, TP>(test_selection_mode: GetTestIdentifierMode, tags: &[Tag])
+where
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
+    TD: TestDiscovery<CTI, TI>,
+    CTI: ConcreteTestIdentifier<TI>,
+    TP: TestPlatform<TI, CI, TD, CTI>,
+{
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
     tracing::subscriber::with_default(my_subscriber, || {
-        let test_cases = match get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
+        let test_cases = match get_target_test_cases::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
             AncestorSearchMode::AllCommits,
@@ -50,7 +81,7 @@ pub fn cli(test_selection_mode: &GetTestIdentifierMode, tags: &[Tag]) {
             }
         };
         for (cti, reasons) in test_cases.target_test_cases {
-            println!("{:?}", cti.test_identifier);
+            println!("{:?}", cti.test_identifier());
             for reason in reasons {
                 println!("\t{reason:?}");
             }
@@ -103,7 +134,7 @@ pub enum AncestorSearchMode {
 }
 
 pub fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
-    mode: &GetTestIdentifierMode,
+    mode: GetTestIdentifierMode,
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
     tags: &[Tag],
@@ -120,7 +151,7 @@ where
     let test_discovery = TP::discover_tests()?;
     let all_test_cases = test_discovery.all_test_cases();
 
-    if *mode == GetTestIdentifierMode::All {
+    if mode == GetTestIdentifierMode::All {
         return Ok(TargetTestCases {
             all_test_cases: all_test_cases.clone(),
             target_test_cases: all_test_cases
@@ -163,7 +194,7 @@ where
     };
 
     let changed_files = scm.get_changed_files(&ancestor_commit)?;
-    trace!("changed files: {:?}", changed_files);
+    debug!("changed files: {:?}", changed_files);
 
     let all_test_identifiers = all_test_cases
         .iter()
@@ -183,7 +214,7 @@ where
         relevant_test_cases.entry(ti).or_default().extend(reasons);
     }
 
-    trace!("relevant_test_cases: {:?}", relevant_test_cases);
+    debug!("relevant_test_cases: {:?}", relevant_test_cases);
 
     Ok(TargetTestCases {
         all_test_cases: all_test_cases.clone(),
@@ -293,7 +324,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     let mut retval = HashMap::new();
 
     compute_all_new_test_cases(eval_target_test_cases, coverage_data, &mut retval);
-    trace!(
+    debug!(
         "relevant test cases after searching for new tests: {:?}",
         retval
     );
@@ -311,7 +342,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
         &mut retval,
         &mut HashSet::with_capacity(eval_target_changed_files.len()),
     )?;
-    trace!(
+    debug!(
         "relevant test cases after searching for file changes: {:?}",
         retval
     );

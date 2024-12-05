@@ -17,6 +17,8 @@ use crate::{
     scm::{Scm, ScmCommit},
 };
 
+pub mod dotnet;
+mod dotnet_cobertura;
 pub mod rust;
 mod rust_llvm;
 

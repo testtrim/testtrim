@@ -25,6 +25,7 @@ lazy_static = "*"
 llvm_profparser = "*"
 log = "*"
 num_cpus = "*"
+quick-xml = { version = "*", features = ["serialize"] }
 rand = "*"
 regex = "*"
 serde = { version = "*", features = ["derive"] }

@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use log::trace;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::fmt::Debug;
 
-use crate::coverage::Tag;
+use crate::{
+    coverage::Tag,
+    platform::{dotnet::DotnetTestPlatform, rust::RustTestPlatform},
+};
 
 use super::{get_test_identifiers, run_tests, simulate_history};
 
@@ -46,6 +50,10 @@ enum Commands {
 
     /// Run through a series of historical commits and simulate using testtrim
     SimulateHistory {
+        /// Software platform for running tests
+        #[arg(value_enum, long, default_value_t=TestProjectType::AutoDetect)]
+        test_project_type: TestProjectType,
+
         #[command(flatten)]
         execution_parameters: TestExecutionParameters,
 
@@ -57,6 +65,10 @@ enum Commands {
 
 #[derive(Args, Debug)]
 struct TestTargetingParameters {
+    /// Software platform for running tests
+    #[arg(value_enum, long, default_value_t=TestProjectType::AutoDetect)]
+    test_project_type: TestProjectType,
+
     /// Strategy for test selection
     #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
     test_selection_mode: GetTestIdentifierMode,
@@ -73,6 +85,16 @@ struct TestTargetingParameters {
     /// Whether or not to add the `platform` tag automatically to test results
     #[arg(value_enum, long, default_value_t=PlatformTaggingMode::Automatic)]
     platform_tagging_mode: PlatformTaggingMode,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum TestProjectType {
+    /// Will attempt to identify the test project via simple heuristics
+    AutoDetect,
+    /// Operate on Rust tests; eg. using `cargo test`
+    Rust,
+    /// Operate on .NET tests; eg. using `dotnet test`
+    Dotnet,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -138,7 +160,8 @@ pub fn run_cli() {
         Commands::Noop => {}
         Commands::GetTestIdentifiers { target_parameters } => {
             get_test_identifiers::cli(
-                &target_parameters.test_selection_mode,
+                target_parameters.test_project_type,
+                target_parameters.test_selection_mode,
                 &get_test_identifiers::tags(
                     &target_parameters.tags,
                     target_parameters.platform_tagging_mode,
@@ -151,8 +174,9 @@ pub fn run_cli() {
             execution_parameters,
         } => {
             run_tests::cli(
-                &target_parameters.test_selection_mode,
-                source_mode,
+                target_parameters.test_project_type,
+                target_parameters.test_selection_mode,
+                *source_mode,
                 execution_parameters.jobs,
                 &get_test_identifiers::tags(
                     &target_parameters.tags,
@@ -161,10 +185,23 @@ pub fn run_cli() {
             );
         }
         Commands::SimulateHistory {
+            test_project_type,
             num_commits,
             execution_parameters,
         } => {
-            simulate_history::cli(*num_commits, execution_parameters.jobs);
+            simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs);
         }
+    }
+}
+
+#[must_use]
+pub fn autodetect_test_project_type() -> TestProjectType {
+    if RustTestPlatform::autodetect() {
+        trace!("Detected Cargo.toml; auto-detect result: Rust test project");
+        TestProjectType::Rust
+    } else if DotnetTestPlatform::autodetect() {
+        TestProjectType::Dotnet
+    } else {
+        panic!("Autodetect test project type failed.");
     }
 }

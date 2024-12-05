@@ -15,27 +15,69 @@ use crate::{
     coverage::{commit_coverage_data::CoverageIdentifier, create_db, Tag},
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
-        rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
+        dotnet::DotnetTestPlatform, rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery,
+        TestIdentifier, TestPlatform,
     },
     scm::{git::GitScm, Scm, ScmCommit},
     timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
 };
 
-use super::cli::{GetTestIdentifierMode, SourceMode};
+use super::cli::{
+    autodetect_test_project_type, GetTestIdentifierMode, SourceMode, TestProjectType,
+};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
 pub fn cli(
-    test_selection_mode: &GetTestIdentifierMode,
-    source_mode: &SourceMode,
+    test_project_type: TestProjectType,
+    test_selection_mode: GetTestIdentifierMode,
+    source_mode: SourceMode,
     jobs: u16,
     tags: &[Tag],
 ) {
+    let test_project_type = if test_project_type == TestProjectType::AutoDetect {
+        autodetect_test_project_type()
+    } else {
+        test_project_type
+    };
+    match test_project_type {
+        TestProjectType::AutoDetect => panic!("autodetect failed"),
+        TestProjectType::Rust => {
+            specific_cli::<_, _, _, _, RustTestPlatform>(
+                test_selection_mode,
+                source_mode,
+                jobs,
+                tags,
+            );
+        }
+        TestProjectType::Dotnet => {
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(
+                test_selection_mode,
+                source_mode,
+                jobs,
+                tags,
+            );
+        }
+    }
+}
+
+fn specific_cli<TI, CI, TD, CTI, TP>(
+    test_selection_mode: GetTestIdentifierMode,
+    source_mode: SourceMode,
+    jobs: u16,
+    tags: &[Tag],
+) where
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
+    TD: TestDiscovery<CTI, TI>,
+    CTI: ConcreteTestIdentifier<TI>,
+    TP: TestPlatform<TI, CI, TD, CTI>,
+{
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
     tracing::subscriber::with_default(my_subscriber, || {
-        match run_tests::<_, _, _, _, _, _, RustTestPlatform>(
+        match run_tests::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
             source_mode,
@@ -110,9 +152,9 @@ pub struct RunTestsOutput<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTe
 }
 
 pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
-    mode: &GetTestIdentifierMode,
+    mode: GetTestIdentifierMode,
     scm: &MyScm,
-    source_mode: &SourceMode,
+    source_mode: SourceMode,
     jobs: u16,
     tags: &[Tag],
 ) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>

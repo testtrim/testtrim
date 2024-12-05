@@ -18,19 +18,46 @@ use crate::{
     coverage::{commit_coverage_data::CoverageIdentifier, create_db},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
-        rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
+        dotnet::DotnetTestPlatform, rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery,
+        TestIdentifier, TestPlatform,
     },
     scm::{git::GitScm, Scm, ScmCommit},
     timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
     util::duration_to_seconds,
 };
 
-use super::cli::{GetTestIdentifierMode, SourceMode};
+use super::cli::{
+    autodetect_test_project_type, GetTestIdentifierMode, SourceMode, TestProjectType,
+};
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(num_commits: u16, jobs: u16) {
-    match simulate_history::<_, _, _, _, _, _, RustTestPlatform>(&GitScm {}, num_commits, jobs) {
+pub fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) {
+    let test_project_type = if test_project_type == TestProjectType::AutoDetect {
+        autodetect_test_project_type()
+    } else {
+        test_project_type
+    };
+    match test_project_type {
+        TestProjectType::AutoDetect => panic!("autodetect failed"),
+        TestProjectType::Rust => {
+            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs);
+        }
+        TestProjectType::Dotnet => {
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs);
+        }
+    }
+}
+
+fn specific_cli<TI, CI, TD, CTI, TP>(num_commits: u16, jobs: u16)
+where
+    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
+    TD: TestDiscovery<CTI, TI>,
+    CTI: ConcreteTestIdentifier<TI>,
+    TP: TestPlatform<TI, CI, TD, CTI>,
+{
+    match simulate_history::<_, _, _, _, _, _, TP>(&GitScm {}, num_commits, jobs) {
         Ok(out) => {
             let mut wtr = csv::Writer::from_writer(io::stdout());
             for rec in out.commits_simulated {
@@ -207,9 +234,9 @@ where
     trace!("beginning run test subcommand");
     let run_tests_result = tracing::subscriber::with_default(my_subscriber, || {
         run_tests::<_, _, _, _, _, _, TP>(
-            &GetTestIdentifierMode::Relevant,
+            GetTestIdentifierMode::Relevant,
             scm,
-            &SourceMode::CleanCommit,
+            SourceMode::CleanCommit,
             jobs,
             &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic), // default tags only
         )
