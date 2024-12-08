@@ -11,5 +11,15 @@
     ":dependencyDashboard",
     ":maintainLockFilesWeekly",
     ":automergeMinor"
+  ],
+  "packageRules": [
+    {
+      "description": "packages that update regularly (eg. daily) and aren't security critical are infrequent for less noise",
+      "matchPackageNames": [
+        "rust-overlay",
+        "nixpkgs"
+      ],
+      "schedule": ["* 0-3 1,15 * *"]
+    }
   ]
 }
