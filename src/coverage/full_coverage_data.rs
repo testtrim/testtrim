@@ -7,6 +7,9 @@ use std::{
     path::PathBuf,
 };
 
+use serde::{Deserialize, Serialize};
+use serde_map_to_array::HashMapToArray;
+
 use crate::{
     coverage::commit_coverage_data::{
         CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
@@ -16,11 +19,15 @@ use crate::{
 
 /// `FullCoverageData` represents coverage data that encompasses the entire project's test suite.  It will typically be
 /// coalesced and merged from multiple test runs over time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+// Note: Serialize & Deserialize are present because of the mishmash between internal data structures and web API
 pub struct FullCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
     all_tests: HashSet<TI>,
     file_to_test_map: HashMap<PathBuf, HashSet<TI>>,
+    // no platforms support this yet, so let's just omit it from API usage
     function_to_test_map: HashMap<String, HashSet<TI>>,
+    // since CI will likely serialize as a struct, serialize this field as an array instead of a map
+    #[serde(with = "HashMapToArray::<CI, HashSet<TI>>")]
     coverage_identifier_to_test_map: HashMap<CI, HashSet<TI>>,
     file_referenced_by_files_map: HashMap<PathBuf, HashSet<PathBuf>>,
 }
@@ -114,6 +121,7 @@ mod tests {
     };
 
     use super::*;
+    use anyhow::Result;
     use lazy_static::lazy_static;
 
     lazy_static! {
@@ -135,6 +143,16 @@ mod tests {
                 test_name: "test1".to_string(),
             }
         };
+        static ref thiserror: RustCoverageIdentifier =
+            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+                package_name: String::from("thiserror"),
+                version: String::from("0.1"),
+            });
+        static ref regex: RustCoverageIdentifier =
+            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+                package_name: String::from("regex"),
+                version: String::from("0.1"),
+            });
     }
 
     #[test]
@@ -262,14 +280,6 @@ mod tests {
     #[test]
     fn add_heuristic_coverage_to_test() {
         let mut coverage_data = FullCoverageData::new();
-        let thiserror = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-            package_name: String::from("thiserror"),
-            version: String::from("0.1"),
-        });
-        let regex = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-            package_name: String::from("regex"),
-            version: String::from("0.1"),
-        });
         coverage_data.add_heuristic_coverage_to_test(test1.clone(), regex.clone());
         coverage_data.add_heuristic_coverage_to_test(test2.clone(), regex.clone());
         coverage_data.add_heuristic_coverage_to_test(test1.clone(), thiserror.clone());
@@ -357,5 +367,77 @@ mod tests {
             .get(&PathBuf::from("extra-data/abc-321.txt"))
             .unwrap()
             .contains(&PathBuf::from("src/two.rs")));
+    }
+
+    #[test]
+    fn serialize() -> Result<()> {
+        let mut coverage_data: FullCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            FullCoverageData::new();
+
+        coverage_data.add_existing_test(test1.clone());
+        coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("file1.rs"),
+            test_identifier: test1.clone(),
+        });
+        coverage_data.add_function_to_test(FunctionCoverage {
+            function_name: "func1".to_string(),
+            test_identifier: test1.clone(),
+        });
+        coverage_data.add_heuristic_coverage_to_test(test1.clone(), regex.clone());
+        coverage_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/one.rs"),
+            target_file: PathBuf::from("extra-data/abc-123.txt"),
+        });
+
+        let serialized_data = serde_json::to_value(coverage_data)?;
+        let coverage_data: FullCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            serde_json::from_value(serialized_data)?;
+
+        assert_eq!(coverage_data.all_tests().len(), 1);
+        assert!(coverage_data.all_tests().contains(&test1));
+        assert_eq!(coverage_data.file_to_test_map().len(), 1);
+        assert_eq!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file1.rs"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test1));
+        assert_eq!(coverage_data.coverage_identifier_to_test_map().len(), 1);
+        assert_eq!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&regex)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
+            .unwrap()
+            .contains(&test1));
+        assert_eq!(coverage_data.file_referenced_by_files_map().len(), 1);
+        assert_eq!(
+            coverage_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra-data/abc-123.txt"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra-data/abc-123.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("src/one.rs")));
+
+        Ok(())
     }
 }

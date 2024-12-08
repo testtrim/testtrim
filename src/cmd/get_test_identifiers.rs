@@ -62,7 +62,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
@@ -146,7 +146,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     let test_discovery = TP::discover_tests()?;
     let all_test_cases = test_discovery.all_test_cases();
@@ -421,7 +421,7 @@ mod tests {
         coverage::{
             commit_coverage_data::{CommitCoverageData, FileCoverage},
             full_coverage_data::FullCoverageData,
-            CoverageDatabase, Tag,
+            CoverageDatabase, CoverageDatabaseDetailedError, Tag,
         },
         platform::rust::{
             RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary, RustTestIdentifier,
@@ -580,7 +580,7 @@ mod tests {
             _commit_identifier: &str,
             _ancestor_commit_identifier: Option<&str>,
             _tags: &[Tag],
-        ) -> anyhow::Result<()> {
+        ) -> Result<(), CoverageDatabaseDetailedError> {
             // save_coverage_data should never be used on this mock
             unreachable!()
         }
@@ -589,20 +589,22 @@ mod tests {
             &mut self,
             commit_identifier: &str,
             _tags: &[Tag],
-        ) -> anyhow::Result<Option<FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>>>
-        {
+        ) -> Result<
+            Option<FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>>,
+            CoverageDatabaseDetailedError,
+        > {
             match self.commit_data.get(commit_identifier) {
                 Some(data) => Ok(Some(data.clone())),
                 None => Ok(None),
             }
         }
 
-        fn has_any_coverage_data(&mut self) -> anyhow::Result<bool> {
+        fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
             // has_any_coverage_data not currently used
             Ok(!self.commit_data.is_empty())
         }
 
-        fn clear_project_data(&mut self) -> anyhow::Result<()> {
+        fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
             // Not used in testing
             unreachable!()
         }

@@ -112,10 +112,10 @@ struct TargetFrameworkName(String);
 struct ProjectFile(PathBuf);
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-pub struct PackageName(String);
+pub struct PackageName(pub String);
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-pub struct PackageVersion(String);
+pub struct PackageVersion(pub String);
 
 // TODO: external dependency tracking
 // type SolutionDependencyMap = HashMap<PackageName, PackageVersion>;
@@ -608,14 +608,12 @@ impl DotnetTestPlatform {
     // }
 }
 
-impl
-    TestPlatform<
-        DotnetTestIdentifier,
-        DotnetCoverageIdentifier,
-        DotnetTestDiscovery,
-        DotnetConcreteTestIdentifier,
-    > for DotnetTestPlatform
-{
+impl TestPlatform for DotnetTestPlatform {
+    type TI = DotnetTestIdentifier;
+    type CI = DotnetCoverageIdentifier;
+    type TD = DotnetTestDiscovery;
+    type CTI = DotnetConcreteTestIdentifier;
+
     fn project_name() -> Result<String> {
         Ok(String::from(
             current_dir()?

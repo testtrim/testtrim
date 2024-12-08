@@ -9,18 +9,27 @@ use std::{
     path::PathBuf,
 };
 
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_map_to_array::HashMapToArray;
+
 use crate::platform::TestIdentifier;
 
 /// `CommitCoverageData` represents the coverage data that could be collected from test execution on a single commit.
 ///
 /// Importantly this may represent data from only a partial execution of tests that were appropriate to that commit,
 /// rather than a complete test run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+// Note: Serialize & Deserialize are present because of the mishmash between internal data structures and web API. Since
+// TI will likely serialize as a struct, everything HashMap<TI> will need to be serialized as an array rather than a map
+// for JSON compatbility.
 pub struct CommitCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
     all_existing_test_set: HashSet<TI>,
     executed_test_set: HashSet<TI>,
+    #[serde(with = "HashMapToArray::<TI, HashSet<PathBuf>>")]
     executed_test_to_files_map: HashMap<TI, HashSet<PathBuf>>,
+    #[serde(with = "HashMapToArray::<TI, HashSet<String>>")]
     executed_test_to_functions_map: HashMap<TI, HashSet<String>>,
+    #[serde(with = "HashMapToArray::<TI, HashSet<CI>>")]
     executed_test_to_coverage_identifier_map: HashMap<TI, HashSet<CI>>,
     file_references_files_map: HashMap<PathBuf, HashSet<PathBuf>>,
 }
@@ -45,7 +54,7 @@ pub struct FileReference {
     pub target_file: PathBuf,
 }
 
-pub trait CoverageIdentifier: Eq + Hash + Clone + Debug {}
+pub trait CoverageIdentifier: Eq + Hash + Clone + Debug + Serialize + DeserializeOwned {}
 
 impl<TI: TestIdentifier, CI: CoverageIdentifier> Default for CommitCoverageData<TI, CI> {
     fn default() -> Self {
@@ -178,6 +187,8 @@ mod tests {
     };
 
     use super::*;
+
+    use anyhow::Result;
     use lazy_static::lazy_static;
 
     lazy_static! {
@@ -199,6 +210,16 @@ mod tests {
                 test_name: "test1".to_string(),
             }
         };
+        static ref thiserror: RustCoverageIdentifier =
+            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+                package_name: String::from("thiserror"),
+                version: String::from("0.1"),
+            });
+        static ref regex: RustCoverageIdentifier =
+            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+                package_name: String::from("regex"),
+                version: String::from("0.1"),
+            });
     }
 
     #[test]
@@ -337,14 +358,6 @@ mod tests {
     #[test]
     fn add_coverage_identifier_to_test() {
         let mut coverage_data = CommitCoverageData::new();
-        let thiserror = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-            package_name: String::from("thiserror"),
-            version: String::from("0.1"),
-        });
-        let regex = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-            package_name: String::from("regex"),
-            version: String::from("0.1"),
-        });
         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
             test_identifier: test1.clone(),
             coverage_identifier: regex.clone(),
@@ -455,5 +468,88 @@ mod tests {
             .get(&PathBuf::from("src/one.rs"))
             .unwrap()
             .contains(&PathBuf::from("extra-data/abc-123.txt")));
+    }
+
+    #[test]
+    fn serialize() -> Result<()> {
+        let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            CommitCoverageData::new();
+
+        coverage_data.add_existing_test(test1.clone());
+        coverage_data.add_executed_test(test1.clone());
+        coverage_data.add_file_to_test(FileCoverage {
+            file_name: PathBuf::from("file1.rs"),
+            test_identifier: test1.clone(),
+        });
+        coverage_data.add_function_to_test(FunctionCoverage {
+            function_name: "func1".to_string(),
+            test_identifier: test1.clone(),
+        });
+        coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: test1.clone(),
+            coverage_identifier: regex.clone(),
+        });
+        coverage_data.add_file_reference(FileReference {
+            referencing_file: PathBuf::from("src/one.rs"),
+            target_file: PathBuf::from("extra-data/abc-123.txt"),
+        });
+
+        let serialized_data = serde_json::to_value(coverage_data)?;
+        let coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
+            serde_json::from_value(serialized_data)?;
+
+        assert_eq!(coverage_data.existing_test_set().len(), 1);
+        assert!(coverage_data.existing_test_set().contains(&test1));
+        assert_eq!(coverage_data.existing_test_set().len(), 1);
+        assert!(coverage_data.existing_test_set().contains(&test1));
+        assert_eq!(coverage_data.executed_test_to_files_map().len(), 1);
+        assert_eq!(
+            coverage_data
+                .executed_test_to_files_map()
+                .get(&test1) // PathBuf::from("file1.rs"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .executed_test_to_files_map()
+            .get(&test1)
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs")));
+        assert_eq!(
+            coverage_data
+                .executed_test_to_coverage_identifier_map()
+                .len(),
+            1
+        );
+        assert_eq!(
+            coverage_data
+                .executed_test_to_coverage_identifier_map()
+                .get(&test1)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .executed_test_to_coverage_identifier_map()
+            .get(&test1)
+            .unwrap()
+            .contains(&regex));
+        assert_eq!(coverage_data.file_references_files_map().len(), 1);
+        assert_eq!(
+            coverage_data
+                .file_references_files_map()
+                .get(&PathBuf::from("src/one.rs"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(coverage_data
+            .file_references_files_map()
+            .get(&PathBuf::from("src/one.rs"))
+            .unwrap()
+            .contains(&PathBuf::from("extra-data/abc-123.txt")));
+
+        Ok(())
     }
 }

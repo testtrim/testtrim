@@ -4,7 +4,7 @@
 
 use std::{borrow::Cow, collections::HashSet, marker::PhantomData, path::PathBuf, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use log::{error, info};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -71,7 +71,7 @@ fn specific_cli<TI, CI, TD, CTI, TP>(
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
@@ -165,7 +165,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     let save_coverage_data = match source_mode {
         SourceMode::Automatic => scm.is_working_dir_clean()?,
@@ -226,12 +226,16 @@ where
             .map(|c| scm.get_commit_identifier(c));
 
         info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
-            create_db(TP::project_name()?)?.save_coverage_data(
-                &coverage_data,
-                &commit_identifier,
-                ancestor_commit_identifier.as_deref(),
-                tags,
-            )
+            // .context() here is used to quietly unify the error types into anyhow::Error
+            create_db(TP::project_name()?)
+                .context("create_db")?
+                .save_coverage_data(
+                    &coverage_data,
+                    &commit_identifier,
+                    ancestor_commit_identifier.as_deref(),
+                    tags,
+                )
+                .context("save_coverage_data")
         })?;
     }
 

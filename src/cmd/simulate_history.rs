@@ -55,7 +55,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     match simulate_history::<_, _, _, _, _, _, TP>(&GitScm {}, num_commits, jobs) {
         Ok(out) => {
@@ -143,7 +143,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
     create_db::<TI, CI>(TP::project_name()?)?.clear_project_data()?;
@@ -187,7 +187,7 @@ where
 {
     let mut result = vec![];
     let mut parents = scm.get_commit_parents(head)?;
-    while result.len() < num_commits.into()
+    while result.len() < Into::<usize>::into(num_commits)
         && let Some(cur_commit) = parents.pop()
     {
         let cur_parents = scm.get_commit_parents(&cur_commit)?;
@@ -211,7 +211,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
     CTI: ConcreteTestIdentifier<TI>,
-    TP: TestPlatform<TI, CI, TD, CTI>,
+    TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     // For each commit:
     // - Checkout that branch

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Display},
@@ -26,7 +27,7 @@ mod rust_llvm;
 ///
 /// It must contain data such that, if it was serialized between machines, it could be picked up and contain relevant
 /// data to find and execute the test on another host.
-pub trait TestIdentifier: Eq + Hash + Clone + Debug {}
+pub trait TestIdentifier: Eq + Hash + Clone + Debug + Serialize {}
 
 /// An alternate trait of `TestIdentifier` which can be used with dynamic dispatch.  Test identifiers must implement
 /// both traits.
@@ -70,35 +71,34 @@ pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier, CI: Coverage
     pub external_dependencies_changed: Option<usize>,
 }
 
-pub trait TestPlatform<TI, CI, TD, CTI>
-where
-    TI: TestIdentifier,
-    CI: CoverageIdentifier,
-    TD: TestDiscovery<CTI, TI>,
-    CTI: ConcreteTestIdentifier<TI>,
-{
+pub trait TestPlatform {
+    type TI: TestIdentifier + Serialize + DeserializeOwned + 'static;
+    type CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static;
+    type TD: TestDiscovery<Self::CTI, Self::TI>;
+    type CTI: ConcreteTestIdentifier<Self::TI>;
+
     fn project_name() -> Result<String>;
 
-    fn discover_tests() -> Result<TD>;
+    fn discover_tests() -> Result<Self::TD>;
 
     fn run_tests<'a, I>(
         test_cases: I,
         jobs: u16,
-    ) -> Result<CommitCoverageData<TI, CI>, RunTestsErrors>
+    ) -> Result<CommitCoverageData<Self::TI, Self::CI>, RunTestsErrors>
     where
-        I: IntoIterator<Item = &'a CTI>,
-        CTI: 'a;
+        I: IntoIterator<Item = &'a Self::CTI>,
+        Self::CTI: 'a;
 
     fn platform_specific_relevant_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
-        eval_target_test_cases: &HashSet<TI>,
+        eval_target_test_cases: &HashSet<Self::TI>,
         eval_target_changed_files: &HashSet<PathBuf>,
         scm: &MyScm,
         ancestor_commit: &Commit,
-        coverage_data: &FullCoverageData<TI, CI>,
-    ) -> Result<PlatformSpecificRelevantTestCaseData<TI, CI>>;
+        coverage_data: &FullCoverageData<Self::TI, Self::CI>,
+    ) -> Result<PlatformSpecificRelevantTestCaseData<Self::TI, Self::CI>>;
 
     fn analyze_changed_files(
         changed_files: &HashSet<PathBuf>,
-        coverage_data: &mut CommitCoverageData<TI, CI>,
+        coverage_data: &mut CommitCoverageData<Self::TI, Self::CI>,
     ) -> Result<()>;
 }

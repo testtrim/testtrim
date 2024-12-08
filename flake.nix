@@ -52,6 +52,8 @@
 
             sqlx-cli
 
+            openssl.dev
+
             # Can locally run the Forgejo action for quicker dev cycles:
             # act --container-daemon-socket unix:///run/podman/podman.sock -W ./.forgejo/workflows -P docker=node:20-bullseye
             act

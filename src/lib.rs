@@ -17,6 +17,7 @@ pub mod errors;
 pub mod platform;
 mod schema;
 pub mod scm;
+mod server;
 mod sys_trace;
 mod timing_tracer;
 mod util;

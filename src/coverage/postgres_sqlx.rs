@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{Context, Result};
 use async_std::task;
+use log::debug;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use sqlx::{postgres::PgPoolOptions, Executor, Pool, Postgres, Transaction};
@@ -18,7 +18,7 @@ use super::{
     },
     full_coverage_data::FullCoverageData,
     tag::TagArray,
-    CoverageDatabase, Tag,
+    CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, ResultWithContext, Tag,
 };
 
 pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
@@ -27,6 +27,36 @@ pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> 
     connection: Option<Pool<Postgres>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
+}
+
+impl From<sqlx::Error> for CoverageDatabaseError {
+    fn from(value: sqlx::Error) -> Self {
+        CoverageDatabaseError::DatabaseError(value.to_string())
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for CoverageDatabaseError {
+    fn from(value: sqlx::migrate::MigrateError) -> Self {
+        CoverageDatabaseError::DatabaseError(value.to_string())
+    }
+}
+
+impl From<sqlx::Error> for CoverageDatabaseDetailedError {
+    fn from(value: sqlx::Error) -> Self {
+        CoverageDatabaseDetailedError {
+            error: CoverageDatabaseError::DatabaseError(value.to_string()),
+            context: None,
+        }
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for CoverageDatabaseDetailedError {
+    fn from(value: sqlx::migrate::MigrateError) -> Self {
+        CoverageDatabaseDetailedError {
+            error: CoverageDatabaseError::DatabaseError(value.to_string()),
+            context: None,
+        }
+    }
 }
 
 type TestCaseToIdMap<'a, TI> = HashMap<&'a TI, Uuid>;
@@ -47,7 +77,7 @@ where
         }
     }
 
-    fn get_pool(&mut self) -> Result<&Pool<Postgres>> {
+    fn get_pool(&mut self) -> Result<&Pool<Postgres>, CoverageDatabaseError> {
         // Check if the connection already exists
         if self.connection.is_none() {
             let pool = task::block_on(async {
@@ -65,7 +95,10 @@ where
         Ok(self.connection.as_mut().unwrap())
     }
 
-    fn upsert_project<'e, E>(executor: E, project_name: &str) -> Result<Uuid>
+    fn upsert_project<'e, E>(
+        executor: E,
+        project_name: &str,
+    ) -> Result<Uuid, CoverageDatabaseDetailedError>
     where
         E: Executor<'e, Database = Postgres> + Send,
     {
@@ -93,7 +126,7 @@ where
         project_id: &Uuid,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let tag_value = serde_json::to_value(TagArray(tags))?;
         task::block_on(async {
             sqlx::query!(
@@ -114,7 +147,7 @@ where
         project_id: &Uuid,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> Result<Option<Uuid>> {
+    ) -> Result<Option<Uuid>, CoverageDatabaseDetailedError> {
         let tag_value = serde_json::to_value(TagArray(tags))?;
         match ancestor_commit_identifier {
             Some(ancestor_commit_identifier) => {
@@ -142,17 +175,17 @@ where
         ancestor_scm_commit_id: Option<Uuid>,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<Uuid> {
+    ) -> Result<Uuid, CoverageDatabaseDetailedError> {
         let tag_value = serde_json::to_value(TagArray(tags))?;
         Ok(task::block_on(async {
             sqlx::query!(
                 r"
-                    INSERT INTO scm_commit
-                        (id, project_id, ancestor_scm_commit_id, scm_identifier, tags)
-                    VALUES
-                        (uuid_generate_v4(), $1, $2, $3, $4)
-                    RETURNING id
-                    ",
+                INSERT INTO scm_commit
+                    (id, project_id, ancestor_scm_commit_id, scm_identifier, tags)
+                VALUES
+                    (uuid_generate_v4(), $1, $2, $3, $4)
+                RETURNING id
+                ",
                 project_id,
                 ancestor_scm_commit_id,
                 Value::String(String::from(commit_identifier)),
@@ -169,7 +202,8 @@ where
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<(TestCaseToIdMap<'a, TI>, IdToTestCaseMap<'a, TI>)> {
+    ) -> Result<(TestCaseToIdMap<'a, TI>, IdToTestCaseMap<'a, TI>), CoverageDatabaseDetailedError>
+    {
         let mut test_case_to_test_case_id_map = HashMap::new();
         let mut test_case_id_to_test_case_map = HashMap::new();
 
@@ -204,7 +238,7 @@ where
         test_case_to_test_case_id_map: &mut HashMap<&'a TI, Uuid>,
         test_case_id_to_test_case_map: &mut HashMap<Uuid, &'a TI>,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let mut test_case_id_vec = vec![];
         let mut test_case_identifiers_vec = vec![];
         for tc in coverage_data.existing_test_set() {
@@ -244,7 +278,7 @@ where
         scm_commit_id: &Uuid,
         test_case_to_test_case_id_map: &HashMap<&'a TI, Uuid>,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         // Batch insert into commit_test_case...
         let mut test_case_id_vec = vec![];
         for tc in coverage_data.existing_test_set() {
@@ -279,7 +313,7 @@ where
         scm_commit_id: &Uuid,
         test_case_to_test_case_id_map: &HashMap<&'a TI, Uuid>,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<HashMap<&'a TI, Uuid>> {
+    ) -> Result<HashMap<&'a TI, Uuid>, CoverageDatabaseDetailedError> {
         let mut test_case_to_test_case_execution_id_map = HashMap::new();
 
         let mut insert_test_case_execution_id_vec = vec![];
@@ -429,7 +463,7 @@ where
         scm_commit_id: &Uuid,
         test_case_to_test_case_execution_id_map: &HashMap<&TI, Uuid>,
         ancestor_scm_commit_id: Option<Uuid>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let coverage_map_id = task::block_on(async {
             sqlx::query!(
                 r"
@@ -508,7 +542,8 @@ where
                 )
                 .execute(&mut **tx)
                 .await
-            })?;
+            })
+            .context("populate denormalized coverage_map_test_case_executed from ancestor commit")?;
         }
 
         Ok(())
@@ -519,7 +554,7 @@ where
         scm_commit_id: &Uuid,
         coverage_data: &CommitCoverageData<TI, CI>,
         ancestor_scm_commit_id: Option<Uuid>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let mut referencing_filepath_vec = vec![];
         let mut target_filepath_vec = vec![];
         let mut exclude_ancestor_referencing_files = vec![];
@@ -554,8 +589,13 @@ where
             )
             .execute(&mut **tx)
             .await
-        })?;
+        })
+        .context("insert into commit_file_reference")?;
 
+        debug!(
+            "save_denormalized_file_references may copy-forward from ancestor commit: {:?}",
+            ancestor_scm_commit_id
+        );
         if ancestor_scm_commit_id.is_some() {
             task::block_on(async {
                 sqlx::query!(
@@ -588,13 +628,17 @@ where
                 )
                 .execute(&mut **tx)
                 .await
-            })?;
+            })
+            .context("populate denormalized commit_file_reference from ancestor commit")?;
         }
 
         Ok(())
     }
 
-    fn touch_coverage_map(pool: &Pool<Postgres>, coverage_map_id: &Uuid) -> Result<()> {
+    fn touch_coverage_map(
+        pool: &Pool<Postgres>,
+        coverage_map_id: &Uuid,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         task::block_on(async {
             sqlx::query!(
                 r"
@@ -616,7 +660,7 @@ where
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &mut HashMap<Uuid, TI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let all_test_cases = task::block_on(async {
             sqlx::query!(
                 r"
@@ -651,7 +695,7 @@ where
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &HashMap<Uuid, TI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let all_files_by_test_case = task::block_on(async {
             sqlx::query!(
                 r"
@@ -693,7 +737,7 @@ where
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &HashMap<Uuid, TI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let all_functions_by_test_case = task::block_on(async {
             sqlx::query!(
                 r"
@@ -735,7 +779,7 @@ where
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &HashMap<Uuid, TI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let all_cis_by_test_case = task::block_on(async {
             sqlx::query!(
                 r"
@@ -772,7 +816,7 @@ where
         project_id: &Uuid,
         commit_identifier: &str,
         coverage_data: &mut FullCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let all_referenced_files = task::block_on(async {
             sqlx::query!(
                 r"
@@ -813,7 +857,7 @@ where
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let tx = self.get_pool()?;
         let mut tx = task::block_on(async { tx.begin().await })?;
 
@@ -881,7 +925,7 @@ where
         &mut self,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> anyhow::Result<Option<FullCoverageData<TI, CI>>> {
+    ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
 
@@ -956,7 +1000,7 @@ where
         Ok(Some(coverage_data))
     }
 
-    fn has_any_coverage_data(&mut self) -> anyhow::Result<bool> {
+    fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
 
@@ -982,7 +1026,7 @@ where
         Ok(coverage_map_id.is_some())
     }
 
-    fn clear_project_data(&mut self) -> anyhow::Result<()> {
+    fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool()?;
         task::block_on(async {

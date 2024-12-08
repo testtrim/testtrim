@@ -5,7 +5,7 @@
 use std::{io, path::PathBuf};
 use thiserror::Error;
 
-use crate::platform::TestIdentifierCore;
+use crate::{coverage::CoverageDatabaseError, platform::TestIdentifierCore};
 
 #[derive(Error, Debug)]
 pub enum SubcommandErrors {
@@ -79,6 +79,9 @@ pub enum RunTestsCommandErrors {
         "the CleanCommit mode cannot be used as the working directory is dirty; either clean the directory, use the WorkingTree mode, or override with OverrideCleanCommit"
     )]
     CleanCommitWorkingDirectoryDirty,
+
+    #[error(transparent)]
+    CoverageDatabaseError(#[from] CoverageDatabaseError),
 
     #[error(transparent)]
     RunTestsErrors(#[from] RunTestsErrors),

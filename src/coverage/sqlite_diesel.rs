@@ -13,7 +13,6 @@ use crate::{
     platform::TestIdentifier,
 };
 
-use anyhow::{anyhow, Context, Result};
 use diesel::{
     connection::{Instrumentation, SimpleConnection as _},
     prelude::*,
@@ -23,15 +22,19 @@ use log::trace;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::HashMap,
-    env, fs, io,
+    env::{self, VarError},
+    fs, io,
     marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
 };
+use thiserror::Error;
 use time::{OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
-use super::{CoverageDatabase, Tag};
+use super::{
+    CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, ResultWithContext, Tag,
+};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./db/sqlite/migrations");
 
@@ -40,6 +43,56 @@ struct DbLogger;
 impl Instrumentation for DbLogger {
     fn on_connection_event(&mut self, event: diesel::connection::InstrumentationEvent<'_>) {
         trace!("DB event: {:?}", event);
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum DefaultDatabaseError {
+    #[error("unset environment variable: `{0}`")]
+    EnvironmentVariableError(#[from] VarError),
+    #[error("i/o error: `{0}`")]
+    IoError(#[from] io::Error),
+}
+
+impl From<diesel::result::Error> for CoverageDatabaseError {
+    fn from(value: diesel::result::Error) -> Self {
+        CoverageDatabaseError::DatabaseError(value.to_string())
+    }
+}
+
+impl From<diesel::result::Error> for CoverageDatabaseDetailedError {
+    fn from(value: diesel::result::Error) -> Self {
+        CoverageDatabaseDetailedError {
+            error: CoverageDatabaseError::DatabaseError(value.to_string()),
+            context: None,
+        }
+    }
+}
+
+impl From<diesel::ConnectionError> for CoverageDatabaseError {
+    fn from(value: diesel::ConnectionError) -> Self {
+        CoverageDatabaseError::DatabaseError(value.to_string())
+    }
+}
+
+impl From<diesel_migrations::MigrationError> for CoverageDatabaseError {
+    fn from(value: diesel_migrations::MigrationError) -> Self {
+        CoverageDatabaseError::DatabaseError(value.to_string())
+    }
+}
+
+impl From<uuid::Error> for CoverageDatabaseError {
+    fn from(value: uuid::Error) -> Self {
+        CoverageDatabaseError::ParsingError(value.to_string())
+    }
+}
+
+impl From<uuid::Error> for CoverageDatabaseDetailedError {
+    fn from(value: uuid::Error) -> Self {
+        CoverageDatabaseDetailedError {
+            error: CoverageDatabaseError::ParsingError(value.to_string()),
+            context: None,
+        }
     }
 }
 
@@ -58,7 +111,7 @@ impl<
 {
     pub fn new_sqlite_from_default_url(
         project_name: String,
-    ) -> Result<DieselCoverageDatabase<TI, CI>> {
+    ) -> Result<DieselCoverageDatabase<TI, CI>, DefaultDatabaseError> {
         let target = match env::var("XDG_CACHE_HOME") {
             Ok(xdg) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
             Err(_) => Path::new(&env::var("HOME")?)
@@ -67,15 +120,13 @@ impl<
                 .join("testtrim.db"),
         };
 
-        fs::create_dir_all(target.parent().unwrap())
-            .or_else(|e| {
-                if e.kind() == io::ErrorKind::AlreadyExists {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })
-            .context("Failed to create coverage directory")?;
+        fs::create_dir_all(target.parent().unwrap()).or_else(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?;
 
         Ok(DieselCoverageDatabase::new_sqlite(
             String::from(target.to_string_lossy()),
@@ -96,7 +147,7 @@ impl<
         }
     }
 
-    fn get_connection(&mut self) -> Result<&mut SqliteConnection> {
+    fn get_connection(&mut self) -> Result<&mut SqliteConnection, CoverageDatabaseDetailedError> {
         // Check if the connection already exists
         if self.connection.is_none() {
             // Create a new connection if it doesn't exist
@@ -126,7 +177,7 @@ impl<
         test_case_execution_id: &Uuid,
         test_case: &TI,
         coverage_data: &CommitCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::test_case_file_covered;
 
         if let Some(files_covered) = coverage_data.executed_test_to_files_map().get(test_case) {
@@ -155,7 +206,7 @@ impl<
         test_case_execution_id: &Uuid,
         test_case: &TI,
         coverage_data: &CommitCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::test_case_function_covered;
 
         if let Some(functions_covered) = coverage_data
@@ -187,7 +238,7 @@ impl<
         test_case_execution_id: &Uuid,
         test_case: &TI,
         coverage_data: &CommitCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::test_case_coverage_identifier_covered;
 
         if let Some(coverage_identifiers) = coverage_data
@@ -232,7 +283,7 @@ impl<
         test_case_to_test_case_id_map: &HashMap<&TI, Uuid>,
         test_case_to_test_case_execution_id_map: &HashMap<&TI, Uuid>,
         coverage_data: &CommitCoverageData<TI, CI>,
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_file_reference, coverage_map, coverage_map_test_case_executed,
             test_case_execution,
@@ -376,7 +427,10 @@ impl<
         Ok(())
     }
 
-    fn ensure_project_id(conn: &mut SqliteConnection, project_name: &String) -> Result<Uuid> {
+    fn ensure_project_id(
+        conn: &mut SqliteConnection,
+        project_name: &String,
+    ) -> Result<Uuid, CoverageDatabaseDetailedError> {
         use crate::schema::project;
 
         let project_id = project::dsl::project
@@ -414,7 +468,7 @@ impl<
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> Result<()> {
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, scm_commit, test_case, test_case_execution,
         };
@@ -425,8 +479,9 @@ impl<
         let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
         let conn = self.get_connection()?;
 
-        conn.run_pending_migrations(MIGRATIONS)
-            .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+        conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
+            CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
+        })?;
 
         // FIXME: ideally all of this should happen in a transaction, but I'm not sure it matters for SQLite
 
@@ -607,7 +662,7 @@ impl<
         &mut self,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<Option<FullCoverageData<TI, CI>>> {
+    ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_file_reference, coverage_map, coverage_map_test_case_executed, scm_commit,
             test_case, test_case_coverage_identifier_covered, test_case_execution,
@@ -620,8 +675,9 @@ impl<
         let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
         let conn = self.get_connection()?;
 
-        conn.run_pending_migrations(MIGRATIONS)
-            .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+        conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
+            CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
+        })?;
 
         let project_id = Self::ensure_project_id(conn, &project_name)?;
 
@@ -736,20 +792,25 @@ impl<
         }
 
         // FIXME: typing isn't helping us; this type is (test_case_id, function_identifier)
-        let all_coverage_identifiers_by_test_case = test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered
-            .inner_join(test_case_execution::dsl::test_case_execution.inner_join(
-                coverage_map_test_case_executed::dsl::coverage_map_test_case_executed.inner_join(
-                    coverage_map::dsl::coverage_map.inner_join(scm_commit::dsl::scm_commit),
-                ),
-            ))
-            .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
-            .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
-            .select((
-                test_case_execution::dsl::test_case_id,
-                test_case_coverage_identifier_covered::dsl::coverage_identifier,
-            ))
-            .get_results::<(String, String)>(conn)
-            .context("loading from test_case_coverage_identifier_covered for commit_identifier via coverage_map")?;
+        let all_coverage_identifiers_by_test_case =
+            test_case_coverage_identifier_covered::dsl::test_case_coverage_identifier_covered
+                .inner_join(
+                    test_case_execution::dsl::test_case_execution.inner_join(
+                        coverage_map_test_case_executed::dsl::coverage_map_test_case_executed
+                            .inner_join(
+                                coverage_map::dsl::coverage_map
+                                    .inner_join(scm_commit::dsl::scm_commit),
+                            ),
+                    ),
+                )
+                .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
+                .filter(scm_commit::dsl::scm_identifier.eq(&commit_identifier))
+                .select((
+                    test_case_execution::dsl::test_case_id,
+                    test_case_coverage_identifier_covered::dsl::coverage_identifier,
+                ))
+                .get_results::<(String, String)>(conn)
+                .context("loading from test_case_coverage_identifier_covered for commit_identifier via coverage_map")?;
         for (test_case_id, coverage_identifier) in all_coverage_identifiers_by_test_case {
             coverage_data.add_heuristic_coverage_to_test(
                 test_case_id_to_test_identifier_map
@@ -783,14 +844,15 @@ impl<
         Ok(Some(coverage_data))
     }
 
-    fn has_any_coverage_data(&mut self) -> Result<bool> {
+    fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
         use crate::schema::{coverage_map, scm_commit};
 
         let project_name = self.project_name.clone();
         let conn = self.get_connection()?;
 
-        conn.run_pending_migrations(MIGRATIONS)
-            .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+        conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
+            CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
+        })?;
 
         let project_id = Self::ensure_project_id(conn, &project_name)?;
         let coverage_map_id = coverage_map::dsl::coverage_map
@@ -805,7 +867,7 @@ impl<
         Ok(coverage_map_id.is_some())
     }
 
-    fn clear_project_data(&mut self) -> Result<()> {
+    fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, coverage_map,
             coverage_map_test_case_executed, project, scm_commit, test_case,
@@ -815,8 +877,9 @@ impl<
 
         let conn = self.get_connection()?;
 
-        conn.run_pending_migrations(MIGRATIONS)
-            .map_err(|e| anyhow!("failed to run pending migrations: {}", e))?;
+        conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
+            CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
+        })?;
 
         // FIXME: this cleanup isn't specific to the project being run, but should be; the problem is that without FK's
         // being enforced we can't use cascade deletes and instead have to do ugly stuff ourselves.  It's probably

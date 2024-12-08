@@ -10,6 +10,7 @@ edition = "2021"
 authors = ["Mathieu Fenniak <mathieu@fenniak.net>"]
 
 [dependencies]
+actix-web = "4.9.0"
 anyhow = "*"
 async-std = "*"
 cargo_toml = "*"
@@ -30,14 +31,19 @@ rand = "*"
 regex = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
+serde-map-to-array = { version = "1.1.1", features = ["std"] }
 simplelog = "*"
 sqlx = { version = "*", features = ["runtime-async-std", "postgres", "uuid", "json", "time", "migrate"] }
+surf = "2.3.2"
 tempdir = "*"
 thiserror = "*"
 threadpool = "*"
 time = "*"
 tracing = "*"
 uuid = { version = "*", features = ["v4"] }
+
+[dev-dependencies]
+actix-test = "0.1.5"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3

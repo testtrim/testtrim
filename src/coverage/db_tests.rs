@@ -36,6 +36,16 @@ lazy_static! {
             test_name: "test1".to_string(),
         }
     };
+    static ref thiserror: RustCoverageIdentifier =
+        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+            package_name: String::from("thiserror"),
+            version: String::from("0.1"),
+        });
+    static ref regex: RustCoverageIdentifier =
+        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+            package_name: String::from("regex"),
+            version: String::from("0.1"),
+        });
 }
 
 pub fn has_any_coverage_data_false(
@@ -76,14 +86,6 @@ pub fn save_and_load_no_ancestor(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut saved_data = CommitCoverageData::new();
-    let thiserror = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-        package_name: String::from("thiserror"),
-        version: String::from("0.1"),
-    });
-    let regex = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-        package_name: String::from("regex"),
-        version: String::from("0.1"),
-    });
     // note -- no ancestor, so the only case that makes sense is for all existing tests to be executed tests
     saved_data.add_executed_test(test1.clone());
     saved_data.add_executed_test(test2.clone());
@@ -686,7 +688,12 @@ pub fn remove_file_references_in_child(
     let result = result.unwrap();
     assert!(result.is_some());
     let loaded_data = result.unwrap();
-    assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
+    assert_eq!(
+        loaded_data.file_referenced_by_files_map().len(),
+        1,
+        "expected files referenced to have length 1, but content was: {:?}",
+        loaded_data.file_referenced_by_files_map()
+    );
     assert_eq!(
         loaded_data
             .file_referenced_by_files_map()

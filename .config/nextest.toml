@@ -6,5 +6,5 @@
 serial-integration = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'test(postgres_sqlx::)'
+filter = 'test(coverage::postgres_sqlx::) or test(coverage::testtrim_api::)'
 test-group = 'serial-integration'

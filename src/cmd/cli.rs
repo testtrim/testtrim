@@ -10,6 +10,7 @@ use std::fmt::Debug;
 use crate::{
     coverage::Tag,
     platform::{dotnet::DotnetTestPlatform, rust::RustTestPlatform},
+    server::{self},
 };
 
 use super::{get_test_identifiers, run_tests, simulate_history};
@@ -61,6 +62,9 @@ enum Commands {
         #[arg(short, long, default_value_t = 100)]
         num_commits: u16,
     },
+
+    /// Run a testtrim web server for remote access to a coverage database
+    RunServer,
 }
 
 #[derive(Args, Debug)]
@@ -190,6 +194,9 @@ pub fn run_cli() {
             execution_parameters,
         } => {
             simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs);
+        }
+        Commands::RunServer => {
+            server::cli();
         }
     }
 }
