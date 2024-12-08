@@ -614,6 +614,10 @@ impl TestPlatform for DotnetTestPlatform {
     type TD = DotnetTestDiscovery;
     type CTI = DotnetConcreteTestIdentifier;
 
+    fn platform_identifier() -> &'static str {
+        "dotnet"
+    }
+
     fn project_name() -> Result<String> {
         Ok(String::from(
             current_dir()?

@@ -77,6 +77,9 @@ pub trait TestPlatform {
     type TD: TestDiscovery<Self::CTI, Self::TI>;
     type CTI: ConcreteTestIdentifier<Self::TI>;
 
+    /// eg. "rust", "dotnet"; must be safe to be used as a single URL path component
+    fn platform_identifier() -> &'static str;
+
     fn project_name() -> Result<String>;
 
     fn discover_tests() -> Result<Self::TD>;

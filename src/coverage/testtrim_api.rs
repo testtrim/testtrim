@@ -9,17 +9,19 @@ use std::marker::PhantomData;
 use url::Url;
 
 use crate::{
-    coverage::ResultWithContext as _, platform::TestIdentifier, server::PostCoverageDataRequest,
+    coverage::ResultWithContext as _, platform::TestIdentifier,
+    server::coverage_data::PostCoverageDataRequest,
 };
 
 use super::{
     commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
     full_coverage_data::FullCoverageData,
-    CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, Tag,
+    CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, CreateDatabaseError,
+    Tag,
 };
 
 pub struct TesttrimApiCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
-    api_url: String,
+    api_url: Url,
     project_name: String,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
@@ -42,13 +44,35 @@ where
     TI: TestIdentifier + Serialize + DeserializeOwned,
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
-    pub fn new(api_url: String, project_name: String) -> TesttrimApiCoverageDatabase<TI, CI> {
-        TesttrimApiCoverageDatabase {
-            api_url,
+    pub fn new(
+        api_url: &str,
+        project_name: String,
+        platform_identifier: &str,
+    ) -> Result<TesttrimApiCoverageDatabase<TI, CI>, CreateDatabaseError> {
+        let mut url = Url::parse(api_url)
+            .context("parse configured API URL")
+            .map_err(|e| {
+                CreateDatabaseError::InvalidConfiguration(format!(
+                    "testtrim API URL parse error: {e}",
+                ))
+            })?;
+        url.path_segments_mut()
+            .map_err(|()| {
+                CreateDatabaseError::InvalidConfiguration(String::from(
+                    "testtrim API URL is bad; cannot append segments",
+                ))
+            })?
+            .push("api")
+            .push("v0")
+            .push(platform_identifier)
+            .push("coverage-data");
+
+        Ok(TesttrimApiCoverageDatabase {
+            api_url: url,
             project_name,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
-        }
+        })
     }
 }
 
@@ -67,7 +91,7 @@ where
         // FIXME: use zstd request body compression
 
         task::block_on(async {
-            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            let mut url = self.api_url.clone();
             url.path_segments_mut()
                 .map_err(|()| {
                     CoverageDatabaseError::ParsingError(String::from(
@@ -75,7 +99,6 @@ where
                     ))
                 })
                 .context("parse configured API URL")?
-                .push("coverage-data")
                 .push(&self.project_name)
                 .push(commit_identifier);
 
@@ -127,7 +150,7 @@ where
         // FIXME: use zstd response body compression
 
         let resp = task::block_on(async {
-            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            let mut url = self.api_url.clone();
             url.path_segments_mut()
                 .map_err(|()| {
                     CoverageDatabaseError::ParsingError(String::from(
@@ -135,7 +158,6 @@ where
                     ))
                 })
                 .context("parse configured API URL")?
-                .push("coverage-data")
                 .push(&self.project_name)
                 .push(commit_identifier);
             {
@@ -173,7 +195,7 @@ where
 
     fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
         let resp = task::block_on(async {
-            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            let mut url = self.api_url.clone();
             url.path_segments_mut()
                 .map_err(|()| {
                     CoverageDatabaseError::ParsingError(String::from(
@@ -181,7 +203,6 @@ where
                     ))
                 })
                 .context("parse configured API URL")?
-                .push("coverage-data")
                 .push(&self.project_name);
             debug!("HTTP request GET {url}");
             let mut response = surf::get(url)
@@ -211,7 +232,7 @@ where
 
     fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
         task::block_on(async {
-            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            let mut url = self.api_url.clone();
             url.path_segments_mut()
                 .map_err(|()| {
                     CoverageDatabaseError::ParsingError(String::from(
@@ -219,7 +240,6 @@ where
                     ))
                 })
                 .context("parse configured API URL")?
-                .push("coverage-data")
                 .push(&self.project_name);
             debug!("HTTP request DELETE {url}");
             let mut response = surf::delete(url)
@@ -256,8 +276,11 @@ mod tests {
 
     use crate::{
         coverage::{db_tests, CoverageDatabase},
-        platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
-        server::InstallPlatform as _,
+        platform::{
+            rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
+            TestPlatform,
+        },
+        server::InstallTestPlatform as _,
     };
 
     use super::TesttrimApiCoverageDatabase;
@@ -272,7 +295,13 @@ mod tests {
 
     fn create_test_server() -> TestServer {
         actix_test::start(|| {
-            App::new().service(web::scope("/api/v0/rust").install_platform::<RustTestPlatform>())
+            App::new().service(
+                web::scope(&format!(
+                    "/api/v0/{}",
+                    RustTestPlatform::platform_identifier()
+                ))
+                .platform::<RustTestPlatform>(),
+            )
         })
     }
 
@@ -281,10 +310,15 @@ mod tests {
         TesttrimApiCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
     ) {
         let srv = create_test_server();
-        let url = srv.url("/api/v0/rust");
+        let url = srv.url("/");
         (
             srv,
-            TesttrimApiCoverageDatabase::new(url, String::from("testtrim-tests-apibased")),
+            TesttrimApiCoverageDatabase::new(
+                &url,
+                String::from("testtrim-tests-apibased"),
+                RustTestPlatform::platform_identifier(),
+            )
+            .expect("init must succeed"),
         )
     }
 

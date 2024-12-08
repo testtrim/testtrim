@@ -15,10 +15,8 @@ use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorS
 use testtrim::cmd::run_tests::run_tests;
 use testtrim::coverage::create_db;
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
-use testtrim::platform::dotnet::{
-    DotnetCoverageIdentifier, DotnetTestIdentifier, DotnetTestPlatform,
-};
-use testtrim::platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform};
+use testtrim::platform::dotnet::DotnetTestPlatform;
+use testtrim::platform::rust::RustTestPlatform;
 use testtrim::scm::git::GitScm;
 use thiserror::Error;
 
@@ -108,10 +106,7 @@ fn rust_linearcommits_filecoverage() -> Result<()> {
     git_clone("rust-coverage-specimen")?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("rust-coverage-specimen")); // FIXME: hack assumes folder name
 
-    create_db::<RustTestIdentifier, RustCoverageIdentifier>(String::from(
-        "rust-coverage-specimen",
-    ))?
-    .clear_project_data()?;
+    create_db::<RustTestPlatform>(String::from("rust-coverage-specimen"))?.clear_project_data()?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a
@@ -614,10 +609,8 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
     let _tmp_dir_cwd2 =
         ChangeWorkingDirectory::new(&tmp_dir.path().join("dotnet-coverage-specimen")); // FIXME: hack assumes folder name
 
-    create_db::<DotnetTestIdentifier, DotnetCoverageIdentifier>(String::from(
-        "dotnet-coverage-specimen",
-    ))?
-    .clear_project_data()?;
+    create_db::<DotnetTestPlatform>(String::from("dotnet-coverage-specimen"))?
+        .clear_project_data()?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right dotnet tooling from the checked out repo.  Probably from here we need to start a

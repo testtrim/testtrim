@@ -8,12 +8,11 @@ use anyhow::Result;
 use commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
 use full_coverage_data::FullCoverageData;
 use postgres_sqlx::PostgresCoverageDatabase;
-use serde::{de::DeserializeOwned, Serialize};
 use sqlite_diesel::DieselCoverageDatabase;
 use testtrim_api::TesttrimApiCoverageDatabase;
 use thiserror::Error;
 
-use crate::platform::TestIdentifier;
+use crate::platform::{TestIdentifier, TestPlatform};
 
 pub mod commit_coverage_data;
 #[cfg(test)]
@@ -49,6 +48,8 @@ pub enum CreateDatabaseError {
     UnsupportedDatabaseUrl(String),
     #[error("error managing default SQLite DB: `{0}`")]
     SqliteDefaultDatabaseError(#[from] sqlite_diesel::DefaultDatabaseError),
+    #[error("error with invalid configuration: `{0}`")]
+    InvalidConfiguration(String),
 }
 
 #[derive(Error, Debug)]
@@ -125,12 +126,12 @@ impl From<CoverageDatabaseError> for CoverageDatabaseDetailedError {
     }
 }
 
-pub fn create_db<TI, CI>(
+pub fn create_db<TP: TestPlatform>(
     project_name: String,
-) -> Result<Box<dyn CoverageDatabase<TI, CI>>, CreateDatabaseError>
-where
-    TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
+) -> Result<Box<dyn CoverageDatabase<TP::TI, TP::CI>>, CreateDatabaseError>
+// where
+//     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
+//     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
 {
     match env::var("TESTTRIM_DATABASE_URL") {
         Ok(db_url) if db_url.starts_with("postgres") => Ok(Box::new(
@@ -142,9 +143,13 @@ where
         Ok(db_url) if db_url.starts_with(":memory:") => Ok(Box::new(
             DieselCoverageDatabase::new_sqlite(db_url, project_name),
         )),
-        Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => Ok(
-            Box::new(TesttrimApiCoverageDatabase::new(db_url, project_name)),
-        ),
+        Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => {
+            Ok(Box::new(TesttrimApiCoverageDatabase::new(
+                &db_url,
+                project_name,
+                TP::platform_identifier(),
+            )?))
+        }
         Ok(db_url) => Err(CreateDatabaseError::UnsupportedDatabaseUrl(db_url)),
         Err(_) => Ok(Box::new(
             DieselCoverageDatabase::new_sqlite_from_default_url(project_name)?,

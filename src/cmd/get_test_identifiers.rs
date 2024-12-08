@@ -170,7 +170,7 @@ where
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
-            create_db::<TI, CI>(TP::project_name()?)?,
+            create_db::<TP>(TP::project_name()?)?,
             tags,
         )? {
         info!(

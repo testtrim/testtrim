@@ -666,6 +666,10 @@ impl TestPlatform for RustTestPlatform {
     type TD = RustTestDiscovery;
     type CTI = RustConcreteTestIdentifier;
 
+    fn platform_identifier() -> &'static str {
+        "rust"
+    }
+
     fn project_name() -> Result<String> {
         // It could make more sense to make this method infallible and return an "unknown" tag or something.  But I'm
         // thinking to start restrictive and see if it ever becomes an issue.

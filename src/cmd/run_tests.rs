@@ -227,7 +227,7 @@ where
 
         info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
             // .context() here is used to quietly unify the error types into anyhow::Error
-            create_db(TP::project_name()?)
+            create_db::<TP>(TP::project_name()?)
                 .context("create_db")?
                 .save_coverage_data(
                     &coverage_data,
