@@ -6,14 +6,10 @@ use async_std::task;
 use log::debug;
 use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
+use url::Url;
 
 use crate::{
-    coverage::ResultWithContext as _,
-    platform::TestIdentifier,
-    server::{
-        DeleteCoverageDataRequest, GetCoverageDataRequest, PostCoverageDataRequest,
-        ReadCoverageDataRequest,
-    },
+    coverage::ResultWithContext as _, platform::TestIdentifier, server::PostCoverageDataRequest,
 };
 
 use super::{
@@ -31,6 +27,12 @@ pub struct TesttrimApiCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifie
 
 impl From<surf::Error> for CoverageDatabaseError {
     fn from(value: surf::Error) -> Self {
+        CoverageDatabaseError::DatabaseError(value.to_string())
+    }
+}
+
+impl From<url::ParseError> for CoverageDatabaseError {
+    fn from(value: url::ParseError) -> Self {
         CoverageDatabaseError::DatabaseError(value.to_string())
     }
 }
@@ -65,10 +67,21 @@ where
         // FIXME: use zstd request body compression
 
         task::block_on(async {
-            let mut response = surf::post(format!("{}/coverage-data", self.api_url))
+            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            url.path_segments_mut()
+                .map_err(|()| {
+                    CoverageDatabaseError::ParsingError(String::from(
+                        "testtrim API URL is bad; cannot append segments",
+                    ))
+                })
+                .context("parse configured API URL")?
+                .push("coverage-data")
+                .push(&self.project_name)
+                .push(commit_identifier);
+
+            debug!("HTTP request POST {url}");
+            let mut response = surf::post(url)
                 .body_json(&PostCoverageDataRequest {
-                    project_name: self.project_name.clone(),
-                    commit_identifier: String::from(commit_identifier),
                     ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
                     tags: tags.to_vec(),
                     all_existing_test_set: coverage_data.existing_test_set().clone(),
@@ -114,15 +127,26 @@ where
         // FIXME: use zstd response body compression
 
         let resp = task::block_on(async {
-            let mut response = surf::get(format!("{}/coverage-data", self.api_url))
-                .body_json(&GetCoverageDataRequest {
-                    project_name: self.project_name.clone(),
-                    read_coverage_data: Some(ReadCoverageDataRequest {
-                        commit_identifier: String::from(commit_identifier),
-                        tags: tags.to_vec(),
-                    }),
+            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            url.path_segments_mut()
+                .map_err(|()| {
+                    CoverageDatabaseError::ParsingError(String::from(
+                        "testtrim API URL is bad; cannot append segments",
+                    ))
                 })
-                .context("serializing body for coverage data GET")?
+                .context("parse configured API URL")?
+                .push("coverage-data")
+                .push(&self.project_name)
+                .push(commit_identifier);
+            {
+                let mut mutator = url.query_pairs_mut();
+                mutator.clear();
+                for tag in tags {
+                    mutator.append_pair(&tag.key, &tag.value);
+                }
+            }
+            debug!("HTTP request GET {url}");
+            let mut response = surf::get(url)
                 .await
                 .context("sending request for coverage data GET")?;
 
@@ -149,12 +173,18 @@ where
 
     fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
         let resp = task::block_on(async {
-            let mut response = surf::get(format!("{}/coverage-data", self.api_url))
-                .body_json(&GetCoverageDataRequest {
-                    project_name: self.project_name.clone(),
-                    read_coverage_data: None,
+            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            url.path_segments_mut()
+                .map_err(|()| {
+                    CoverageDatabaseError::ParsingError(String::from(
+                        "testtrim API URL is bad; cannot append segments",
+                    ))
                 })
-                .context("serializing body for coverage data GET")?
+                .context("parse configured API URL")?
+                .push("coverage-data")
+                .push(&self.project_name);
+            debug!("HTTP request GET {url}");
+            let mut response = surf::get(url)
                 .await
                 .context("sending request for coverage data GET")?;
 
@@ -181,11 +211,18 @@ where
 
     fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
         task::block_on(async {
-            let mut response = surf::delete(format!("{}/coverage-data", self.api_url))
-                .body_json(&DeleteCoverageDataRequest {
-                    project_name: self.project_name.clone(),
+            let mut url = Url::parse(&self.api_url).context("parse configured API URL")?;
+            url.path_segments_mut()
+                .map_err(|()| {
+                    CoverageDatabaseError::ParsingError(String::from(
+                        "testtrim API URL is bad; cannot append segments",
+                    ))
                 })
-                .context("serializing body for coverage data DELETE")?
+                .context("parse configured API URL")?
+                .push("coverage-data")
+                .push(&self.project_name);
+            debug!("HTTP request DELETE {url}");
+            let mut response = surf::delete(url)
                 .await
                 .context("sending request for coverage data DELETE")?;
 
@@ -259,6 +296,8 @@ mod tests {
 
     #[test]
     fn has_any_coverage_data_false() {
+        simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
+            .expect("must config logging");
         let _test_mutex = TEST_MUTEX.lock();
         cleanup();
         let (_srv, db) = create_test_db();
@@ -275,6 +314,8 @@ mod tests {
 
     #[test]
     fn has_any_coverage_data_true() {
+        simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
+            .expect("must config logging");
         let _test_mutex = TEST_MUTEX.lock();
         cleanup();
         let (_srv, db) = create_test_db();

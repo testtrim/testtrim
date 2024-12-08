@@ -31,7 +31,7 @@ use crate::{
 
 #[get("/")]
 async fn index(req: HttpRequest) -> &'static str {
-    println!("REQ: {req:?}");
+    debug!("REQ: {req:?}");
     "Hello world!\r\n"
 }
 
@@ -71,30 +71,47 @@ impl ResponseError for GetCoverageDataError {
     }
 }
 
-async fn get_coverage_data<TP: TestPlatform>(
-    req: web::Json<GetCoverageDataRequest>,
+async fn get_any_coverage_data<TP: TestPlatform>(
+    path: web::Path<String>,
 ) -> Result<impl Responder, GetCoverageDataError> {
-    debug!("get_coverage_data received: {:?}", req);
+    let project_name = path.into_inner();
+    debug!("get_any_coverage_data received: {:?}", project_name);
 
-    let mut coverage_db = create_db::<TP::TI, TP::CI>(req.project_name.clone())?;
+    let mut coverage_db = create_db::<TP::TI, TP::CI>(project_name.clone())?;
+
+    // FIXME: has_any_coverage_data is not async, which will cause the web server to block; either make it async, or,
+    // use web::block
+    Ok(HttpResponse::Ok().json(serde_json::to_value(coverage_db.has_any_coverage_data()?)?))
+}
+
+async fn get_coverage_data<TP: TestPlatform>(
+    path: web::Path<(String, String)>,
+    tags: web::Query<HashMap<String, String>>,
+    // req: web::Json<GetCoverageDataRequest>,
+) -> Result<impl Responder, GetCoverageDataError> {
+    let (project_name, commit_identifier) = path.into_inner();
+    let tags = tags.into_inner();
+    debug!(
+        "get_coverage_data received: {:?} {:?} {:?}",
+        project_name, commit_identifier, tags
+    );
+
+    // hashmap -> vec; can't be done in Query<T> because it's considered ordered when query parameters aren't, even
+    // though we don't care about order (arguably we're using the wrong data struct inside)
+    let tags = tags
+        .into_iter()
+        .map(|(key, value)| Tag { key, value })
+        .collect::<Vec<Tag>>();
+
+    let mut coverage_db = create_db::<TP::TI, TP::CI>(project_name.clone())?;
 
     // FIXME: read_coverage_data is not async, which will cause the web server to block; either make it async, or, use
     // web::block
-    let result: serde_json::Value = match req.read_coverage_data {
-        Some(ref read) => serde_json::to_value(
-            // Note: mishmash between internal data structures and web API
-            coverage_db.read_coverage_data(&read.commit_identifier, &read.tags)?,
-        )?,
-        None => serde_json::to_value(coverage_db.has_any_coverage_data()?)?,
-    };
-
-    Ok(HttpResponse::Ok().json(result))
+    Ok(HttpResponse::Ok().json(coverage_db.read_coverage_data(&commit_identifier, &tags)?))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PostCoverageDataRequest<TI: TestIdentifier, CI: CoverageIdentifier> {
-    pub project_name: String,
-    pub commit_identifier: String,
     pub ancestor_commit_identifier: Option<String>,
     pub tags: Vec<Tag>, // Note: mishmash between internal data structures and web API
     // FIXME:  when using CommitCoverageData, we get:
@@ -135,8 +152,10 @@ impl ResponseError for PostCoverageDataError {
 }
 
 async fn post_coverage_data<TP: TestPlatform>(
+    path: web::Path<(String, String)>,
     req: web::Json<PostCoverageDataRequest<TP::TI, TP::CI>>,
 ) -> Result<impl Responder, PostCoverageDataError> {
+    let (project_name, commit_identifier) = path.into_inner();
     debug!("post_coverage_data received: {:?}", req);
 
     // manually deserialize CommitCoverageData as workaround for multiple `impl`'s error
@@ -184,23 +203,18 @@ async fn post_coverage_data<TP: TestPlatform>(
         }
     }
 
-    let mut coverage_db = create_db::<TP::TI, TP::CI>(req.project_name.clone())?;
+    let mut coverage_db = create_db::<TP::TI, TP::CI>(project_name.clone())?;
 
     // FIXME: save_coverage_data is not async, which will cause the web server to block; either make it async, or, use
     // web::block
     coverage_db.save_coverage_data(
         &commit_coverage_data,
-        &req.commit_identifier,
+        &commit_identifier,
         req.ancestor_commit_identifier.as_deref(),
         &req.tags,
     )?;
 
     Ok(HttpResponse::Ok().json(None::<String>))
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DeleteCoverageDataRequest {
-    pub project_name: String,
 }
 
 #[derive(Error, Debug)]
@@ -228,17 +242,18 @@ impl ResponseError for DeleteCoverageDataError {
 }
 
 async fn delete_coverage_data<TP: TestPlatform>(
-    req: web::Json<DeleteCoverageDataRequest>,
+    path: web::Path<String>,
 ) -> Result<impl Responder, DeleteCoverageDataError> {
-    debug!("delete_coverage_data received: {:?}", req);
+    let project_name = path.into_inner();
+    debug!("delete_coverage_data received: {:?}", project_name);
 
-    let mut coverage_db = create_db::<TP::TI, TP::CI>(req.project_name.clone())?;
+    let mut coverage_db = create_db::<TP::TI, TP::CI>(project_name.clone())?;
 
     // FIXME: delete_coverage_data is not async, which will cause the web server to block; either make it async, or, use
     // web::block
-    println!("web: starting clear_project_data({})", req.project_name);
+    debug!("web: starting clear_project_data({})", project_name);
     coverage_db.clear_project_data()?;
-    println!("web: completed clear_project_data({})", req.project_name);
+    debug!("web: completed clear_project_data({})", project_name);
 
     Ok(HttpResponse::Ok().json(None::<String>))
 }
@@ -250,12 +265,22 @@ pub trait InstallPlatform {
 impl InstallPlatform for Scope {
     fn install_platform<TP: TestPlatform + 'static>(self) -> Self {
         // FIXME: API design here is a mess, DELETE with a body, GET with a body, it's just random
-        self.route("/coverage-data", web::get().to(get_coverage_data::<TP>))
-            .route("/coverage-data", web::post().to(post_coverage_data::<TP>))
-            .route(
-                "/coverage-data",
-                web::delete().to(delete_coverage_data::<TP>),
-            )
+        self.route(
+            "/coverage-data/{project}",
+            web::get().to(get_any_coverage_data::<TP>),
+        )
+        .route(
+            "/coverage-data/{project}/{commit_identifier}",
+            web::get().to(get_coverage_data::<TP>),
+        )
+        .route(
+            "/coverage-data/{project}/{commit_identifier}",
+            web::post().to(post_coverage_data::<TP>),
+        )
+        .route(
+            "/coverage-data/{project}",
+            web::delete().to(delete_coverage_data::<TP>),
+        )
     }
 }
 
@@ -369,20 +394,13 @@ mod tests {
         )?;
 
         let app = test::init_service(App::new().route(
-            "/coverage-data",
+            "/coverage-data/{project}/{commit_identifier}",
             web::get().to(get_coverage_data::<RustTestPlatform>),
         ))
         .await;
 
         let req = test::TestRequest::get()
-            .uri("/coverage-data")
-            .set_json(GetCoverageDataRequest {
-                project_name: String::from("testtrim-tests-2"),
-                read_coverage_data: Some(ReadCoverageDataRequest {
-                    commit_identifier: String::from("test-123-wrong-identifier"),
-                    tags: Vec::new(),
-                }),
-            })
+            .uri("/coverage-data/testtrim-tests-2/test-123-wrong-identifier")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert!(
@@ -399,14 +417,7 @@ mod tests {
         );
 
         let req = test::TestRequest::get()
-            .uri("/coverage-data")
-            .set_json(GetCoverageDataRequest {
-                project_name: String::from("testtrim-tests-2"),
-                read_coverage_data: Some(ReadCoverageDataRequest {
-                    commit_identifier: String::from("test-123-correct-identifier"),
-                    tags: Vec::new(),
-                }),
-            })
+            .uri("/coverage-data/testtrim-tests-2/test-123-correct-identifier")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert!(
@@ -451,20 +462,13 @@ mod tests {
         )?;
 
         let app = test::init_service(App::new().route(
-            "/coverage-data",
+            "/coverage-data/{project}/{commit_identifier}",
             web::get().to(get_coverage_data::<DotnetTestPlatform>),
         ))
         .await;
 
         let req = test::TestRequest::get()
-            .uri("/coverage-data")
-            .set_json(GetCoverageDataRequest {
-                project_name: String::from("testtrim-tests-3"),
-                read_coverage_data: Some(ReadCoverageDataRequest {
-                    commit_identifier: String::from("test-123-wrong-identifier"),
-                    tags: Vec::new(),
-                }),
-            })
+            .uri("/coverage-data/testtrim-tests-3/test-123-wrong-identifier")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert!(
@@ -481,14 +485,7 @@ mod tests {
         );
 
         let req = test::TestRequest::get()
-            .uri("/coverage-data")
-            .set_json(GetCoverageDataRequest {
-                project_name: String::from("testtrim-tests-3"),
-                read_coverage_data: Some(ReadCoverageDataRequest {
-                    commit_identifier: String::from("test-456-correct-identifier"),
-                    tags: Vec::new(),
-                }),
-            })
+            .uri("/coverage-data/testtrim-tests-3/test-456-correct-identifier")
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert!(
