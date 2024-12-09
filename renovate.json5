@@ -16,8 +16,8 @@
     {
       "description": "packages that update regularly (eg. daily) and aren't security critical are infrequent for less noise",
       "matchPackageNames": [
-        "rust-overlay",
-        "nixpkgs"
+        "https://github.com/oxalica/rust-overlay",
+        "https://github.com/NixOS/nixpkgs",
       ],
       "schedule": ["* 0-3 1,15 * *"]
     }
