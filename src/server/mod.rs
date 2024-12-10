@@ -6,7 +6,9 @@ use actix_web::{get, rt, web, App, HttpRequest, HttpServer, Scope};
 use coverage_data::InstallCoverageDataHandlers as _;
 use log::debug;
 
-use crate::platform::{dotnet::DotnetTestPlatform, rust::RustTestPlatform, TestPlatform};
+use crate::platform::{
+    dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform, TestPlatform,
+};
 
 pub mod coverage_data;
 
@@ -42,6 +44,10 @@ fn run_server() -> std::io::Result<()> {
                     .service(
                         web::scope(DotnetTestPlatform::platform_identifier())
                             .platform::<DotnetTestPlatform>(),
+                    )
+                    .service(
+                        web::scope(GolangTestPlatform::platform_identifier())
+                            .platform::<GolangTestPlatform>(),
                     ),
             )
         })

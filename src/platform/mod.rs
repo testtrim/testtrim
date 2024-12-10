@@ -20,6 +20,7 @@ use crate::{
 
 pub mod dotnet;
 mod dotnet_cobertura;
+pub mod golang;
 pub mod rust;
 mod rust_llvm;
 

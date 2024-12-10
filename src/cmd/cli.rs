@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use log::trace;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::fmt::Debug;
 
 use crate::{
     coverage::Tag,
-    platform::{dotnet::DotnetTestPlatform, rust::RustTestPlatform},
+    platform::{dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform},
     server::{self},
 };
 
@@ -99,6 +98,8 @@ pub enum TestProjectType {
     Rust,
     /// Operate on .NET tests; eg. using `dotnet test`
     Dotnet,
+    /// Operate on Go language tests; eg. using `go test`
+    Golang,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -204,8 +205,9 @@ pub fn run_cli() {
 #[must_use]
 pub fn autodetect_test_project_type() -> TestProjectType {
     if RustTestPlatform::autodetect() {
-        trace!("Detected Cargo.toml; auto-detect result: Rust test project");
         TestProjectType::Rust
+    } else if GolangTestPlatform::autodetect() {
+        TestProjectType::Golang
     } else if DotnetTestPlatform::autodetect() {
         TestProjectType::Dotnet
     } else {

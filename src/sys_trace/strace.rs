@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
+use log::warn;
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -40,7 +41,7 @@ lazy_static! {
     static ref openat: Regex = Regex::new(
         // note that this will exclude any openat that had an error (eg. ENOENT) because it matches on a number then the
         // string terminator; an error would have a -1 response followed by an error code that wouldn't match.
-        r#"^(?<pid>[0-9]+)\s+openat\(AT_FDCWD,\s+"(?<path>(?:[^"\\]|\\.)*)",\s+[^)]+(?<end>\)\s+=\s+\d+|\s*<unfinished \.\.\.>)$"#
+        r#"^(?<pid>[0-9]+)\s+openat\((?<dirfd>AT_FDCWD|[0-9]+),\s+"(?<path>(?:[^"\\]|\\.)*)",\s+[^)]+(?<end>\)\s+=\s+\d+|\s*<unfinished \.\.\.>)$"#
     )
     .unwrap();
 
@@ -164,11 +165,17 @@ enum CloneParse {
 }
 
 #[derive(Debug, PartialEq)]
+enum OpenPath {
+    RelativeToCwd(PathBuf),
+    RelativeToOpenDirFD(PathBuf, i32), // i32 is the directory file descriptor
+}
+
+#[derive(Debug, PartialEq)]
 enum OpenParse {
     FinishedError { pid: String },
-    FinishedSuccess { pid: String, path: PathBuf },
+    FinishedSuccess { pid: String, path: OpenPath },
     FinishedPreviousSuccessfully { pid: String },
-    Unfinished { pid: String, path: PathBuf },
+    Unfinished { pid: String, path: OpenPath },
 }
 
 #[derive(Debug, PartialEq)]
@@ -219,20 +226,25 @@ impl STraceSysTraceCommand {
         // absolute).  Opening a directory, then opening a file in it, isn't supported by this.  FIXME: It *should*
         // probably be detected and either a warning or error generated though, so that it's not silently ignored.
         openat.captures(trace).map(|cap| {
+            let dirfd = String::from(&cap["dirfd"]);
             let pid = String::from(&cap["pid"]);
-            let path = String::from(&cap["path"])
-                // Un-escape any escaped double-quotes
-                .replace("\\\"", "\"");
-            if cap["end"].starts_with(')') {
-                OpenParse::FinishedSuccess {
-                    pid,
-                    path: PathBuf::from(path),
-                }
+            let path = PathBuf::from(
+                String::from(&cap["path"])
+                    // Un-escape any escaped double-quotes
+                    .replace("\\\"", "\""),
+            );
+            let path = if dirfd == "AT_FDCWD" {
+                OpenPath::RelativeToCwd(path)
             } else {
-                OpenParse::Unfinished {
-                    pid,
-                    path: PathBuf::from(path),
-                }
+                OpenPath::RelativeToOpenDirFD(
+                    path,
+                    str::parse(&dirfd).expect("regex-verified int couldn't be parsed as int"),
+                )
+            };
+            if cap["end"].starts_with(')') {
+                OpenParse::FinishedSuccess { pid, path }
+            } else {
+                OpenParse::Unfinished { pid, path }
             }
         })
     }
@@ -387,32 +399,48 @@ impl STraceSysTraceCommand {
         // FIXME: this assumes that the contents of the trace are UTF-8; this probably isn't right
         let lines = BufReader::new(read).lines();
 
-        let mut pid_openat_in_progress: HashMap<String, PathBuf> = HashMap::new();
+        let mut pid_openat_in_progress: HashMap<String, OpenPath> = HashMap::new();
         let mut pid_cwd: HashMap<String, PathBuf> = HashMap::new();
         let mut pid_cwd_in_progress: HashMap<String, PathBuf> = HashMap::new();
 
+        let mut line_count = 0;
         for line in lines {
             let line = line?;
+            line_count += 1;
 
             let Some(parse_result) = Self::parse_line(&line) else {
                 continue;
             };
 
             match parse_result {
-                ParseLine::Open(OpenParse::FinishedSuccess { pid, mut path }) => {
-                    if let Some(cwd) = pid_cwd.get(&pid) {
-                        path = cwd.join(path);
+                ParseLine::Open(OpenParse::FinishedSuccess {
+                    pid,
+                    path: open_path,
+                }) => {
+                    if let OpenPath::RelativeToCwd(mut path) = open_path {
+                        if let Some(cwd) = pid_cwd.get(&pid) {
+                            path = cwd.join(path);
+                        }
+                        trace.add_open(path);
+                    } else {
+                        warn!("open path {:?} not yet supported for strace", open_path);
                     }
-                    trace.add_open(path);
                 }
                 ParseLine::Open(OpenParse::FinishedError { pid }) => {
                     pid_openat_in_progress.remove(&pid);
                 }
-                ParseLine::Open(OpenParse::Unfinished { pid, mut path }) => {
-                    if let Some(cwd) = pid_cwd.get(&pid) {
-                        path = cwd.join(path);
+                ParseLine::Open(OpenParse::Unfinished {
+                    pid,
+                    path: mut open_path,
+                }) => {
+                    if let OpenPath::RelativeToCwd(ref inner_path) = open_path {
+                        if let Some(cwd) = pid_cwd.get(&pid) {
+                            // As pid_cwd could change by the time the open finishes, we'll capture and join it as soon
+                            // as we can.
+                            open_path = OpenPath::RelativeToCwd(cwd.join(inner_path));
+                        }
                     }
-                    let prev = pid_openat_in_progress.insert(pid, path);
+                    let prev = pid_openat_in_progress.insert(pid, open_path);
                     assert!(
                         prev.is_none(),
                         "pid_openat_in_progress shouldn't be in-progress multiple times"
@@ -421,10 +449,15 @@ impl STraceSysTraceCommand {
                 ParseLine::Open(OpenParse::FinishedPreviousSuccessfully { pid }) => {
                     let path = pid_openat_in_progress.remove(&pid);
                     if let Some(path) = path {
-                        trace.add_open(path);
+                        match path {
+                            OpenPath::RelativeToCwd(path) => trace.add_open(path),
+                            OpenPath::RelativeToOpenDirFD(path, fd) => {
+                                warn!("open path {path:?} relative to directory fd {fd} is not yet supported for trace");
+                            }
+                        }
                     } else {
                         return Err(anyhow!(
-                            "pid openat was resumed but no unfinished syscall was found"
+                            "pid openat was resumed but no unfinished syscall was found; line # {line_count} = {line:?}"
                         ));
                     }
                 }
@@ -453,7 +486,7 @@ impl STraceSysTraceCommand {
                         pid_cwd.insert(pid, new_path);
                     } else {
                         return Err(anyhow!(
-                            "pid openat was resumed but no unfinished syscall was found"
+                            "pid chdir was resumed but no unfinished syscall was found; line # {line_count} = {line:?}"
                         ));
                     }
                 }
@@ -506,7 +539,13 @@ impl SysTraceCommand for STraceSysTraceCommand {
         let mut trace = Trace::new();
 
         if output.status.success() {
-            Self::read_trace_file(&mut trace, tmp)?;
+            if let Err(e) = Self::read_trace_file(&mut trace, tmp) {
+                std::fs::copy(
+                    tmp,
+                    Path::new("/home/mfenniak/Dev/testtrim/broken-trace.txt"),
+                )?;
+                return Err(e);
+            }
         }
 
         // Occasionally useful for debugging to keep a copy of all the strace output...
@@ -535,7 +574,7 @@ mod tests {
             res,
             Some(OpenParse::FinishedSuccess {
                 pid: String::from("2892755"),
-                path: PathBuf::from("test_data/Fibonacci_Sequence.txt"),
+                path: OpenPath::RelativeToCwd(PathBuf::from("test_data/Fibonacci_Sequence.txt")),
             })
         );
 
@@ -546,7 +585,9 @@ mod tests {
             res,
             Some(OpenParse::FinishedSuccess {
                 pid: String::from("2892755"),
-                path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
+                path: OpenPath::RelativeToCwd(PathBuf::from(
+                    "test_data/\"Fibonacci\"_Sequence.txt"
+                )),
             })
         );
 
@@ -557,7 +598,9 @@ mod tests {
             res,
             Some(OpenParse::FinishedSuccess {
                 pid: String::from("2892755"),
-                path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
+                path: OpenPath::RelativeToCwd(PathBuf::from(
+                    "test_data/\"Fibonacci\"_Sequence.txt"
+                )),
             })
         );
 
@@ -569,7 +612,7 @@ mod tests {
             res,
             Some(OpenParse::FinishedSuccess {
                 pid: String::from("6503"),
-                path: PathBuf::from("/proc/self/maps"),
+                path: OpenPath::RelativeToCwd(PathBuf::from("/proc/self/maps")),
             })
         );
 
@@ -581,7 +624,19 @@ mod tests {
             res,
             Some(OpenParse::Unfinished {
                 pid: String::from("189531"),
-                path: PathBuf::from("README.md"),
+                path: OpenPath::RelativeToCwd(PathBuf::from("README.md")),
+            })
+        );
+
+        let res = STraceSysTraceCommand::parse_openat(
+            // not using AT_FDCWD...
+            r#"1094494 openat(7, "gocoverdir", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_DIRECTORY <unfinished ...>"#,
+        );
+        assert_eq!(
+            res,
+            Some(OpenParse::Unfinished {
+                pid: String::from("1094494"),
+                path: OpenPath::RelativeToOpenDirFD(PathBuf::from("gocoverdir"), 7),
             })
         );
     }

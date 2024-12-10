@@ -707,18 +707,14 @@ impl TestPlatform for RustTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "platform-specific-test-cases"))]
-    fn platform_specific_relevant_test_cases<
-        Commit: crate::scm::ScmCommit,
-        MyScm: crate::scm::Scm<Commit>,
-    >(
-        eval_target_test_cases: &std::collections::HashSet<RustTestIdentifier>,
-        eval_target_changed_files: &std::collections::HashSet<PathBuf>,
+    fn platform_specific_relevant_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+        eval_target_test_cases: &HashSet<RustTestIdentifier>,
+        eval_target_changed_files: &HashSet<PathBuf>,
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
-    ) -> anyhow::Result<
-        PlatformSpecificRelevantTestCaseData<RustTestIdentifier, RustCoverageIdentifier>,
-    > {
+    ) -> Result<PlatformSpecificRelevantTestCaseData<RustTestIdentifier, RustCoverageIdentifier>>
+    {
         let mut test_cases: HashMap<RustTestIdentifier, Vec<TestReason<RustCoverageIdentifier>>> =
             HashMap::new();
 

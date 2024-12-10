@@ -18,8 +18,8 @@ use crate::{
     coverage::{commit_coverage_data::CoverageIdentifier, create_db},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
-        dotnet::DotnetTestPlatform, rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery,
-        TestIdentifier, TestPlatform,
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
+        ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
     },
     scm::{git::GitScm, Scm, ScmCommit},
     timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
@@ -45,6 +45,9 @@ pub fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) {
         }
         TestProjectType::Dotnet => {
             specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs);
+        }
+        TestProjectType::Golang => {
+            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs);
         }
     }
 }

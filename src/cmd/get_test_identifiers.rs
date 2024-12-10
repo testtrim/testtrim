@@ -15,8 +15,6 @@ use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
 use crate::coverage::{create_db, Tag};
-use crate::platform::dotnet::DotnetTestPlatform;
-use crate::platform::TestReason;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -24,7 +22,8 @@ use crate::{
         CoverageDatabase,
     },
     platform::{
-        rust::RustTestPlatform, ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
+        ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform, TestReason,
     },
     scm::{git::GitScm, Scm, ScmCommit},
 };
@@ -52,6 +51,9 @@ pub fn cli(
         }
         TestProjectType::Dotnet => {
             specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags);
+        }
+        TestProjectType::Golang => {
+            specific_cli::<_, _, _, _, GolangTestPlatform>(test_selection_mode, tags);
         }
     }
 }

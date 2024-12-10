@@ -65,6 +65,7 @@
             # resolve because when testtrim is being used normally, it would be someone else's responsibility to get dev
             # tools in place that are relevant to the project.
             dotnet-sdk_8  # for dotnet-coverage-specimen
+            go_1_23 # for go-coverage-specimen
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
