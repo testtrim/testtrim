@@ -83,6 +83,18 @@ The same evaluation was performed on [ripgrep](https://github.com/BurntSushi/rip
 
 These results are also great, but suffer from some of the same reasons listed above for why it may not be generalizable to every project
 
+# Feature Matrix
+
+testtrim supports a small number of test project types in different programming languages and runtimes, but not all of them have the same features and capabilities.
+
+| Feature | Rust | Go | .NET (C#, etc.) |
+|---|:---:|:---:|:---:|
+| File-based coverage tracking<br>(ie. changes that will affect tests are tracked on a file-by-file basis;<br>the least granular but simplest approach) | ✅ | ✅ | ✅ |
+| Function-based coverage tracking | ❌ | ❌ | ❌ |
+| External dependency change tracking | ✅ | ✅ | ❌ |
+| syscall tracking for file & network tracking | ✅ | ❌ | ❌ |
+| Embedded file tracking (ie. if a file embeds another file, changes to<br>either will trigger related tests) | ✅ | ❌ | ❌ |
+| Performance | 👍 | OK | Mega-👎 |
 
 # Known Issues
 
@@ -92,10 +104,12 @@ I'd love for testtrim to have a larger scope of applicability.
 
 Scope today:
 - Works for Rust applications
+    - Go is a work-in-progress
+    - .NET is partial but performs very poorly
+- Coverage database can be shared through a shared PostgreSQL database or remote web API
 
 Scope planned for the future:
 - Integrate with third-party test runners, rather than owning the entire test execution process
-- Coverage database (allowing partial test runs) is only available on the local workstation and [can't be shared](https://codeberg.org/testtrim/testtrim/issues/4) or [accessed as a service](https://codeberg.org/testtrim/testtrim/issues/5)
 - More platforms (eg. JavaScript, Java, Python, C#, etc.)
 - Track changes to external dependencies that are [accessed over a network](https://codeberg.org/testtrim/testtrim/issues/27), and allow running only relevant tests when they change
 - Perform more granular [function-level tracing](https://codeberg.org/testtrim/testtrim/issues/16) to reduce targeted test suite
@@ -104,14 +118,16 @@ Scope planned for the future:
 
 Significant problems that are known to exist within the scope described above, and should be known to any users:
 
-- testtrim can be fooled [when a `pub const` value is modified](https://codeberg.org/testtrim/testtrim/issues/52), and target fewer tests than required.
+- **Rust**:
+    - testtrim can be fooled [when a `pub const` value is modified](https://codeberg.org/testtrim/testtrim/issues/52), and target fewer tests than required.
 - testtrim isn't published as a released tool and must be checked out and built from source.
 
 ## Known Unknown Issues
 
 Unknowns within the scope described above, which should be considered with skepticism for the moment:
 
-- testtrim hasn't been [tested with macros](https://codeberg.org/testtrim/testtrim/issues/40) to ensure that changes that touch them are appropriately tested.  It's probably fine though.
+- **Rust**:
+    - testtrim hasn't been [tested with macros](https://codeberg.org/testtrim/testtrim/issues/40) to ensure that changes that touch them are appropriately tested.  It's probably fine though.
 
 
 # How to use?

@@ -3,24 +3,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{anyhow, Context as _, Result};
-use log::{debug, trace, warn};
+use gomod_rs::{parse_gomod, Directive};
+use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::env::current_dir;
-use std::fs::File;
+use std::fs::{read_to_string, File};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::{fmt, fs, io};
 use tempdir::TempDir;
 use threadpool::ThreadPool;
 use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
-use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage};
+use crate::coverage::commit_coverage_data::{
+    CommitCoverageData, CoverageIdentifier, FileCoverage, HeuristicCoverage,
+};
 use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
@@ -31,12 +36,12 @@ use crate::sys_trace::trace::Trace;
 
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
-    TestIdentifierCore, TestPlatform,
+    TestIdentifierCore, TestPlatform, TestReason,
 };
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct GolangTestIdentifier {
-    pub module_name: String,
+    pub module_name: ModulePath,
     pub test_name: String,
 }
 
@@ -49,12 +54,16 @@ impl TestIdentifierCore for GolangTestIdentifier {
 
 impl fmt::Display for GolangTestIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} / {}", self.module_name, self.test_name)
+        write!(f, "{} / {}", self.module_name.0, self.test_name)
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-pub enum GolangCoverageIdentifier {}
+pub enum GolangCoverageIdentifier {
+    // Possible future: go version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
+    PackageDependency(ModuleDependency),
+    // NetworkDependency(UnifiedSocketAddr),
+}
 
 impl CoverageIdentifier for GolangCoverageIdentifier {}
 
@@ -83,6 +92,48 @@ impl TestDiscovery<GolangConcreteTestIdentifier, GolangTestIdentifier> for Golan
         test_identifier: GolangTestIdentifier,
     ) -> Option<GolangConcreteTestIdentifier> {
         Some(GolangConcreteTestIdentifier { test_identifier })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+pub struct ModulePath(pub String); // eg. github.com/shopspring/decimal
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
+pub struct ModuleDependency {
+    module_path: ModulePath,
+    version: String,
+}
+
+struct ModuleInfo {
+    module_path: ModulePath,
+    dependencies: Vec<ModuleDependency>,
+}
+
+#[derive(Clone)]
+struct GoCoverageData<'a> {
+    module_and_file: &'a str,
+    start_marker: &'a str,
+    end_marker: &'a str,
+    // _num_statements: &'a str,
+    hit_count: &'a str,
+}
+
+#[derive(Eq, Hash, PartialEq, Debug, Clone)]
+struct GoCoverageStatementIdentity {
+    module_and_file: String,
+    start_marker: String,
+    end_marker: String,
+}
+
+impl<'a> From<&GoCoverageData<'a>> for (GoCoverageStatementIdentity, i32) {
+    fn from(data: &GoCoverageData<'a>) -> Self {
+        let statement_identity = GoCoverageStatementIdentity {
+            module_and_file: data.module_and_file.to_string(),
+            start_marker: data.start_marker.to_string(),
+            end_marker: data.end_marker.to_string(),
+        };
+        let hit_count: i32 = data.hit_count.parse().unwrap_or(0); // Converts hit_count to i32, defaults to 0 on parse failure
+        (statement_identity, hit_count)
     }
 }
 
@@ -118,8 +169,7 @@ impl GolangTestPlatform {
         */
         let output = Command::new("go")
             .args(["test", "./...", "-list=."])
-            .output()
-            .expect("Failed to execute `go test ./... -list=.` command");
+            .output()?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
@@ -134,16 +184,14 @@ impl GolangTestPlatform {
 
         let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
         for line in stdout.lines() {
-            trace!("output: {line:?}");
             if line.starts_with("ok ") {
                 let split: Vec<&str> = line.split('\t').collect();
                 match split.get(1) {
                     Some(module_name) => {
-                        trace!("module_name: {module_name:?}");
                         for t in &test_names {
                             result.insert(GolangConcreteTestIdentifier {
                                 test_identifier: GolangTestIdentifier {
-                                    module_name: String::from(*module_name),
+                                    module_name: ModulePath(String::from(*module_name)),
                                     test_name: String::from(t),
                                 },
                             });
@@ -157,7 +205,6 @@ impl GolangTestPlatform {
                     }
                 }
             } else {
-                trace!("test name: {line:?}");
                 test_names.push(String::from(line));
             }
         }
@@ -171,19 +218,119 @@ impl GolangTestPlatform {
         Ok(result)
     }
 
+    fn get_run_test_command(
+        module_info: &ModuleInfo,
+        test_module_name: &ModulePath,
+        test_regex: &str,
+        profile_file: &Path,
+    ) -> Command {
+        // form the coverpkg arg out of all the dependencies
+        let mut coverpkg = String::with_capacity(1024);
+        for dep in &module_info.dependencies {
+            coverpkg.push_str(&dep.module_path.0);
+            coverpkg.push(',');
+        }
+        coverpkg.push_str("./..."); // include this package and all local subpackages
+
+        let mut cmd = Command::new("go");
+        cmd.args([
+            "test",
+            &test_module_name.0,
+            "-run",
+            test_regex,
+            "-json",
+            "-cover",
+            "-covermode",
+            "count",
+            "-coverprofile",
+            &profile_file.to_string_lossy(),
+            "-coverpkg",
+            &coverpkg,
+        ]);
+        cmd
+    }
+
+    // When an external dependency is present in Go, constants and their initialization functions are captured even if
+    // the library isn't actually touched.  For example, in go-coverage-specimen check-8 when an external dependency is
+    // added, every test will record instrumentation data showing that the external dependency is touched when executed.
+    // This isn't great because it doesn't allow testtrim to target the tests that actually use that external
+    // dependency; as long as it has initialization code, it will be tracked as touched during that test.
+    //
+    // There is an argument to be made that the behavior is correct: initialization code is executed, and theoretically
+    // it could have an impact on the test.  But for testtrim's purposes we're going to try to be more specific.
+    //
+    // testtrim works around this by, for every module that we're running tests, generating a "no-op" test coverage map.
+    // Basically run a test that doesn't exists (eg. "FooBarTestAbc123987!"), and capture its coverage specifically for
+    // external dependencies.  And then when we run a later test, we'll use that no-op test coverage map as a baseline.
+    // The external dependency will only be considered a dependency of the test if the coverage map for that extermal
+    // dependency varies from the baseline.
+    //
+    // `-mode count` causes Go to collect a count for the number of times each branch is touched, rather than a boolean
+    // 1 or 0 (`-mode set`).  The `count` mode is preferred because it causes that external dependency coverage map to
+    // reliably detect dependency access -- with mode set, if you happened to hit the same codepaths as the
+    // initialization code during a test, the dependency wouldn't be tracked.  (A more aggressive atomic count mode
+    // exists which makes the counts threadsafe, but that seems unnecessary as the initialization code, I think, can't
+    // be multithreaded.)
+    //
+    // This same problem *probably* exists if you don't have an external dependency too!  Const values during package
+    // initialization would always show as being touched by every test.  A future investigation should be done to
+    // identify the best behavior in this case.
+    fn get_baseline_ext(
+        module_info: &ModuleInfo,
+        test_module_name: &ModulePath,
+        tmp_path: &Path,
+    ) -> Result<HashMap<GoCoverageStatementIdentity, i32>> {
+        let profile_file = tmp_path.join("__baseline__.out");
+        let mut cmd = Self::get_run_test_command(
+            module_info,
+            test_module_name,
+            "^$", // goal is an impossible test name; zero-length string should be impossible?
+            &profile_file,
+        );
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "failed to run go test for baseline; exit code: {:?}",
+                output.status
+            ));
+        }
+
+        let mut retval = HashMap::new();
+        let reader =
+            BufReader::new(File::open(profile_file).context("Failed to open profile file")?);
+        for line in reader.lines() {
+            let line = line?;
+            if line.starts_with("mode: ") {
+                continue;
+            }
+            let line = Self::parse_go_coverage_line(&line);
+            if line.hit_count == "0" {
+                // No need to keep track of this.
+                continue;
+            }
+            // Currently we don't skip anything from within our own module (eg. using `test_module_name`), and so we'll
+            // also end up ignoring coverage that is "always present" in our module.  It isn't super clear whether
+            // that's the right thing to do or not.
+            let extract: (GoCoverageStatementIdentity, i32) = (&line).into();
+            let (identity, count) = extract;
+            retval.insert(identity, count);
+        }
+
+        Ok(retval)
+    }
+
     fn run_test(
         test_case: &GolangConcreteTestIdentifier,
         tmp_path: &Path,
+        module_info: &ModuleInfo,
+        package_baseline: &HashMap<ModulePath, HashMap<GoCoverageStatementIdentity, i32>>,
     ) -> Result<CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>, RunTestError>
     {
         let mut coverage_data = CommitCoverageData::new();
-
-        trace!("preparing for test case {:?}", test_case);
-
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
         let coverage_dir = tmp_path
-            .join(Path::new("coverage-output").join(&test_case.test_identifier.module_name));
+            .join(Path::new("coverage-output").join(&test_case.test_identifier.module_name.0));
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
             .or_else(|e| {
@@ -208,27 +355,13 @@ impl GolangTestPlatform {
         );
         let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
             .in_scope(|| {
-            // go test codeberg.org/testtrim/go-coverage-specimen -run TestAdd -json -cover -covermode set -coverprofile TestAdd.out
-            let mut cmd = Command::new("go");
-
-            cmd.args([
-                    "test",
-                    &test_case.test_identifier.module_name,
-                    "-run",
-                    &test_case.test_identifier.test_name,
-                    "-json",
-                    "-cover",
-                    "-covermode",
-                    "set",
-                    "-coverprofile",
-                    &profile_file.to_string_lossy(),
-                ])
-                // cmd.arg("--exact")
-                // .arg(&test_case.test_identifier.test_name)
-                // .env("LLVM_PROFILE_FILE", &profile_file)
-                // .env("RUSTFLAGS", "-C instrument-coverage")
-                // .current_dir(test_wd);
-                ;
+            let cmd = Self::get_run_test_command(
+                module_info,
+                &test_case.test_identifier.module_name,
+                // make sure we're matching the one and only test:
+                &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
+                &profile_file,
+            );
             sys_trace_command.trace_command(cmd, &strace_file)
         })?;
 
@@ -243,9 +376,21 @@ impl GolangTestPlatform {
             }));
         }
 
-        trace!("Successfully ran test {:?}!", test_case.test_identifier);
+        let Some(package_baseline) = package_baseline.get(&test_case.test_identifier.module_name)
+        else {
+            return Err(RunTestError::Other(anyhow!(
+                "could not find coverage baseline for package {:?}",
+                test_case.test_identifier.module_name
+            )));
+        };
 
-        Self::parse_profiling_data(test_case, &profile_file, &mut coverage_data)?;
+        Self::parse_profiling_data(
+            test_case,
+            &profile_file,
+            &mut coverage_data,
+            module_info,
+            package_baseline,
+        )?;
         Self::parse_trace_data(test_case, &trace, &mut coverage_data)?;
 
         Ok(coverage_data)
@@ -256,47 +401,104 @@ impl GolangTestPlatform {
         test_case: &GolangConcreteTestIdentifier,
         profile_file: &PathBuf,
         coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
+        module_info: &ModuleInfo,
+        package_baseline: &HashMap<GoCoverageStatementIdentity, i32>,
     ) -> Result<()> {
         let reader =
             BufReader::new(File::open(profile_file).context("Failed to open profile file")?);
 
-        // https://github.com/golang/go/blob/c5d7f2f1cbaca8938a31a022058b1a3300817e33/src/cmd/cover/profile.go#L53-L56
-        // First line is "mode: foo", where foo is "set", "count", or "atomic".
-        // Rest of file is in the format
-        //	encoding/base64/base64.go:34.44,37.40 3 1
-        // where the fields are: name.go:line.column,line.column numberOfStatements count
+        let mut file_to_module_map = HashSet::new();
+
         for line in reader.lines() {
             let line = line?;
             if line.starts_with("mode: ") {
                 continue;
             }
 
-            debug!("profile data line: {line}");
-            let (module_file, line) = line
-                .split_once(':')
-                .ok_or_else(|| anyhow!("failed to split profilling line by ':' {line:?}"))?;
-            debug!("profile data line: {module_file}     remainder: {line}");
-            let (_line, count) = line
-                .rsplit_once(' ')
-                .ok_or_else(|| anyhow!("failed to split profilling line by ' ' {line:?}"))?;
-
-            debug!("profile data line: {module_file}     count: {count}");
-
-            // module_file = codeberg.org/testtrim/go-coverage-specimen/basic_ops.go
-            // count = (0, 1)
-            if count == "0" {
+            let line = Self::parse_go_coverage_line(&line);
+            if line.hit_count == "0" {
                 continue;
             }
 
-            // FIXME: temporary hack -- we should really read go.mod and get the module name to strip from the module_file
-            let relative_file = module_file
-                .strip_prefix("codeberg.org/testtrim/go-coverage-specimen/")
-                .ok_or_else(|| anyhow!("unable to strip_prefix from {module_file}"))?;
+            let extract: (GoCoverageStatementIdentity, i32) = (&line).into();
+            let (identity, current_count) = extract;
+            if let Some(baseline_count) = package_baseline.get(&identity) {
+                match baseline_count.cmp(&current_count) {
+                    Ordering::Equal => {
+                        // Skip this coverage line -- it's the same as our baseline coverage, so nothing new.
+                        continue;
+                    }
+                    Ordering::Less => {
+                        // Good, we've really touched this stmt in this test; the baseline count was lower than the
+                        // current count.  Proceed to mark it as a dependency.
+                    }
+                    Ordering::Greater => {
+                        // I think this should never happen; just curious to see if it does
+                        warn!("baseline_count {baseline_count} was greater than current count {current_count} for identity {identity:?}");
+                    }
+                }
+            }
 
-            coverage_data.add_file_to_test(FileCoverage {
-                test_identifier: test_case.test_identifier.clone(),
-                file_name: PathBuf::from(relative_file),
-            });
+            // If we can strip the module name (eg. codeberg.org/testtrim/go-coverage-specimen) from the module + file,
+            // then it's a file that is relative to our repo and we can record file coverage.
+            //
+            // FIXME: we can probably keep track of line.module_and_file and only process it through the rest of this
+            // function once, as it will likely be repeated many times in the coverage file.
+            let relative_file = line
+                .module_and_file
+                .strip_prefix(&(module_info.module_path.0.clone() + "/"));
+
+            if let Some(relative_file) = relative_file {
+                if relative_file.starts_with('/') {
+                    // strip_prefix has a hack above to ensure it is getting relative files (eg. basic_ops.rs, not
+                    // /basic_ops.rs); this check just raises the visibility of any problem that might occur here
+                    error!("relative_file was incorrectly prefix stripped; {relative_file:?}");
+                }
+                trace!(
+                    "test case {:?} touched file {}",
+                    test_case.test_identifier,
+                    relative_file
+                );
+                coverage_data.add_file_to_test(FileCoverage {
+                    test_identifier: test_case.test_identifier.clone(),
+                    file_name: PathBuf::from(relative_file),
+                });
+            } else {
+                // (otherwise it's a file from a dependency...)
+                if !file_to_module_map.contains(line.module_and_file) {
+                    // Ideally would use the .insert() retval, but then it would need to clone the module_and_file
+                    // string every time... on the other hand this does two traversals of the hash, so, which is better?
+                    // FIXME: would be fun to micro-benchmark, but probably not important
+                    file_to_module_map.insert(String::from(line.module_and_file));
+
+                    // First time we've found this module/file; need to resolve it to a dependency:
+                    let mut dependency = None;
+                    for dep in &module_info.dependencies {
+                        if line.module_and_file.starts_with(&dep.module_path.0) {
+                            dependency = Some(dep);
+                        }
+                    }
+
+                    if let Some(dependency) = dependency {
+                        trace!(
+                            "test case {:?} touched file... {:?} -> {dependency:?}",
+                            test_case.test_identifier,
+                            line.module_and_file
+                        );
+                        coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                            test_identifier: test_case.test_identifier.clone(),
+                            coverage_identifier: GolangCoverageIdentifier::PackageDependency(
+                                ModuleDependency {
+                                    module_path: dependency.module_path.clone(),
+                                    version: dependency.version.clone(),
+                                },
+                            ),
+                        });
+                    } else {
+                        warn!("test touched file {:?} but could not identify what dependency this came from", line.module_and_file);
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -346,6 +548,173 @@ impl GolangTestPlatform {
 
         Ok(())
     }
+
+    fn parse_go_coverage_line<'a>(line: &'a str) -> GoCoverageData<'a> {
+        // https://github.com/golang/go/blob/c5d7f2f1cbaca8938a31a022058b1a3300817e33/src/cmd/cover/profile.go#L53-L56
+        // First line is "mode: foo", where foo is "set", "count", or "atomic".
+        // Rest of file is in the format
+        //	encoding/base64/base64.go:34.44,37.40 3 1
+        // where the fields are: name.go:line.column,line.column numberOfStatements count
+        let parts: Vec<&'a str> = line.split_whitespace().collect();
+        let file_and_markers: Vec<&'a str> = parts[0].split(':').collect();
+        let markers: Vec<&'a str> = file_and_markers[1].split(',').collect();
+        GoCoverageData {
+            module_and_file: file_and_markers[0],
+            start_marker: markers[0],
+            end_marker: markers[1],
+            // _num_statements: parts[1],
+            hit_count: parts[2],
+        }
+    }
+
+    fn parse_module_info() -> Result<ModuleInfo> {
+        let contents = read_to_string("go.mod")?;
+        let gomod = parse_gomod(&contents)?;
+
+        /*
+        01:29:22 [DEBUG] (2) testtrim::platform::golang: gomod = [
+        Context { range: (Location { line: 1, offset: 0 }, Location { line: 2, offset: 50 }), comments: [], value: Module { module_path: "codeberg.org/testtrim/go-coverage-specimen" } },
+        Context { range: (Location { line: 3, offset: 51 }, Location { line: 4, offset: 61 }), comments: [], value: Go { version: Raw("1.23.3") } },
+        Context { range: (Location { line: 5, offset: 62 }, Location { line: 6, offset: 107 }), comments: [], value:
+            Require { specs: [Context { range: (Location { line: 5, offset: 70 }, Location { line: 6, offset: 107 }), comments: [], value: ("github.com/shopspring/decimal", Raw("v1.3.1"))
+        }] } }]
+        */
+
+        let mut module_path: Option<String> = None;
+        let mut dependencies: Vec<ModuleDependency> = vec![];
+
+        for item in gomod {
+            match item.value {
+                Directive::Module { module_path: mp } => {
+                    module_path = Some(String::from(mp));
+                }
+                Directive::Require { specs } => {
+                    for spec in specs {
+                        let (dependency_module_path, version) = spec.value;
+                        dependencies.push(ModuleDependency {
+                            module_path: ModulePath(String::from(dependency_module_path)),
+                            version: String::from(&*version),
+                        });
+                    }
+                }
+                // FIXME: Replace, Exclude, Extract -- do these need to be supported?
+                _ => {}
+            }
+        }
+
+        if let Some(module_path) = module_path {
+            Ok(ModuleInfo {
+                module_path: ModulePath(module_path),
+                dependencies,
+            })
+        } else {
+            Err(anyhow!("unable to parse `module` identifier from `go.mod`"))
+        }
+    }
+
+    fn go_mod_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
+        eval_target_test_cases: &HashSet<GolangTestIdentifier>,
+        scm: &MyScm,
+        ancestor_commit: &Commit,
+        coverage_data: &FullCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
+        test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+    ) -> Result<usize> {
+        // I think there might be plausible cases where Cargo.lock loading from the previous commit would fail, but we
+        // wouldn't want to error out... for example, if Cargo.lock was added since the ancestor commit?.  But I'm not
+        // confident what those cases would be where we would actually have ancestor coverage data yet be discovering
+        // Cargo.lock wasn't present?  And what behavior we'd want.  So for now we'll treat that as an error and wait
+        // for the situation to appear.
+        let ancestor_lock = scm.fetch_file_content(ancestor_commit, Path::new("go.mod"))?;
+        let ancestor_lock = String::from_utf8(ancestor_lock)?;
+        let ancestor_lock = parse_gomod(&ancestor_lock)?;
+
+        let current_lock_data = read_to_string("go.mod")?;
+        let current_lock = parse_gomod(&current_lock_data)?;
+        let mut current_lock_map = HashMap::new();
+        for item in current_lock {
+            // FIXME: Replace, Exclude, Extract -- do these need to be supported?
+            if let Directive::Require { specs } = item.value {
+                for spec in specs {
+                    let (dependency_module_path, version) = spec.value;
+                    current_lock_map.insert(
+                        ModulePath(String::from(dependency_module_path)),
+                        String::from(&*version),
+                    );
+                }
+            }
+        }
+        // for p in current_lock.packages {
+        //     current_lock_map.insert(String::from(p.name), p.version);
+        // }
+
+        // Cases to consider:
+        // - Packages with same version in both: Ignore.
+        // - Packages that have changed from one version to another: search for coverage data based upon old version,
+        //   add tests.
+        // - Packages that have were present in ancestor_lock and aren't in current_lock: I think also search and add
+        //   those tests?
+        // - New packages in current_lock that aren't in ancestor_lock aren't relevant -- they wouldn't be part of the
+        //   ancestor's coverage data.
+
+        let mut changed_external_dependencies = 0;
+        for item in ancestor_lock {
+            // FIXME: Replace, Exclude, Extract -- do these need to be supported?
+            if let Directive::Require { specs } = item.value {
+                for spec in specs {
+                    let (old_module_path, old_version) = spec.value;
+                    let old_module_path = ModulePath(String::from(old_module_path));
+                    let old_version = String::from(&*old_version);
+
+                    let relevant_change =
+                        if let Some(current_version) = current_lock_map.get(&old_module_path) {
+                            if *current_version == old_version {
+                                false
+                            } else {
+                                trace!(
+                                    "go.mod package changed {:?}, old: {}, current: {}",
+                                    old_module_path,
+                                    old_version,
+                                    current_version
+                                );
+                                true
+                            }
+                        } else {
+                            trace!("go.mod package removed {:?}", old_module_path);
+                            true
+                        };
+
+                    if relevant_change {
+                        info!(
+                            "Change to dependency {:?}; will run all tests that touched it",
+                            old_module_path
+                        );
+                        changed_external_dependencies += 1;
+                        let coverage_identifier =
+                            GolangCoverageIdentifier::PackageDependency(ModuleDependency {
+                                module_path: old_module_path,
+                                version: old_version,
+                            });
+
+                        if let Some(tests) = coverage_data
+                            .coverage_identifier_to_test_map()
+                            .get(&coverage_identifier)
+                        {
+                            for test in tests {
+                                if eval_target_test_cases.contains(test) {
+                                    debug!("test {test:?} needs rerun");
+                                    test_cases.entry(test.clone()).or_default().push(
+                                        TestReason::CoverageIdentifier(coverage_identifier.clone()),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(changed_external_dependencies)
+    }
 }
 
 impl TestPlatform for GolangTestPlatform {
@@ -377,16 +746,32 @@ impl TestPlatform for GolangTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "platform-specific-test-cases"))]
     fn platform_specific_relevant_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
-        _eval_target_test_cases: &HashSet<GolangTestIdentifier>,
-        _eval_target_changed_files: &HashSet<PathBuf>,
-        _scm: &MyScm,
-        _ancestor_commit: &Commit,
-        _coverage_data: &FullCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
+        eval_target_test_cases: &HashSet<GolangTestIdentifier>,
+        eval_target_changed_files: &HashSet<PathBuf>,
+        scm: &MyScm,
+        ancestor_commit: &Commit,
+        coverage_data: &FullCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
     ) -> Result<PlatformSpecificRelevantTestCaseData<GolangTestIdentifier, GolangCoverageIdentifier>>
     {
+        let mut test_cases: HashMap<
+            GolangTestIdentifier,
+            Vec<TestReason<GolangCoverageIdentifier>>,
+        > = HashMap::new();
+
+        let mut external_dependencies_changed = None;
+        if eval_target_changed_files.contains(Path::new("go.mod")) {
+            external_dependencies_changed = Some(Self::go_mod_test_cases(
+                eval_target_test_cases,
+                scm,
+                ancestor_commit,
+                coverage_data,
+                &mut test_cases,
+            )?);
+        }
+
         Ok(PlatformSpecificRelevantTestCaseData {
-            additional_test_cases: HashMap::new(),
-            external_dependencies_changed: None,
+            additional_test_cases: test_cases,
+            external_dependencies_changed,
         })
     }
 
@@ -400,6 +785,32 @@ impl TestPlatform for GolangTestPlatform {
     {
         let tmp_dir = TempDir::new("testtrim")?;
 
+        // FIXME: little confused why I need an Arc here since I want to just send an immutable reference to the
+        // threads; that should be doable in some lighter way.
+        let module_info = Arc::new(
+            Self::parse_module_info().map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
+        );
+
+        // Will need to collect get_baseline_ext for each module being tested... (At least, I think so?  Dependency
+        // access and initialization seems like something that wouldn't be constant across the entire project?)
+        let mut vec_test_cases = vec![];
+        let mut package_baseline = HashMap::new();
+        for test_case in test_cases {
+            if !package_baseline.contains_key(&test_case.test_identifier.module_name) {
+                package_baseline.insert(
+                    test_case.test_identifier.module_name.clone(),
+                    Self::get_baseline_ext(
+                        &module_info,
+                        &test_case.test_identifier.module_name,
+                        tmp_dir.path(),
+                    )
+                    .map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
+                );
+            }
+            vec_test_cases.push(test_case);
+        }
+        let package_baseline = Arc::new(package_baseline); // FIXME: can this be done without an Arc since it will be immutable?
+
         let mut coverage_data = CommitCoverageData::new();
 
         let pool = Rc::new(ThreadPool::new(1));
@@ -412,11 +823,13 @@ impl TestPlatform for GolangTestPlatform {
         let (tx, rx) = channel();
 
         let mut outstanding_tests = 0;
-        for test_case in test_cases {
+        for test_case in vec_test_cases {
             let tc = test_case.clone();
             let tmp_path = PathBuf::from(tmp_dir.path());
             let tx = tx.clone();
             let pool = pool.clone();
+            let module_info = module_info.clone();
+            let package_baseline = package_baseline.clone();
 
             // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
             // performance data from them.  Note that, as we're running these tests in parallel, the performance data
@@ -426,10 +839,17 @@ impl TestPlatform for GolangTestPlatform {
                 let tmp_path = tmp_path.clone();
                 let tx = tx.clone();
                 let dispatcher = dispatcher.clone();
+                let module_info = module_info.clone();
+                let package_baseline = package_baseline.clone();
                 pool.execute(move || {
                     dispatcher::with_default(&dispatcher, || {
-                        tx.send(GolangTestPlatform::run_test(&tc, &tmp_path))
-                            .unwrap();
+                        tx.send(GolangTestPlatform::run_test(
+                            &tc,
+                            &tmp_path,
+                            &module_info,
+                            &package_baseline,
+                        ))
+                        .unwrap();
                     });
                 });
             });
@@ -467,7 +887,33 @@ impl TestPlatform for GolangTestPlatform {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::platform::golang::GolangTestPlatform;
+
+    #[test]
+    fn test_parse_go_coverage_line() {
+        let line = "encoding/base64/base64.go:34.44,37.40 3 1";
+        let coverage_data = GolangTestPlatform::parse_go_coverage_line(line);
+
+        assert_eq!(coverage_data.module_and_file, "encoding/base64/base64.go");
+        assert_eq!(coverage_data.start_marker, "34.44");
+        assert_eq!(coverage_data.end_marker, "37.40");
+        // assert_eq!(coverage_data._num_statements, "3");
+        assert_eq!(coverage_data.hit_count, "1");
+
+        let line = "github.com/shopspring/decimal/rounding.go:112.14,114.4 1 317";
+        let coverage_data = GolangTestPlatform::parse_go_coverage_line(line);
+
+        assert_eq!(
+            coverage_data.module_and_file,
+            "github.com/shopspring/decimal/rounding.go"
+        );
+        assert_eq!(coverage_data.start_marker, "112.14");
+        assert_eq!(coverage_data.end_marker, "114.4");
+        // assert_eq!(coverage_data._num_statements, "1");
+        assert_eq!(coverage_data.hit_count, "317");
+    }
+}
 
 /*
 

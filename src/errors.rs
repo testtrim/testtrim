@@ -63,6 +63,9 @@ pub enum RunTestsErrors {
     #[error(transparent)]
     RecvError(#[from] std::sync::mpsc::RecvError),
 
+    #[error("platform-specific testing failure: {0}")]
+    PlatformError(String),
+
     /// TestExecutionFailure(s) from the test suite will be consolidated into this enum value.
     #[error("one or more tests failed: {0:?}")]
     TestExecutionFailures(Vec<FailedTestResult>),
