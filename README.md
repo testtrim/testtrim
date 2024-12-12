@@ -90,10 +90,10 @@ testtrim supports a small number of test project types in different programming 
 | Feature | Rust | Go | .NET (C#, etc.) |
 |---|:---:|:---:|:---:|
 | File-based coverage tracking<br>(ie. changes that will affect tests are tracked on a file-by-file basis;<br>the least granular but simplest approach) | ✅ | ✅ | ✅ |
-| Function-based coverage tracking | ❌ | ❌ | ❌ |
+| Function-based coverage tracking<br>(Only theorized, not implemented at all yet) | ❌ | ❌ | ❌ |
 | External dependency change tracking | ✅ | ✅ | ❌ |
-| syscall tracking for file & network tracking | ✅ | ❌ | ❌ |
-| Embedded file tracking (ie. if a file embeds another file, changes to<br>either will trigger related tests) | ✅ | ❌ | ❌ |
+| syscall tracking for file & network tracking | ✅ | ½ | ❌ |
+| Embedded file tracking (ie. if a file embeds another file, changes to<br>either will trigger related tests) | ✅ | ✅ | ❌ |
 | Performance | 👍 | OK | Mega-👎 |
 
 # Known Issues

@@ -56,12 +56,14 @@ pub trait TestDiscovery<CTI: ConcreteTestIdentifier<TI>, TI: TestIdentifier> {
     fn map_ti_to_cti(&self, test_identifier: TI) -> Option<CTI>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TestReason<CI: CoverageIdentifier> {
     NoCoverageMap,
     NewTest,
     FileChanged(PathBuf),
     CoverageIdentifier(CI),
+    // This is reason 0 caused reason 1 -- for example, changing "file a" caused "file b" to be considered change.
+    SideEffect(Box<TestReason<CI>>, Box<TestReason<CI>>),
 }
 
 pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier, CI: CoverageIdentifier> {

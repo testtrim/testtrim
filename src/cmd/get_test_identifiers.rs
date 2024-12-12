@@ -337,13 +337,16 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
         return Ok(retval);
     }
 
-    compute_changed_file_test_cases(
-        eval_target_test_cases,
-        eval_target_changed_files,
-        coverage_data,
-        &mut retval,
-        &mut HashSet::with_capacity(eval_target_changed_files.len()),
-    )?;
+    for changed_file in eval_target_changed_files {
+        compute_changed_file_test_cases(
+            eval_target_test_cases,
+            changed_file,
+            coverage_data,
+            &mut retval,
+            &mut HashSet::with_capacity(eval_target_changed_files.len()),
+            None,
+        )?;
+    }
     debug!(
         "relevant test cases after searching for file changes: {:?}",
         retval
@@ -370,43 +373,50 @@ fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
 
 fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
-    eval_target_changed_files: &HashSet<PathBuf>,
+    changed_file: &PathBuf,
     coverage_data: &FullCoverageData<TI, CI>,
     retval: &mut HashMap<TI, Vec<TestReason<CI>>>,
     recurse_ignore_files: &mut HashSet<PathBuf>,
+    override_reason: Option<&TestReason<CI>>,
 ) -> Result<()> {
-    for changed_file in eval_target_changed_files {
-        // As this function recurses (by referenced files), avoid processing the same file twice.
-        if !recurse_ignore_files.insert(changed_file.clone()) {
-            continue;
-        }
+    if !recurse_ignore_files.insert(changed_file.clone()) {
+        return Ok(());
+    }
 
-        if let Some(tests) = coverage_data.file_to_test_map().get(changed_file) {
-            for test in tests {
-                // Even if this test covered this file in the past, if the test doesn't exist in the current eval target
-                // then we can't run it anymore; typically happens when a test case is removed.
-                if eval_target_test_cases.contains(test) {
-                    retval
-                        .entry(test.clone())
-                        .or_default()
-                        .push(TestReason::FileChanged(changed_file.clone()));
-                }
+    let default_reason = TestReason::FileChanged(changed_file.clone());
+    let reason = override_reason.unwrap_or(&default_reason);
+    if let Some(tests) = coverage_data.file_to_test_map().get(changed_file) {
+        for test in tests {
+            debug!("need to run test {test:?}");
+            // Even if this test covered this file in the past, if the test doesn't exist in the current eval target
+            // then we can't run it anymore; typically happens when a test case is removed.
+            if eval_target_test_cases.contains(test) {
+                debug!("marked!");
+                retval.entry(test.clone()).or_default().push(reason.clone());
             }
         }
+    }
 
-        if let Some(referencing_files) = coverage_data
-            .file_referenced_by_files_map()
-            .get(changed_file)
-            && !referencing_files.is_empty()
-        {
-            // Treat all the "referencing files", which are files that had some reference to the changed file, as-if
-            // they were changed because this file was changed.
+    if let Some(referencing_files) = coverage_data
+        .file_referenced_by_files_map()
+        .get(changed_file)
+        && !referencing_files.is_empty()
+    {
+        // Treat all the "referencing files", which are files that had some reference to the changed file, as-if
+        // they were changed because this file was changed.
+        for referencing_file in referencing_files {
             compute_changed_file_test_cases(
                 eval_target_test_cases,
-                referencing_files,
+                referencing_file,
                 coverage_data,
                 retval,
                 recurse_ignore_files,
+                Some(&TestReason::SideEffect(
+                    // Because this occurred (probably a FileChanged)
+                    Box::new(reason.clone()),
+                    // We treated it like this file changed:
+                    Box::new(TestReason::FileChanged(referencing_file.clone())),
+                )),
             )?;
         }
     }

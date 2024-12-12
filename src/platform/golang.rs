@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context as _, Result};
 use gomod_rs::{parse_gomod, Directive};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
-use regex::Regex;
+use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -26,12 +26,13 @@ use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
 use crate::coverage::commit_coverage_data::{
-    CommitCoverageData, CoverageIdentifier, FileCoverage, HeuristicCoverage,
+    CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, HeuristicCoverage,
 };
 use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
+use crate::platform::rust::RustTestPlatform;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::sys_trace_command;
 use crate::sys_trace::trace::Trace;
@@ -167,7 +168,7 @@ impl<'a> From<&GoCoverageData<'a>> for (GoCoverageStatementIdentity, i32) {
 
 lazy_static! {
     // See comment in guess_tests_from_test_file_changed for why this exists
-    static ref test_func_definition: Regex = Regex::new(
+    static ref test_func_definition_regex: Regex = Regex::new(
         r"(?xs)
         func
         \s+
@@ -179,6 +180,102 @@ lazy_static! {
         \s*    # opt whitespace between name and params
         \(     # start of function parameters
         "
+    )
+    .unwrap();
+    // Really hacky regex; probably should use a parser.  Supports up to five includes on one line.
+    static ref embed_regex: Regex = Regex::new(
+        r#"(?xm)
+        ^
+        [\t\v\f\x20]* # optional whitespace, not newlines
+        //go:embed
+        (?:
+            # double-quote w/ path
+            [\t\v\f\x20]+
+            "
+            (?<qpath1>(?:[^"\\]|\\.)*)
+            "
+            |
+            # backtick-quote with path
+            [\t\v\f\x20]+
+            `
+            (?<bpath1>(?:[^`\\]|\\.)*)
+            `
+            |
+            # Unquoted path
+            [\t\v\f\x20]+
+            (?<path1>[^\n\r\s]+)
+        )
+        (?:
+            # double-quote w/ path
+            [\t\v\f\x20]+
+            "
+            (?<qpath2>(?:[^"\\]|\\.)*)
+            "
+            |
+            # backtick-quote with path
+            [\t\v\f\x20]+
+            `
+            (?<bpath2>(?:[^`\\]|\\.)*)
+            `
+            |
+            # Unquoted path
+            [\t\v\f\x20]+
+            (?<path2>[^\n\r\s]+)
+        )?
+        (?:
+            # double-quote w/ path
+            [\t\v\f\x20]+
+            "
+            (?<qpath3>(?:[^"\\]|\\.)*)
+            "
+            |
+            # backtick-quote with path
+            [\t\v\f\x20]+
+            `
+            (?<bpath3>(?:[^`\\]|\\.)*)
+            `
+            |
+            # Unquoted path
+            [\t\v\f\x20]+
+            (?<path3>[^\n\r\s]+)
+        )?
+        (?:
+            # double-quote w/ path
+            [\t\v\f\x20]+
+            "
+            (?<qpath4>(?:[^"\\]|\\.)*)
+            "
+            |
+            # backtick-quote with path
+            [\t\v\f\x20]+
+            `
+            (?<bpath4>(?:[^`\\]|\\.)*)
+            `
+            |
+            # Unquoted path
+            [\t\v\f\x20]+
+            (?<path4>[^\n\r\s]+)
+        )?
+        (?:
+            # double-quote w/ path
+            [\t\v\f\x20]+
+            "
+            (?<qpath5>(?:[^"\\]|\\.)*)
+            "
+            |
+            # backtick-quote with path
+            [\t\v\f\x20]+
+            `
+            (?<bpath5>(?:[^`\\]|\\.)*)
+            `
+            |
+            # Unquoted path
+            [\t\v\f\x20]+
+            (?<path5>[^\n\r\s]+)
+        )?
+        [\t\v\f\x20]* # optional whitespace, not newlines
+        $
+        "#
     )
     .unwrap();
 }
@@ -708,6 +805,7 @@ impl GolangTestPlatform {
         file: &Path,
         all_test_cases: &HashSet<GolangTestIdentifier>,
         test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+        source_reason: &TestReason<GolangCoverageIdentifier>,
     ) -> Result<()> {
         // Go doesn't instrument test files (_test.go).  (eg.
         // https://github.com/golang/go/blob/e0c76d95abfc1621259864adb3d101cf6f1f90fc/src/cmd/go/internal/work/exec.go#L644-L646)
@@ -724,10 +822,9 @@ impl GolangTestPlatform {
         //   Coverage-based testing would identify these dependencies, but this hack doesn't -- if you change a_test.go
         //   and it had a function used by b_test.go, we won't know that the tests in b_test.go need to be rerun.
         // However, it's probably "pretty good for most cases"?
-
         let test_file = fs::read_to_string(file)?;
 
-        for cap in test_func_definition.captures_iter(&test_file) {
+        for cap in test_func_definition_regex.captures_iter(&test_file) {
             let test_name = String::from(&cap["test_name"]);
             let mut any_match = false;
             for tc in all_test_cases {
@@ -737,9 +834,14 @@ impl GolangTestPlatform {
                     test_cases
                         .entry(tc.clone())
                         .or_default()
-                        .push(TestReason::CoverageIdentifier(
-                            GolangCoverageIdentifier::InferredFromTestFileChange(PathBuf::from(
-                                file,
+                        .push(TestReason::SideEffect(
+                            // Because this happened... probably a FileChanged...
+                            Box::new(source_reason.clone()),
+                            // We did this inference and found this test case should be run.
+                            Box::new(TestReason::CoverageIdentifier(
+                                GolangCoverageIdentifier::InferredFromTestFileChange(
+                                    PathBuf::from(file),
+                                ),
                             )),
                         ));
                 }
@@ -750,6 +852,121 @@ impl GolangTestPlatform {
         }
 
         Ok(())
+    }
+
+    fn maybe_guess_tests_from_changed_file(
+        changed_file: &PathBuf,
+        coverage_data: &FullCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
+        eval_target_test_cases: &HashSet<GolangTestIdentifier>,
+        test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+        prevent_recursive: &mut HashSet<PathBuf>,
+        override_reason: Option<&TestReason<GolangCoverageIdentifier>>,
+    ) -> Result<()> {
+        if !prevent_recursive.insert(changed_file.clone()) {
+            return Ok(());
+        }
+
+        // Preserve the first file changed as the "reason" for any test cases being included:
+        let default_reason = TestReason::FileChanged(changed_file.clone());
+        let reason = override_reason.unwrap_or(&default_reason);
+
+        if changed_file
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with("_test.go"))
+        {
+            Self::guess_tests_from_test_file_changed(
+                changed_file,
+                eval_target_test_cases,
+                test_cases,
+                reason,
+            )?;
+        }
+
+        // In the event that a _test.go file has a //go:embed in it, the normal process of following referenced files
+        // (in `compute_changed_file_test_cases`) won't work because we don't have a record of coverage in _test.go
+        // files, so we won't know what tests to rerun.  So we have to duplicate that behavior here with these inferred
+        // test cases.
+        if let Some(referencing_files) = coverage_data
+            .file_referenced_by_files_map()
+            .get(changed_file)
+            && !referencing_files.is_empty()
+        {
+            for referencing_file in referencing_files {
+                Self::maybe_guess_tests_from_changed_file(
+                    referencing_file,
+                    coverage_data,
+                    eval_target_test_cases,
+                    test_cases,
+                    prevent_recursive,
+                    Some(&TestReason::SideEffect(
+                        // Because this occurred (probably a FileChanged)
+                        Box::new(reason.clone()),
+                        // We treated it like this file changed:
+                        Box::new(TestReason::FileChanged(referencing_file.clone())),
+                    )),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::manual_map)] // much cleaner as-is than the proposed alternative
+    fn embed_extract(i: i32, cap: &Captures<'_>) -> Option<PathBuf> {
+        if let Some(raw) = cap.name(&format!("path{i}")) {
+            Some(PathBuf::from(raw.as_str()))
+        } else if let Some(dquote) = cap.name(&format!("qpath{i}")) {
+            Some(PathBuf::from(dquote.as_str().replace("\\\"", "\"")))
+        } else if let Some(bquote) = cap.name(&format!("bpath{i}")) {
+            Some(PathBuf::from(bquote.as_str()))
+        } else {
+            None
+        }
+    }
+
+    fn find_embed_includes(src_file: &PathBuf) -> Result<HashSet<PathBuf>> {
+        let mut result = HashSet::new();
+
+        let Some(parent) = src_file.parent() else {
+            warn!("couldn't resolve path {src_file:?} to its parent directory");
+            return Ok(result);
+        };
+
+        let file = File::open(src_file).context(format!(
+            "error in find_embed_includes opening file {src_file:?}"
+        ))?;
+        let content =
+            io::read_to_string(BufReader::new(file)).context("find_embed_includes file read")?;
+
+        for cap in embed_regex.captures_iter(&content) {
+            for i in 1..=5 {
+                if let Some(path) = Self::embed_extract(i, &cap) {
+                    if path.starts_with("/") || path.starts_with(".") {
+                        // Avoid anything suspicious occurring with path.join; these types of paths aren't supported in
+                        // //go:embed anyway.
+                        continue;
+                    }
+                    let glob_pattern = parent.join(path);
+
+                    for entry in glob::glob(&glob_pattern.to_string_lossy())? {
+                        let entry = entry?;
+                        if entry.is_dir() {
+                            for dirent in fs::read_dir(entry)? {
+                                let dirent = dirent?;
+                                let entry = dirent.path();
+                                let entry = entry.strip_prefix(parent)?;
+                                result.insert(PathBuf::from(entry));
+                            }
+                        } else {
+                            let entry = entry.strip_prefix(parent)?;
+                            result.insert(PathBuf::from(entry));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -866,17 +1083,16 @@ impl TestPlatform for GolangTestPlatform {
             )?);
         }
 
+        let mut prevent_recursive: HashSet<PathBuf> = HashSet::new();
         for file in eval_target_changed_files {
-            if file
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().ends_with("_test.go"))
-            {
-                Self::guess_tests_from_test_file_changed(
-                    file,
-                    eval_target_test_cases,
-                    &mut test_cases,
-                )?;
-            }
+            Self::maybe_guess_tests_from_changed_file(
+                file,
+                coverage_data,
+                eval_target_test_cases,
+                &mut test_cases,
+                &mut prevent_recursive,
+                None,
+            )?;
         }
 
         Ok(PlatformSpecificRelevantTestCaseData {
@@ -985,18 +1201,63 @@ impl TestPlatform for GolangTestPlatform {
     }
 
     fn analyze_changed_files(
-        _changed_files: &HashSet<PathBuf>,
-        _coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
+        changed_files: &HashSet<PathBuf>,
+        coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
     ) -> Result<()> {
+        let repo_root = env::current_dir()?;
+
+        for file in changed_files {
+            if file.extension().is_some_and(|ext| ext == "go") {
+                let mut found_references = false;
+
+                if !fs::exists(file)? {
+                    // A file was considered "changed" but doesn't exist -- indicating a deleted file.
+                    coverage_data.mark_file_makes_no_references(file.clone());
+                    continue;
+                }
+
+                for target_path in Self::find_embed_includes(file)? {
+                    debug!("found that {file:?} references {target_path:?}");
+                    // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
+                    // them might be better elevated to errors?
+                    let target_path = RustTestPlatform::normalize_path(
+                        &target_path,
+                        file,
+                        &repo_root,
+                        |warning| {
+                            warn!("file {file:?} had a //go:embed, but reference could not be followed: {warning}");
+                        },
+                    );
+
+                    if let Some(target_path) = target_path {
+                        coverage_data.add_file_reference(FileReference {
+                            referencing_file: file.clone(),
+                            target_file: target_path,
+                        });
+                        found_references = true;
+                    }
+                }
+
+                if !found_references {
+                    coverage_data.mark_file_makes_no_references(file.clone());
+                }
+            } else {
+                // This probably isn't necessary since it would've never been marked as making references
+                coverage_data.mark_file_makes_no_references(file.clone());
+            }
+        }
+
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::platform::golang::GolangTestPlatform;
 
-    use super::test_func_definition;
+    use super::test_func_definition_regex;
 
     #[test]
     fn test_parse_go_coverage_line() {
@@ -1047,64 +1308,28 @@ func TestAddDecimal(t *testing.T) {
 	}
 }
 "#;
-        let caps = test_func_definition.captures_iter(code).collect::<Vec<_>>();
+        let caps = test_func_definition_regex
+            .captures_iter(code)
+            .collect::<Vec<_>>();
         assert_eq!(caps.len(), 2, "expected two Test... functions to be found");
         assert_eq!(&caps[0]["test_name"], "TestAdd");
     }
+
+    #[test]
+    fn find_compile_time_includes() {
+        let res = GolangTestPlatform::find_embed_includes(&PathBuf::from(
+            "tests/go_parse_examples/embed.go",
+        ));
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        assert_eq!(res.len(), 8, "correct # of files read; res={res:?}");
+        assert!(res.contains(&PathBuf::from("file1.txt")));
+        assert!(res.contains(&PathBuf::from("file2.txt"))); // multiple includes on one line
+        assert!(res.contains(&PathBuf::from("file3.txt")));
+        assert!(res.contains(&PathBuf::from("dir1/file4.txt"))); // directory include
+        assert!(res.contains(&PathBuf::from("dir1/file5.txt")));
+        assert!(res.contains(&PathBuf::from("dir2/file6.txt"))); // glob include
+        assert!(res.contains(&PathBuf::from("dir \"3\"/file8.txt"))); // double-quoting fixed up
+        assert!(res.contains(&PathBuf::from("dir \"4\"/file9.txt")));
+    }
 }
-
-/*
-
-Test discovery:
-$ go test ./... -list=.
-TestAdd
-TestSub
-TestMul
-TestDiv
-TestFibonacci
-TestFactorial
-ok      codeberg.org/testtrim/go-coverage-specimen      0.001s
-- collect each test name
-- then associate them with the package name (codeberg.org/testtrim/go-coverage-specimen) as "ok..." is output
-
-Test execution:
-$ go test codeberg.org/testtrim/go-coverage-specimen -run TestAdd -json -cover -covermode set -coverprofile TestAdd.out
-{"Time":"2024-12-09T10:49:58.483098468-07:00","Action":"start","Package":"codeberg.org/testtrim/go-coverage-specimen"}
-{"Time":"2024-12-09T10:49:58.484227202-07:00","Action":"run","Package":"codeberg.org/testtrim/go-coverage-specimen","Test":"TestAdd"}
-{"Time":"2024-12-09T10:49:58.484256971-07:00","Action":"output","Package":"codeberg.org/testtrim/go-coverage-specimen","Test":"TestAdd","Output":"=== RUN   TestAdd\n"}
-{"Time":"2024-12-09T10:49:58.484271441-07:00","Action":"output","Package":"codeberg.org/testtrim/go-coverage-specimen","Test":"TestAdd","Output":"--- PASS: TestAdd (0.00s)\n"}
-{"Time":"2024-12-09T10:49:58.484274341-07:00","Action":"pass","Package":"codeberg.org/testtrim/go-coverage-specimen","Test":"TestAdd","Elapsed":0}
-{"Time":"2024-12-09T10:49:58.484279111-07:00","Action":"output","Package":"codeberg.org/testtrim/go-coverage-specimen","Output":"PASS\n"}
-{"Time":"2024-12-09T10:49:58.484391871-07:00","Action":"output","Package":"codeberg.org/testtrim/go-coverage-specimen","Output":"ok  \tcodeberg.org/testtrim/go-coverage-specimen\t0.001s\n"}
-{"Time":"2024-12-09T10:49:58.484747148-07:00","Action":"pass","Package":"codeberg.org/testtrim/go-coverage-specimen","Elapsed":0.002}
-
-Produces TestAdd.out:
-mode: set
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:3.28,5.2 1 1
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:7.28,9.2 1 0
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:11.28,13.2 1 0
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:15.28,17.2 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:3.31,4.11 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:5.9,6.11 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:7.9,8.11 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:9.10,10.57 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:14.31,15.11 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:16.9,17.11 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:18.9,19.11 1 0
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:20.10,21.38 1 0
-
-The last number seems to be whether the bit is set for execution in that specific location of the file -- this could be good enough for file detection.  Although awkwardly we'll have to map from the packagename + filename to the relative filename.
-
-Function coverage can be retrieved with an additional processing command:
-$ go tool cover -func TestAdd.out
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:3:      Add             100.0%
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:7:      Sub             0.0%
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:11:     Mul             0.0%
-codeberg.org/testtrim/go-coverage-specimen/basic_ops.go:15:     Div             0.0%
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:3:      Fibonacci       0.0%
-codeberg.org/testtrim/go-coverage-specimen/sequences.go:14:     Factorial       0.0%
-total:                                                          (statements)    8.3%
-
-Mapping from the package-relative naming to the source-tree-relative naming probably seems to just involve stripping the prefix from go.mod, labeled as `module ...`
-
-*/
