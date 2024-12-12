@@ -621,7 +621,7 @@ impl RustTestPlatform {
     ///
     /// The expectation is that problems, if they occur, are not errors but might be warnings.  Therefore the parameter
     /// `warn` represents a function that can be called to provide contextual warnings about the problem.
-    fn normalize_path<T: FnOnce(&str)>(
+    pub fn normalize_path<T: FnOnce(&str)>(
         path: &Path,
         relative_to: &Path,
         repo_root: &Path,

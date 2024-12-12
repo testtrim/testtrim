@@ -4,11 +4,13 @@
 
 use anyhow::{anyhow, Context as _, Result};
 use gomod_rs::{parse_gomod, Directive};
+use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::env::current_dir;
+use std::env::{self, current_dir};
 use std::fs::{read_to_string, File};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
@@ -41,7 +43,7 @@ use super::{
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct GolangTestIdentifier {
-    pub module_name: ModulePath,
+    pub binary_name: BinaryName,
     pub test_name: String,
 }
 
@@ -54,7 +56,7 @@ impl TestIdentifierCore for GolangTestIdentifier {
 
 impl fmt::Display for GolangTestIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} / {}", self.module_name.0, self.test_name)
+        write!(f, "{} / {}", self.binary_name.0, self.test_name)
     }
 }
 
@@ -62,15 +64,33 @@ impl fmt::Display for GolangTestIdentifier {
 pub enum GolangCoverageIdentifier {
     // Possible future: go version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
     PackageDependency(ModuleDependency),
+    InferredFromTestFileChange(PathBuf),
     // NetworkDependency(UnifiedSocketAddr),
 }
 
 impl CoverageIdentifier for GolangCoverageIdentifier {}
 
-#[derive(Eq, Hash, PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct GolangConcreteTestIdentifier {
     pub test_identifier: GolangTestIdentifier,
+    _binary_dir: Arc<TempDir>,
+    binary_path: PathBuf,
 }
+
+impl PartialEq for GolangConcreteTestIdentifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.test_identifier == other.test_identifier && self.binary_path == other.binary_path
+    }
+}
+
+impl Hash for GolangConcreteTestIdentifier {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.test_identifier.hash(state);
+        self.binary_path.hash(state);
+    }
+}
+
+impl Eq for GolangConcreteTestIdentifier {}
 
 impl ConcreteTestIdentifier<GolangTestIdentifier> for GolangConcreteTestIdentifier {
     fn test_identifier(&self) -> &GolangTestIdentifier {
@@ -91,12 +111,20 @@ impl TestDiscovery<GolangConcreteTestIdentifier, GolangTestIdentifier> for Golan
         &self,
         test_identifier: GolangTestIdentifier,
     ) -> Option<GolangConcreteTestIdentifier> {
-        Some(GolangConcreteTestIdentifier { test_identifier })
+        for cti in &self.all_test_cases {
+            if cti.test_identifier == test_identifier {
+                return Some(cti.clone());
+            }
+        }
+        None
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub struct ModulePath(pub String); // eg. github.com/shopspring/decimal
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+pub struct BinaryName(pub String); // eg. go-coverage-specimen.out
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct ModuleDependency {
@@ -137,6 +165,24 @@ impl<'a> From<&GoCoverageData<'a>> for (GoCoverageStatementIdentity, i32) {
     }
 }
 
+lazy_static! {
+    // See comment in guess_tests_from_test_file_changed for why this exists
+    static ref test_func_definition: Regex = Regex::new(
+        r"(?xs)
+        func
+        \s+
+        (?<test_name>
+            Test
+            [A-Z]
+            \S+
+        )
+        \s*    # opt whitespace between name and params
+        \(     # start of function parameters
+        "
+    )
+    .unwrap();
+}
+
 pub struct GolangTestPlatform;
 
 impl GolangTestPlatform {
@@ -152,78 +198,7 @@ impl GolangTestPlatform {
         }
     }
 
-    pub fn get_all_test_cases() -> Result<HashSet<GolangConcreteTestIdentifier>> {
-        let mut result: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
-
-        /*
-        $ go test ./... -list=.
-        TestAdd
-        TestSub
-        TestMul
-        TestDiv
-        TestFibonacci
-        TestFactorial
-        ok      codeberg.org/testtrim/go-coverage-specimen      0.001s
-        - collect each test name
-        - then associate them with the package name (codeberg.org/testtrim/go-coverage-specimen) as "ok..." is output
-        */
-        let output = Command::new("go")
-            .args(["test", "./...", "-list=."])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(SubcommandErrors::SubcommandFailed {
-                command: String::from("go test ./... -list=."),
-                status: output.status,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }
-            .into());
-        }
-
-        let mut test_names: Vec<String> = Vec::new();
-
-        let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
-        for line in stdout.lines() {
-            if line.starts_with("ok ") {
-                let split: Vec<&str> = line.split('\t').collect();
-                match split.get(1) {
-                    Some(module_name) => {
-                        for t in &test_names {
-                            result.insert(GolangConcreteTestIdentifier {
-                                test_identifier: GolangTestIdentifier {
-                                    module_name: ModulePath(String::from(*module_name)),
-                                    test_name: String::from(t),
-                                },
-                            });
-                        }
-                        test_names.clear();
-                    }
-                    None => {
-                        return Err(anyhow!(
-                            "test discovery encountered output {line:?} that couldn't be parsed"
-                        ));
-                    }
-                }
-            } else {
-                test_names.push(String::from(line));
-            }
-        }
-
-        if !test_names.is_empty() {
-            return Err(anyhow!(
-                "test discovery failed; left with test names and no module name: {test_names:?}"
-            ));
-        }
-
-        Ok(result)
-    }
-
-    fn get_run_test_command(
-        module_info: &ModuleInfo,
-        test_module_name: &ModulePath,
-        test_regex: &str,
-        profile_file: &Path,
-    ) -> Command {
+    fn get_build_test_command(module_info: &ModuleInfo, tmp_dir: &TempDir) -> Command {
         // form the coverpkg arg out of all the dependencies
         let mut coverpkg = String::with_capacity(1024);
         for dep in &module_info.dependencies {
@@ -235,17 +210,26 @@ impl GolangTestPlatform {
         let mut cmd = Command::new("go");
         cmd.args([
             "test",
-            &test_module_name.0,
-            "-run",
-            test_regex,
+            "-c",
+            "-o",
+            &(String::from(tmp_dir.path().to_string_lossy()) + "/"),
             "-json",
             "-cover",
             "-covermode",
             "count",
-            "-coverprofile",
-            &profile_file.to_string_lossy(),
             "-coverpkg",
             &coverpkg,
+        ]);
+        cmd
+    }
+
+    fn get_run_test_command(binary_path: &Path, test_regex: &str, profile_file: &Path) -> Command {
+        let mut cmd = Command::new(binary_path);
+        cmd.args([
+            "-test.run",
+            test_regex,
+            "-test.coverprofile",
+            &profile_file.to_string_lossy(),
         ]);
         cmd
     }
@@ -276,17 +260,16 @@ impl GolangTestPlatform {
     // initialization would always show as being touched by every test.  A future investigation should be done to
     // identify the best behavior in this case.
     fn get_baseline_ext(
-        module_info: &ModuleInfo,
-        test_module_name: &ModulePath,
+        test_binary_path: &Path,
         tmp_path: &Path,
     ) -> Result<HashMap<GoCoverageStatementIdentity, i32>> {
         let profile_file = tmp_path.join("__baseline__.out");
         let mut cmd = Self::get_run_test_command(
-            module_info,
-            test_module_name,
+            test_binary_path,
             "^$", // goal is an impossible test name; zero-length string should be impossible?
             &profile_file,
         );
+        debug!("running: {cmd:?}");
         let output = cmd.output()?;
         if !output.status.success() {
             return Err(anyhow!(
@@ -323,14 +306,14 @@ impl GolangTestPlatform {
         test_case: &GolangConcreteTestIdentifier,
         tmp_path: &Path,
         module_info: &ModuleInfo,
-        package_baseline: &HashMap<ModulePath, HashMap<GoCoverageStatementIdentity, i32>>,
+        package_baseline: &HashMap<BinaryName, HashMap<GoCoverageStatementIdentity, i32>>,
     ) -> Result<CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>, RunTestError>
     {
         let mut coverage_data = CommitCoverageData::new();
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
         let coverage_dir = tmp_path
-            .join(Path::new("coverage-output").join(&test_case.test_identifier.module_name.0));
+            .join(Path::new("coverage-output").join(&test_case.test_identifier.binary_name.0));
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
             .or_else(|e| {
@@ -356,8 +339,7 @@ impl GolangTestPlatform {
         let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
             .in_scope(|| {
             let cmd = Self::get_run_test_command(
-                module_info,
-                &test_case.test_identifier.module_name,
+                &test_case.binary_path,
                 // make sure we're matching the one and only test:
                 &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
                 &profile_file,
@@ -376,11 +358,11 @@ impl GolangTestPlatform {
             }));
         }
 
-        let Some(package_baseline) = package_baseline.get(&test_case.test_identifier.module_name)
+        let Some(package_baseline) = package_baseline.get(&test_case.test_identifier.binary_name)
         else {
             return Err(RunTestError::Other(anyhow!(
-                "could not find coverage baseline for package {:?}",
-                test_case.test_identifier.module_name
+                "could not find coverage baseline for binary {:?}",
+                test_case.test_identifier.binary_name.0
             )));
         };
 
@@ -506,38 +488,44 @@ impl GolangTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_trace_data(
-        _test_case: &GolangConcreteTestIdentifier,
-        _trace: &Trace,
-        _coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
+        test_case: &GolangConcreteTestIdentifier,
+        trace: &Trace,
+        coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
     ) -> Result<()> {
-        // let repo_root = env::current_dir()?;
+        let repo_root = env::current_dir()?;
 
-        // for path in trace.get_open_paths() {
-        //     if path.is_relative() || path.starts_with(&repo_root) {
-        //         debug!(
-        //             "found test {} accessed local file {path:?}",
-        //             test_case.test_identifier
-        //         );
+        // FIXME: This doesn't work right now because the current test execution method runs a build on every individual
+        // test.  We'll have to change this to do a build once (go test -c -o test-binary) and then run test-binary
+        // separately for each test.  This should be much faster too, and experimental testing shows it will isolate the
+        // `strace` to just the specific test.
 
-        //         let target_path = Self::normalize_path(
-        //             path,
-        //             &current_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
-        //             &repo_root,
-        //             |warning| {
-        //                 warn!("syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}");
-        //             },
-        //         );
-        //         if let Some(target_path) = target_path {
-        //             // It might make sense to filter out files that aren't part of the repo... both here and in
-        //             // parse_profiling_data?
-        //             coverage_data.add_file_to_test(FileCoverage {
-        //                 file_name: target_path.clone(),
-        //                 test_identifier: test_case.test_identifier.clone(),
-        //             });
-        //         }
-        //     }
-        //     // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
-        // }
+        for path in trace.get_open_paths() {
+            if path.is_relative() || path.starts_with(&repo_root) {
+                debug!(
+                    "found test {} accessed local file {path:?}",
+                    test_case.test_identifier
+                );
+
+                let target_path = crate::platform::rust::RustTestPlatform::normalize_path(
+                    path,
+                    &repo_root.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
+                    &repo_root,
+                    |warning| {
+                        warn!("syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}");
+                    },
+                );
+                debug!("target_path = {target_path:?}");
+                if let Some(target_path) = target_path {
+                    // It might make sense to filter out files that aren't part of the repo... both here and in
+                    // parse_profiling_data?
+                    coverage_data.add_file_to_test(FileCoverage {
+                        file_name: target_path.clone(),
+                        test_identifier: test_case.test_identifier.clone(),
+                    });
+                }
+            }
+            // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
+        }
 
         // for sockaddr in trace.get_connect_sockets() {
         //     coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
@@ -715,6 +703,54 @@ impl GolangTestPlatform {
 
         Ok(changed_external_dependencies)
     }
+
+    fn guess_tests_from_test_file_changed(
+        file: &Path,
+        all_test_cases: &HashSet<GolangTestIdentifier>,
+        test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+    ) -> Result<()> {
+        // Go doesn't instrument test files (_test.go).  (eg.
+        // https://github.com/golang/go/blob/e0c76d95abfc1621259864adb3d101cf6f1f90fc/src/cmd/go/internal/work/exec.go#L644-L646)
+        // Ideally we should work upstream to see if we could add this as an optional capability, but that will likely
+        // be a long path forward.  Maybe fun, maybe not.
+        //
+        // In the mean time, we're going to do an inaccurate workaround -- read any modified _test.go files and try to
+        // identify the test cases in them, and mark them as tests that need to be rerun because the _test.go file was
+        // modified.  This is inaccurate for a few reasons:
+        // - We're not a Go parser, so we're going to do a poor job of parsing the code.
+        // - We're encoding Go's testing logic outside of Go, which means that it is subject to inaccuracies due to
+        //   change or misunderstanding.
+        // - Most importantly, it's possible for files in _test.go to refer to public functions defined in each other.
+        //   Coverage-based testing would identify these dependencies, but this hack doesn't -- if you change a_test.go
+        //   and it had a function used by b_test.go, we won't know that the tests in b_test.go need to be rerun.
+        // However, it's probably "pretty good for most cases"?
+
+        let test_file = fs::read_to_string(file)?;
+
+        for cap in test_func_definition.captures_iter(&test_file) {
+            let test_name = String::from(&cap["test_name"]);
+            let mut any_match = false;
+            for tc in all_test_cases {
+                if tc.test_name == test_name {
+                    any_match = true;
+                    debug!("guessed that modification to {file:?} would require running {tc}");
+                    test_cases
+                        .entry(tc.clone())
+                        .or_default()
+                        .push(TestReason::CoverageIdentifier(
+                            GolangCoverageIdentifier::InferredFromTestFileChange(PathBuf::from(
+                                file,
+                            )),
+                        ));
+                }
+            }
+            if !any_match {
+                warn!("inferred that a test named {test_name} exists in file {file:?} but couldn't find it in test cases");
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl TestPlatform for GolangTestPlatform {
@@ -738,8 +774,69 @@ impl TestPlatform for GolangTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     fn discover_tests() -> Result<GolangTestDiscovery> {
-        let all_test_cases = GolangTestPlatform::get_all_test_cases()?;
-        trace!("all_test_cases: {:?}", all_test_cases);
+        let module_info = Self::parse_module_info()?;
+
+        // FIXME: one potential problem is that we're creating a temp directory, building go programs to it, and then
+        // executing them.  The temp directory space is often configured as a space that can't have executables in it
+        // (noexec) which could make this fail.
+        //
+        // FIXME: this uses an Arc to keep the TempDir from being dropped; it could probably be done instead by making
+        // the GolangTestDiscovery outlive the ConcreteTestIdentifier and then hoisting the TempDir into the test
+        // discovery object.  That's academically interesting since it's a lifetime problem that would help me learn
+        // more about lifetime declarations, but, an Arc is just fine too.
+        let tmp_dir = Arc::new(TempDir::new("testtrim")?);
+
+        // First we build all test binaries:
+        let mut cmd = Self::get_build_test_command(&module_info, &tmp_dir);
+        debug!("running: {cmd:?}");
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: String::from("go test -c"),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+        trace!("test build success");
+
+        // Now we need to iterate through each of the binaries in tmp_dir and run `... -test.list .` to get the tests
+        // that they contain:
+        let mut all_test_cases: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
+        for dirent in fs::read_dir(tmp_dir.path())? {
+            let dirent = dirent?;
+            let mut cmd = Command::new(dirent.path());
+            cmd.args(["-test.list", "."]);
+            debug!("running: {cmd:?}");
+            let output = cmd.output()?;
+            if !output.status.success() {
+                return Err(SubcommandErrors::SubcommandFailed {
+                    command: String::from("'test-binary' -test.list ."),
+                    status: output.status,
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                }
+                .into());
+            }
+
+            let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
+            for line in stdout.lines() {
+                debug!("Found test case: {line:?}");
+                all_test_cases.insert(GolangConcreteTestIdentifier {
+                    test_identifier: GolangTestIdentifier {
+                        binary_name: BinaryName(
+                            dirent
+                                .file_name()
+                                .into_string()
+                                .expect("must have unicode file names"),
+                        ),
+                        test_name: String::from(line),
+                    },
+                    // Hack: make tmp_dir live as long as the test identifiers
+                    _binary_dir: tmp_dir.clone(),
+                    binary_path: dirent.path(),
+                });
+            }
+        }
 
         Ok(GolangTestDiscovery { all_test_cases })
     }
@@ -769,6 +866,19 @@ impl TestPlatform for GolangTestPlatform {
             )?);
         }
 
+        for file in eval_target_changed_files {
+            if file
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with("_test.go"))
+            {
+                Self::guess_tests_from_test_file_changed(
+                    file,
+                    eval_target_test_cases,
+                    &mut test_cases,
+                )?;
+            }
+        }
+
         Ok(PlatformSpecificRelevantTestCaseData {
             additional_test_cases: test_cases,
             external_dependencies_changed,
@@ -796,15 +906,11 @@ impl TestPlatform for GolangTestPlatform {
         let mut vec_test_cases = vec![];
         let mut package_baseline = HashMap::new();
         for test_case in test_cases {
-            if !package_baseline.contains_key(&test_case.test_identifier.module_name) {
+            if !package_baseline.contains_key(&test_case.test_identifier.binary_name) {
                 package_baseline.insert(
-                    test_case.test_identifier.module_name.clone(),
-                    Self::get_baseline_ext(
-                        &module_info,
-                        &test_case.test_identifier.module_name,
-                        tmp_dir.path(),
-                    )
-                    .map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
+                    test_case.test_identifier.binary_name.clone(),
+                    Self::get_baseline_ext(&test_case.binary_path, tmp_dir.path())
+                        .map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
                 );
             }
             vec_test_cases.push(test_case);
@@ -890,6 +996,8 @@ impl TestPlatform for GolangTestPlatform {
 mod tests {
     use crate::platform::golang::GolangTestPlatform;
 
+    use super::test_func_definition;
+
     #[test]
     fn test_parse_go_coverage_line() {
         let line = "encoding/base64/base64.go:34.44,37.40 3 1";
@@ -912,6 +1020,36 @@ mod tests {
         assert_eq!(coverage_data.end_marker, "114.4");
         // assert_eq!(coverage_data._num_statements, "1");
         assert_eq!(coverage_data.hit_count, "317");
+    }
+
+    #[test]
+    fn test_test_func_definition() {
+        let code = r#"
+        func TestAdd(t *testing.T) {
+	got := Add(2, 3)
+	if got != 5 {
+		t.Errorf("Add(2, 3) = %d; want 5", got)
+	}
+	got = Add(-1, 1)
+	if got != 0 {
+		t.Errorf("Add(-1, 1) = %d; want 0", got)
+	}
+}
+
+func TestAddDecimal(t *testing.T) {
+	got := AddDecimal(decimal.NewFromInt(2), decimal.NewFromInt(3))
+	if !got.Equal(decimal.NewFromInt(5)) {
+		t.Errorf("AddDecimal(2, 3) = %d; want 5", got)
+	}
+	got = AddDecimal(decimal.NewFromInt(-1), decimal.NewFromInt(1))
+	if !got.Equal(decimal.NewFromInt(0)) {
+		t.Errorf("AddDecimal(-1, 1) = %d; want 0", got)
+	}
+}
+"#;
+        let caps = test_func_definition.captures_iter(code).collect::<Vec<_>>();
+        assert_eq!(caps.len(), 2, "expected two Test... functions to be found");
+        assert_eq!(&caps[0]["test_name"], "TestAdd");
     }
 }
 
