@@ -35,7 +35,7 @@ use crate::errors::{
 use crate::platform::rust::RustTestPlatform;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::sys_trace_command;
-use crate::sys_trace::trace::Trace;
+use crate::sys_trace::trace::{Trace, UnifiedSocketAddr};
 
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
@@ -66,7 +66,7 @@ pub enum GolangCoverageIdentifier {
     // Possible future: go version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
     PackageDependency(ModuleDependency),
     InferredFromTestFileChange(PathBuf),
-    // NetworkDependency(UnifiedSocketAddr),
+    NetworkDependency(UnifiedSocketAddr),
 }
 
 impl CoverageIdentifier for GolangCoverageIdentifier {}
@@ -629,12 +629,12 @@ impl GolangTestPlatform {
             // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
         }
 
-        // for sockaddr in trace.get_connect_sockets() {
-        //     coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-        //         test_identifier: test_case.test_identifier.clone(),
-        //         coverage_identifier: RustCoverageIdentifier::NetworkDependency(sockaddr.clone()),
-        //     });
-        // }
+        for sockaddr in trace.get_connect_sockets() {
+            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                test_identifier: test_case.test_identifier.clone(),
+                coverage_identifier: GolangCoverageIdentifier::NetworkDependency(sockaddr.clone()),
+            });
+        }
 
         Ok(())
     }
@@ -1141,6 +1141,19 @@ impl TestPlatform for GolangTestPlatform {
             )?;
         }
 
+        for ci in coverage_data.coverage_identifier_to_test_map() {
+            if let (GolangCoverageIdentifier::NetworkDependency(_sockaddr), tests) = ci {
+                for test in tests {
+                    if eval_target_test_cases.contains(test) {
+                        test_cases
+                            .entry(test.clone())
+                            .or_default()
+                            .push(TestReason::CoverageIdentifier(ci.0.clone()));
+                    }
+                }
+            }
+        }
+
         Ok(PlatformSpecificRelevantTestCaseData {
             additional_test_cases: test_cases,
             external_dependencies_changed,
@@ -1149,7 +1162,7 @@ impl TestPlatform for GolangTestPlatform {
 
     fn run_tests<'a, I>(
         test_cases: I,
-        _jobs: u16,
+        jobs: u16,
     ) -> Result<CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>, RunTestsErrors>
     where
         I: IntoIterator<Item = &'a GolangConcreteTestIdentifier>,
@@ -1181,13 +1194,11 @@ impl TestPlatform for GolangTestPlatform {
 
         let mut coverage_data = CommitCoverageData::new();
 
-        let pool = Rc::new(ThreadPool::new(1));
-        // FIXME: implement concurrency and test:
-        /* if jobs == 0 {
+        let pool = Rc::new(ThreadPool::new(if jobs == 0 {
             num_cpus::get()
         } else {
             jobs.into()
-        })); */
+        }));
         let (tx, rx) = channel();
 
         let mut outstanding_tests = 0;

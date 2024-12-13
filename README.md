@@ -122,7 +122,9 @@ Significant problems that are known to exist within the scope described above, a
     - testtrim can be fooled [when a `pub const` value is modified](https://codeberg.org/testtrim/testtrim/issues/52), and target fewer tests than required.
 - **Go**:
     - Go does not instrument test files (`*_test.go`) when tests are executed, preventing testtrim from identifying what codepaths are executed in those files for each test.  As a substitute, testtrim makes the assumption that changing such a file requires rerunning all the tests defined in this file.  This is a reasonable approximation, but tests may reference each other or common utility functions defined in other `*_test.go` files and such dependencies cannot be identified at this time.
+    - testrim can be fooled when [`const` and package-level `var` values are changed](https://codeberg.org/testtrim/testtrim/issues/136).  The codepaths to initialize these values are always invoked regardless of whether they're accessed or not, and so testtrim can't tell the difference between initialization and access.
     - The current Go implementation requires building test binaries into temp storage space and then executing them, which will likely be incompatible with `noexec` tmp spaces.
+
 - testtrim isn't published as a released tool and must be checked out and built from source.
 
 ## Known Unknown Issues
