@@ -44,7 +44,7 @@ use super::{
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct GolangTestIdentifier {
-    pub binary_name: BinaryName,
+    pub module_path: ModulePath,
     pub test_name: String,
 }
 
@@ -57,7 +57,7 @@ impl TestIdentifierCore for GolangTestIdentifier {
 
 impl fmt::Display for GolangTestIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} / {}", self.binary_name.0, self.test_name)
+        write!(f, "{} / {}", self.module_path.0, self.test_name)
     }
 }
 
@@ -73,7 +73,7 @@ impl CoverageIdentifier for GolangCoverageIdentifier {}
 
 #[derive(Debug, Clone)]
 pub struct GolangConcreteTestIdentifier {
-    pub test_identifier: GolangTestIdentifier,
+    test_identifier: GolangTestIdentifier,
     _binary_dir: Arc<TempDir>,
     binary_path: PathBuf,
 }
@@ -295,7 +295,11 @@ impl GolangTestPlatform {
         }
     }
 
-    fn get_build_test_command(module_info: &ModuleInfo, tmp_dir: &TempDir) -> Command {
+    fn get_build_test_command(
+        module_info: &ModuleInfo,
+        tmp_dir: &TempDir,
+        module: &ModulePath,
+    ) -> Command {
         // form the coverpkg arg out of all the dependencies
         let mut coverpkg = String::with_capacity(1024);
         for dep in &module_info.dependencies {
@@ -316,6 +320,7 @@ impl GolangTestPlatform {
             "count",
             "-coverpkg",
             &coverpkg,
+            &module.0,
         ]);
         cmd
     }
@@ -403,14 +408,14 @@ impl GolangTestPlatform {
         test_case: &GolangConcreteTestIdentifier,
         tmp_path: &Path,
         module_info: &ModuleInfo,
-        package_baseline: &HashMap<BinaryName, HashMap<GoCoverageStatementIdentity, i32>>,
+        package_baseline: &HashMap<ModulePath, HashMap<GoCoverageStatementIdentity, i32>>,
     ) -> Result<CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>, RunTestError>
     {
         let mut coverage_data = CommitCoverageData::new();
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
         let coverage_dir = tmp_path
-            .join(Path::new("coverage-output").join(&test_case.test_identifier.binary_name.0));
+            .join(Path::new("coverage-output").join(&test_case.test_identifier.module_path.0));
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
             .or_else(|e| {
@@ -455,11 +460,11 @@ impl GolangTestPlatform {
             }));
         }
 
-        let Some(package_baseline) = package_baseline.get(&test_case.test_identifier.binary_name)
+        let Some(package_baseline) = package_baseline.get(&test_case.test_identifier.module_path)
         else {
             return Err(RunTestError::Other(anyhow!(
-                "could not find coverage baseline for binary {:?}",
-                test_case.test_identifier.binary_name.0
+                "could not find coverage baseline for module {:?}",
+                test_case.test_identifier.module_path.0
             )));
         };
 
@@ -968,6 +973,82 @@ impl GolangTestPlatform {
 
         Ok(result)
     }
+
+    fn discover_tests_in_module(
+        module_info: &ModuleInfo,
+        module_path: &ModulePath,
+    ) -> Result<HashSet<GolangConcreteTestIdentifier>> {
+        // FIXME: one potential problem is that we're creating a temp directory, building go programs to it, and then
+        // executing them.  The temp directory space is often configured as a space that can't have executables in it
+        // (noexec) which could make this fail.
+        //
+        // FIXME: this uses an Arc to keep the TempDir from being dropped; it could probably be done instead by making
+        // the GolangTestDiscovery outlive the ConcreteTestIdentifier and then hoisting the TempDir into the test
+        // discovery object.  That's academically interesting since it's a lifetime problem that would help me learn
+        // more about lifetime declarations, but, an Arc is just fine too.
+        //
+        // FIXME: as a final problem, we're creating one of these temp dirs for every module.  I guess that's OK?  But
+        // it seems like maybe we could just create one and use subdirectories.
+        let tmp_dir = Arc::new(TempDir::new("testtrim")?);
+
+        // First we build all test binaries:
+        let mut cmd = Self::get_build_test_command(module_info, &tmp_dir, module_path);
+        debug!("running: {cmd:?}");
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: String::from("go test -c"),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+        trace!("test build success");
+
+        // FIXME: since the change to just build one module at a time, we probably don't need to iterate here -- could
+        // just use one binary.
+        //
+        // Now we need to iterate through each of the binaries in tmp_dir and run `... -test.list .` to get the tests
+        // that they contain:
+        let mut all_test_cases: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
+        for dirent in fs::read_dir(tmp_dir.path())? {
+            let dirent = dirent?;
+            let mut cmd = Command::new(dirent.path());
+            cmd.args(["-test.list", "."]);
+            debug!("running: {cmd:?}");
+            let output = cmd.output()?;
+            if !output.status.success() {
+                return Err(SubcommandErrors::SubcommandFailed {
+                    command: String::from("'test-binary' -test.list ."),
+                    status: output.status,
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                }
+                .into());
+            }
+
+            let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
+            for line in stdout.lines() {
+                debug!("Found test case: {line:?}");
+                all_test_cases.insert(GolangConcreteTestIdentifier {
+                    test_identifier: GolangTestIdentifier {
+                        // binary_name: BinaryName(
+                        //     dirent
+                        //         .file_name()
+                        //         .into_string()
+                        //         .expect("must have unicode file names"),
+                        // ),
+                        module_path: module_path.clone(),
+                        test_name: String::from(line),
+                    },
+                    // Hack: make tmp_dir live as long as the test identifiers
+                    _binary_dir: tmp_dir.clone(),
+                    binary_path: dirent.path(),
+                });
+            }
+        }
+
+        Ok(all_test_cases)
+    }
 }
 
 impl TestPlatform for GolangTestPlatform {
@@ -993,66 +1074,31 @@ impl TestPlatform for GolangTestPlatform {
     fn discover_tests() -> Result<GolangTestDiscovery> {
         let module_info = Self::parse_module_info()?;
 
-        // FIXME: one potential problem is that we're creating a temp directory, building go programs to it, and then
-        // executing them.  The temp directory space is often configured as a space that can't have executables in it
-        // (noexec) which could make this fail.
-        //
-        // FIXME: this uses an Arc to keep the TempDir from being dropped; it could probably be done instead by making
-        // the GolangTestDiscovery outlive the ConcreteTestIdentifier and then hoisting the TempDir into the test
-        // discovery object.  That's academically interesting since it's a lifetime problem that would help me learn
-        // more about lifetime declarations, but, an Arc is just fine too.
-        let tmp_dir = Arc::new(TempDir::new("testtrim")?);
-
-        // First we build all test binaries:
-        let mut cmd = Self::get_build_test_command(&module_info, &tmp_dir);
+        // Discover the modules to work with; this limits it to those with tests:
+        let mut cmd = Command::new("go");
+        cmd.args([
+            "list",
+            "-f",
+            "{{if .TestGoFiles}}{{.ImportPath}}{{end}}",
+            "./...",
+        ]);
         debug!("running: {cmd:?}");
         let output = cmd.output()?;
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
-                command: String::from("go test -c"),
+                command: String::from("go list -f {{if .TestGoFiles}}{{.ImportPath}}{{end}} ./..."),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }
             .into());
         }
-        trace!("test build success");
-
-        // Now we need to iterate through each of the binaries in tmp_dir and run `... -test.list .` to get the tests
-        // that they contain:
+        let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
         let mut all_test_cases: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
-        for dirent in fs::read_dir(tmp_dir.path())? {
-            let dirent = dirent?;
-            let mut cmd = Command::new(dirent.path());
-            cmd.args(["-test.list", "."]);
-            debug!("running: {cmd:?}");
-            let output = cmd.output()?;
-            if !output.status.success() {
-                return Err(SubcommandErrors::SubcommandFailed {
-                    command: String::from("'test-binary' -test.list ."),
-                    status: output.status,
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                }
-                .into());
-            }
-
-            let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
-            for line in stdout.lines() {
-                debug!("Found test case: {line:?}");
-                all_test_cases.insert(GolangConcreteTestIdentifier {
-                    test_identifier: GolangTestIdentifier {
-                        binary_name: BinaryName(
-                            dirent
-                                .file_name()
-                                .into_string()
-                                .expect("must have unicode file names"),
-                        ),
-                        test_name: String::from(line),
-                    },
-                    // Hack: make tmp_dir live as long as the test identifiers
-                    _binary_dir: tmp_dir.clone(),
-                    binary_path: dirent.path(),
-                });
-            }
+        // FIXME: we might be able to do this in parallel to reduce build times... or maybe there's some way we can make
+        // the go cmdline build multiple packages like this?
+        for line in stdout.lines() {
+            let module_path = ModulePath(String::from(line));
+            all_test_cases.extend(Self::discover_tests_in_module(&module_info, &module_path)?);
         }
 
         Ok(GolangTestDiscovery { all_test_cases })
@@ -1122,9 +1168,9 @@ impl TestPlatform for GolangTestPlatform {
         let mut vec_test_cases = vec![];
         let mut package_baseline = HashMap::new();
         for test_case in test_cases {
-            if !package_baseline.contains_key(&test_case.test_identifier.binary_name) {
+            if !package_baseline.contains_key(&test_case.test_identifier.module_path) {
                 package_baseline.insert(
-                    test_case.test_identifier.binary_name.clone(),
+                    test_case.test_identifier.module_path.clone(),
                     Self::get_baseline_ext(&test_case.binary_path, tmp_dir.path())
                         .map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
                 );

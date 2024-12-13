@@ -12,6 +12,7 @@ use testtrim::cmd::run_tests::run_tests;
 use testtrim::coverage::create_db;
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
 use testtrim::platform::golang::GolangTestPlatform;
+use testtrim::platform::ConcreteTestIdentifier as _;
 use testtrim::scm::git::GitScm;
 
 use crate::util::ChangeWorkingDirectory;
@@ -403,7 +404,7 @@ fn golang_linearcommits_filecoverage() -> Result<()> {
             assert_eq!(
                 all_test_cases
                     .keys()
-                    .filter(|tc| tc.test_identifier.test_name == *expected_test_name)
+                    .filter(|tc| tc.test_identifier().test_name == *expected_test_name)
                     .count(),
                 1
             );
@@ -426,7 +427,7 @@ fn golang_linearcommits_filecoverage() -> Result<()> {
             assert_eq!(
                 relevant_test_cases
                     .keys()
-                    .filter(|tc| tc.test_identifier.test_name == *expected_test_name)
+                    .filter(|tc| tc.test_identifier().test_name == *expected_test_name)
                     .count(),
                 1
             );
