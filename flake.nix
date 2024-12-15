@@ -34,31 +34,21 @@
               ];
             }))
 
-            # LLVM rust demangler
-            rustfilt
-
-            # allows access to llvm-profdata
-            # $ cargo profdata -- merge -sparse default.profraw -o default.profdata
-            # and llvm-cov...
-            # $ cargo cov -- show -Xdemangler=rustfilt target/debug/testtrim -instr-profile=default.profdata -show-line-counts-or-regions -show-instantiations
-            cargo-binutils
-
+            cargo-binutils # allows access to llvm-profdata
+            cargo-nextest
             diesel-cli
-            sqlite
-
+            git-cliff # needed for release.yaml workflow
+            jq # needed for release.yaml workflow
+            openssl.dev # Req'd for surf to use TLS
             reuse
-
-            strace
-
+            rustfilt # LLVM rust demangler
+            sqlite
             sqlx-cli
-
-            openssl.dev
+            strace
 
             # Can locally run the Forgejo action for quicker dev cycles:
             # act --container-daemon-socket unix:///run/podman/podman.sock -W ./.forgejo/workflows -P docker=node:20-bullseye
             act
-
-            cargo-nextest
 
             # FIXME: integration tests rely on having development tools available for each system that they operate
             # under -- ideally they would load such a thing from the target repo.  But this isn't a critical issue to

@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: release
+
+on:
+  # run only via workflow dispatch API
+  workflow_dispatch:
+  schedule:
+    - cron: "30 2 * * 3"
+
+# don't allow multiple simultaneous runs, that will be confusing
+concurrency: release
+
+jobs:
+  deploy:
+    name: testtrim release
+    runs-on: debian-latest
+    container:
+      options: --volume nix-forgejo-cache:/nix
+    permissions:
+      # Give the default GITHUB_TOKEN write permission to commit and push the
+      # added or changed files to the repository.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needs the entire history in order for git-cliff to work correctly.
+          fetch-depth: 0
+          # Use a deploy key for the checkout, so that when we `git push` later we conform to the `main` branch
+          # protection rule.
+          ssh-key: ${{ secrets.TESTTRIM_ACTIONS_SSH_KEY }}
+          # known_hosts for ssh to work with
+          ssh-known-hosts: |
+            # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
+            codeberg.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC8hZi7K1/2E2uBX8gwPRJAHvRAob+3Sn+y2hxiEhN0buv1igjYFTgFO2qQD8vLfU/HT/P/rqvEeTvaDfY1y/vcvQ8+YuUYyTwE2UaVU5aJv89y6PEZBYycaJCPdGIfZlLMmjilh/Sk8IWSEK6dQr+g686lu5cSWrFW60ixWpHpEVB26eRWin3lKYWSQGMwwKv4LwmW3ouqqs4Z4vsqRFqXJ/eCi3yhpT+nOjljXvZKiYTpYajqUC48IHAxTWugrKe1vXWOPxVXXMQEPsaIRc2hpK+v1LmfB7GnEGvF1UAKnEZbUuiD9PBEeD5a1MZQIzcoPWCrTxipEpuXQ5Tni4mN
+            # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
+            codeberg.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL2pDxWr18SoiDJCGZ5LmxPygTlPu+cCKSkpqkvCyQzl5xmIMeKNdfdBpfbCGDPoZQghePzFZkKJNR/v9Win3Sc=
+            # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
+            codeberg.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVIC02vnjFyL+I4RHfvIGNtOgJMe769VTF1VR4EB3ZB
+            # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
+            # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
+      - run: apt-get update && apt-get install -y sudo # install-nix-actions requires `sudo`
+      - uses: https://github.com/cachix/install-nix-action@v22
+      # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
+      # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
+      # understand. So we replace github.com in the access-token field of the nix.conf file.
+      - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
+
+      - run: |
+          set -eux -o pipefail
+          export NEW_VERSION=$(nix develop .# --command git cliff --bump --unreleased --context | nix develop .# --command jq -r .[0].version)
+          echo NEW_VERSION = $NEW_VERSION
+          nix develop .# --command git cliff --tag $NEW_VERSION -o ./CHANGELOG.md
+          echo "$NEW_VERSION" >> ./this-release-notes.md # the first line will appear as a "title" on the tag
+          echo "" >> ./this-release-notes.md
+          nix develop .# --command git cliff --tag $NEW_VERSION --unreleased >> ./this-release-notes.md
+
+          git config --global user.name "release-workflow"
+          git config --global user.email "release-workflow@testtrim.org"
+          git add ./CHANGELOG.md
+          git commit -m"chore(release): prepare for $NEW_VERSION"
+          git tag $NEW_VERSION -F ./this-release-notes.md
+          git push
+          git push --tag
+
+          curl -X 'POST' \
+            --fail-with-body \
+            'https://codeberg.org/api/v1/repos/testtrim/testtrim/releases' \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -d "{
+              \"tag_name\": \"$NEW_VERSION\",
+              \"target_commitish\": \"$NEW_VERSION\"
+            }"
