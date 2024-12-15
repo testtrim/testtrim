@@ -812,6 +812,11 @@ impl GolangTestPlatform {
         test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
         source_reason: &TestReason<GolangCoverageIdentifier>,
     ) -> Result<()> {
+        if !fs::exists(file)? {
+            // A file was considered "changed" but doesn't exist -- indicating a deleted file.
+            return Ok(());
+        }
+
         // Go doesn't instrument test files (_test.go).  (eg.
         // https://github.com/golang/go/blob/e0c76d95abfc1621259864adb3d101cf6f1f90fc/src/cmd/go/internal/work/exec.go#L644-L646)
         // Ideally we should work upstream to see if we could add this as an optional capability, but that will likely
@@ -827,7 +832,7 @@ impl GolangTestPlatform {
         //   Coverage-based testing would identify these dependencies, but this hack doesn't -- if you change a_test.go
         //   and it had a function used by b_test.go, we won't know that the tests in b_test.go need to be rerun.
         // However, it's probably "pretty good for most cases"?
-        let test_file = fs::read_to_string(file)?;
+        let test_file = fs::read_to_string(file).context("reading changed test file {file:?}")?;
 
         for cap in test_func_definition_regex.captures_iter(&test_file) {
             let test_name = String::from(&cap["test_name"]);
