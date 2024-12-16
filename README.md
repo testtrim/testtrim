@@ -96,6 +96,15 @@ testtrim supports a small number of test project types in different programming 
 | Embedded file tracking (ie. if a file embeds another file, changes to<br>either will trigger related tests) | ✅ | ✅ | ❌ |
 | Performance | 👍 | OK | Mega-👎 |
 
+# Coverage Database
+
+testtrim's coverage database has three implementations accessible through the `TESTTRIM_DATABASE_URL` environment variable:
+- SQLite database: `file://...` with a file path, or `:memory:` for a temporary in-memory database.
+- PostgreSQL database: `postgres://` with optional credentials, hostname, and a database; eg. `postgres://user:password@host/database`.
+- Remote API:
+    - The server is an instance of `testtrim` running with the `run-server` subcommand, which needs to have it's own `TESTTRIM_DATABASE_URL` configured to either a SQLite or PostgreSQL database URL.
+    - The client accesses the remote server via a `TESTTRIM_DATABASE_URL` set to `http://...` or `https://...` with the host and port of the testtrim database.
+
 # Known Issues
 
 ## Limited Scope
@@ -103,9 +112,8 @@ testtrim supports a small number of test project types in different programming 
 I'd love for testtrim to have a larger scope of applicability.
 
 Scope today:
-- Works for Rust applications
-    - Go is a work-in-progress
-    - .NET is partial but performs very poorly
+- Platforms: limited; see Feature Matrix
+- Most testing is completed with
 - Coverage database can be shared through a shared PostgreSQL database or remote web API
 
 Scope planned for the future:
@@ -126,6 +134,7 @@ Significant problems that are known to exist within the scope described above, a
     - The current Go implementation requires building test binaries into temp storage space and then executing them, which will likely be incompatible with `noexec` tmp spaces.
 
 - testtrim isn't published as a released tool and must be checked out and built from source.
+    - exception: testtrim has an OCI/Docker container published intended as a Remote API server, the container is `codeberg.org/testtrim/server:latest`
 
 ## Known Unknown Issues
 
