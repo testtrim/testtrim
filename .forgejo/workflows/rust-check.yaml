@@ -10,7 +10,7 @@ jobs:
   rust-checks:
     runs-on: docker
     container:
-      options: --volume nix-forgejo-cache:/nix
+      options: --volume nix-forgejo-cache-public:/nix
 
     services:
       pgsql:

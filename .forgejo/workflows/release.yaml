@@ -18,7 +18,7 @@ jobs:
     name: testtrim release
     runs-on: debian-latest
     container:
-      options: --volume nix-forgejo-cache:/nix
+      options: --volume nix-forgejo-cache-public:/nix
     permissions:
       # Give the default GITHUB_TOKEN write permission to commit and push the
       # added or changed files to the repository.
@@ -57,9 +57,16 @@ jobs:
           echo "" >> ./this-release-notes.md
           nix develop .# --command git cliff --tag $NEW_VERSION --unreleased >> ./this-release-notes.md
 
+          # Update version in Cargo.toml and Cargo.lock.  It seemed like it would be useful to use the cargo-edit tool
+          # which has a `cargo set-version ...` command, but that doesn't update the lock file
+          # (https://github.com/killercup/cargo-edit/issues/698) itself, leaving you in a position of needing to do a
+          # build or upgrade, which I don't want the release process to do.
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.toml
+          sed -i "/name = \"testtrim\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
+
           git config --global user.name "release-workflow"
           git config --global user.email "release-workflow@testtrim.org"
-          git add ./CHANGELOG.md
+          git add ./CHANGELOG.md ./Cargo.toml ./Cargo.lock
           git commit -m"chore(release): prepare for $NEW_VERSION"
           git tag $NEW_VERSION -F ./this-release-notes.md
           git push
