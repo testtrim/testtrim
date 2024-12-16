@@ -4,7 +4,12 @@
 
 name: Rust Checks
 
-on: [push]
+on:
+  push:
+    # When new releases are tagged, both the tag and the push to main will build if we just do `on: [push]` -- so
+    # instead we filter to just branch pushes which should disable the second build on the tag.
+    branches:
+      - '**'
 
 jobs:
   rust-checks:
