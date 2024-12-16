@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::net::ToSocketAddrs;
+
 use actix_web::{get, web, App, HttpRequest, HttpServer, Scope};
 use coverage_data::InstallCoverageDataHandlers as _;
 use log::debug;
@@ -28,11 +30,11 @@ impl InstallTestPlatform for Scope {
     }
 }
 
-pub async fn cli() {
-    run_server().await.expect("run_server failure");
+pub async fn cli(socket_addrs: impl ToSocketAddrs) {
+    run_server(socket_addrs).await.expect("run_server failure");
 }
 
-async fn run_server() -> std::io::Result<()> {
+async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new().service(index).service(
             web::scope("/api/v0")
@@ -50,8 +52,7 @@ async fn run_server() -> std::io::Result<()> {
                 ),
         )
     })
-    // FIXME: clearly config for this would be useful
-    .bind(("127.0.0.1", 8080))?
+    .bind(socket_addrs)?
     .run()
     .await
 }

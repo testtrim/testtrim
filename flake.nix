@@ -156,6 +156,9 @@
             Cmd = [
               "${appPackage}/usr/bin/testtrim"
               "run-server"
+              # Default bind is localhost; but for port forwards to work correctly containers are expected to listen on
+              # 0.0.0.0.
+              "--bind-socket=0.0.0.0:8080"
               "-vv"
             ];
             Env = [];
@@ -164,7 +167,6 @@
             };
           };
         };
-
       };
 
     });

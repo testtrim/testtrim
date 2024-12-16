@@ -4,7 +4,7 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
-use std::fmt::Debug;
+use std::{fmt::Debug, net::SocketAddr};
 
 use crate::{
     coverage::Tag,
@@ -63,7 +63,11 @@ enum Commands {
     },
 
     /// Run a testtrim web server for remote access to a coverage database
-    RunServer,
+    RunServer {
+        /// Socket to bind for server
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind_socket: SocketAddr,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -199,8 +203,8 @@ pub async fn run_cli() {
             simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs)
                 .await;
         }
-        Commands::RunServer => {
-            server::cli().await;
+        Commands::RunServer { bind_socket } => {
+            server::cli(bind_socket).await;
         }
     }
 }
