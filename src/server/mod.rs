@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use actix_web::{get, rt, web, App, HttpRequest, HttpServer, Scope};
+use actix_web::{get, web, App, HttpRequest, HttpServer, Scope};
 use coverage_data::InstallCoverageDataHandlers as _;
 use log::debug;
 
@@ -28,33 +28,32 @@ impl InstallTestPlatform for Scope {
     }
 }
 
-pub fn cli() {
-    run_server().expect("run_server failure");
+pub async fn cli() {
+    run_server().await.expect("run_server failure");
 }
 
-fn run_server() -> std::io::Result<()> {
-    rt::System::new().block_on(
-        HttpServer::new(|| {
-            App::new().service(index).service(
-                web::scope("/api/v0")
-                    .service(
-                        web::scope(RustTestPlatform::platform_identifier())
-                            .platform::<RustTestPlatform>(),
-                    )
-                    .service(
-                        web::scope(DotnetTestPlatform::platform_identifier())
-                            .platform::<DotnetTestPlatform>(),
-                    )
-                    .service(
-                        web::scope(GolangTestPlatform::platform_identifier())
-                            .platform::<GolangTestPlatform>(),
-                    ),
-            )
-        })
-        // FIXME: clearly config for this would be useful
-        .bind(("127.0.0.1", 8080))?
-        .run(),
-    )
+async fn run_server() -> std::io::Result<()> {
+    HttpServer::new(|| {
+        App::new().service(index).service(
+            web::scope("/api/v0")
+                .service(
+                    web::scope(RustTestPlatform::platform_identifier())
+                        .platform::<RustTestPlatform>(),
+                )
+                .service(
+                    web::scope(DotnetTestPlatform::platform_identifier())
+                        .platform::<DotnetTestPlatform>(),
+                )
+                .service(
+                    web::scope(GolangTestPlatform::platform_identifier())
+                        .platform::<GolangTestPlatform>(),
+                ),
+        )
+    })
+    // FIXME: clearly config for this would be useful
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }
 
 #[cfg(test)]

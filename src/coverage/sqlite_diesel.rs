@@ -462,7 +462,7 @@ impl<
     > CoverageDatabase<TI, CI> for DieselCoverageDatabase<TI, CI>
 {
     // impl CoverageDatabase<TI, CI> for DieselCoverageDatabase {
-    fn save_coverage_data(
+    async fn save_coverage_data(
         &mut self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
@@ -658,7 +658,7 @@ impl<
         Ok(())
     }
 
-    fn read_coverage_data(
+    async fn read_coverage_data(
         &mut self,
         commit_identifier: &str,
         tags: &[Tag],
@@ -844,7 +844,7 @@ impl<
         Ok(Some(coverage_data))
     }
 
-    fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
         use crate::schema::{coverage_map, scm_commit};
 
         let project_name = self.project_name.clone();
@@ -867,7 +867,7 @@ impl<
         Ok(coverage_map_id.is_some())
     }
 
-    fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, coverage_map,
             coverage_map_test_case_executed, project, scm_commit, test_case,
@@ -914,44 +914,44 @@ mod tests {
         platform::rust::{RustCoverageIdentifier, RustTestIdentifier},
     };
 
-    #[test]
-    fn has_any_coverage_data_false() {
+    #[tokio::test]
+    async fn has_any_coverage_data_false() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::has_any_coverage_data_false(db);
+        db_tests::has_any_coverage_data_false(db).await;
     }
 
-    #[test]
-    fn save_empty() {
+    #[tokio::test]
+    async fn save_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::save_empty(db);
+        db_tests::save_empty(db).await;
     }
 
-    #[test]
-    fn has_any_coverage_data_true() {
+    #[tokio::test]
+    async fn has_any_coverage_data_true() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::has_any_coverage_data_true(db);
+        db_tests::has_any_coverage_data_true(db).await;
     }
 
-    #[test]
-    fn load_empty() {
+    #[tokio::test]
+    async fn load_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::load_empty(db);
+        db_tests::load_empty(db).await;
     }
 
-    #[test]
-    fn load_updates_last_read_timestamp() {
+    #[tokio::test]
+    async fn load_updates_last_read_timestamp() {
         use crate::schema::*;
 
         let mut db =
@@ -961,7 +961,7 @@ mod tests {
             );
 
         let saved_data = CommitCoverageData::new();
-        let result = db.save_coverage_data(&saved_data, "c1", None, &[]);
+        let result = db.save_coverage_data(&saved_data, "c1", None, &[]).await;
         assert!(result.is_ok());
 
         {
@@ -982,7 +982,7 @@ mod tests {
             assert!(data.1.is_none());
         }
 
-        let result = db.read_coverage_data("c1", &[]);
+        let result = db.read_coverage_data("c1", &[]).await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
@@ -1006,62 +1006,62 @@ mod tests {
         }
     }
 
-    #[test]
-    fn save_and_load_no_ancestor() {
+    #[tokio::test]
+    async fn save_and_load_no_ancestor() {
         let db = DieselCoverageDatabase::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::save_and_load_no_ancestor(db);
+        db_tests::save_and_load_no_ancestor(db).await;
     }
 
     /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
-    #[test]
-    fn save_and_load_new_case_in_child() {
+    #[tokio::test]
+    async fn save_and_load_new_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::save_and_load_new_case_in_child(db);
+        db_tests::save_and_load_new_case_in_child(db).await;
     }
 
     /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
-    #[test]
-    fn save_and_load_replacement_case_in_child() {
+    #[tokio::test]
+    async fn save_and_load_replacement_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::save_and_load_replacement_case_in_child(db);
+        db_tests::save_and_load_replacement_case_in_child(db).await;
     }
 
     /// Test a child coverage set which indicates a test was removed and no longer present
-    #[test]
-    fn save_and_load_removed_case_in_child() {
+    #[tokio::test]
+    async fn save_and_load_removed_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::save_and_load_removed_case_in_child(db);
+        db_tests::save_and_load_removed_case_in_child(db).await;
     }
 
     /// Test that we can remove file references from an ancestor
-    #[test]
-    fn remove_file_references_in_child() {
+    #[tokio::test]
+    async fn remove_file_references_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::remove_file_references_in_child(db);
+        db_tests::remove_file_references_in_child(db).await;
     }
 
     /// Test that save and load use independent data based upon tags
-    #[test]
-    fn independent_tags() {
+    #[tokio::test]
+    async fn independent_tags() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
             String::from("testtrim-tests"),
         );
-        db_tests::independent_tags(db);
+        db_tests::independent_tags(db).await;
     }
 }

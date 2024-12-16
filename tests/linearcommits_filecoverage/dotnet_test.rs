@@ -9,7 +9,7 @@ use tempdir::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorSearchMode};
 use testtrim::cmd::run_tests::run_tests;
-use testtrim::coverage::create_db;
+use testtrim::coverage::{create_db, CoverageDatabase as _};
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
 use testtrim::platform::dotnet::DotnetTestPlatform;
 use testtrim::scm::git::GitScm;
@@ -17,8 +17,8 @@ use testtrim::scm::git::GitScm;
 use crate::util::ChangeWorkingDirectory;
 use crate::{git_checkout, git_clone, CWD_MUTEX};
 
-#[test]
-fn dotnet_linearcommits_filecoverage() -> Result<()> {
+#[tokio::test]
+async fn dotnet_linearcommits_filecoverage() -> Result<()> {
     simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())?;
 
     let _cwd_mutex = CWD_MUTEX.lock();
@@ -31,7 +31,8 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
         ChangeWorkingDirectory::new(&tmp_dir.path().join("dotnet-coverage-specimen")); // FIXME: hack assumes folder name
 
     create_db::<DotnetTestPlatform>(String::from("dotnet-coverage-specimen"))?
-        .clear_project_data()?;
+        .clear_project_data()
+        .await?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right dotnet tooling from the checked out repo.  Probably from here we need to start a
@@ -425,7 +426,7 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
         // },
     ];
 
-    fn execute_test(commit_test_data: &CommitTestData) -> Result<()> {
+    async fn execute_test(commit_test_data: &CommitTestData<'_>) -> Result<()> {
         let scm = GitScm {};
         let tags = &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic);
 
@@ -437,7 +438,8 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
             &scm,
             AncestorSearchMode::AllCommits,
             tags,
-        )?
+        )
+        .await?
         .target_test_cases;
         assert_eq!(
             all_test_cases.len(),
@@ -461,7 +463,8 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
             &scm,
             AncestorSearchMode::AllCommits,
             tags,
-        )?
+        )
+        .await?
         .target_test_cases;
         assert_eq!(
             relevant_test_cases.len(),
@@ -489,7 +492,9 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
             SourceMode::Automatic,
             0,
             tags,
-        ) {
+        )
+        .await
+        {
             Ok(_) if commit_test_data.expected_failing_test_cases.is_empty() => Ok(()),
             Ok(_) => Err(anyhow!(
                 "expected {} failed tests in {} commit, but had zero",
@@ -530,7 +535,7 @@ fn dotnet_linearcommits_filecoverage() -> Result<()> {
     }
 
     for commit_test_data in test_commits {
-        execute_test(&commit_test_data)?;
+        execute_test(&commit_test_data).await?;
     }
 
     Ok(())

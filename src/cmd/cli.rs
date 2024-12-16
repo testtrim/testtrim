@@ -150,7 +150,7 @@ pub enum SourceMode {
     WorkingTree,
 }
 
-pub fn run_cli() {
+pub async fn run_cli() {
     let cli = Cli::parse();
 
     TermLogger::init(
@@ -171,7 +171,8 @@ pub fn run_cli() {
                     &target_parameters.tags,
                     target_parameters.platform_tagging_mode,
                 ),
-            );
+            )
+            .await;
         }
         Commands::RunTests {
             target_parameters,
@@ -187,17 +188,19 @@ pub fn run_cli() {
                     &target_parameters.tags,
                     target_parameters.platform_tagging_mode,
                 ),
-            );
+            )
+            .await;
         }
         Commands::SimulateHistory {
             test_project_type,
             num_commits,
             execution_parameters,
         } => {
-            simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs);
+            simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs)
+                .await;
         }
         Commands::RunServer => {
-            server::cli();
+            server::cli().await;
         }
     }
 }

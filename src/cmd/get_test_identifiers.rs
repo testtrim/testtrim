@@ -34,7 +34,7 @@ use super::cli::{
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(
+pub async fn cli(
     test_project_type: TestProjectType,
     test_selection_mode: GetTestIdentifierMode,
     tags: &[Tag],
@@ -47,18 +47,18 @@ pub fn cli(
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(test_selection_mode, tags);
+            specific_cli::<_, _, _, _, RustTestPlatform>(test_selection_mode, tags).await;
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags);
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags).await;
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(test_selection_mode, tags);
+            specific_cli::<_, _, _, _, GolangTestPlatform>(test_selection_mode, tags).await;
         }
     }
 }
 
-fn specific_cli<TI, CI, TD, CTI, TP>(test_selection_mode: GetTestIdentifierMode, tags: &[Tag])
+async fn specific_cli<TI, CI, TD, CTI, TP>(test_selection_mode: GetTestIdentifierMode, tags: &[Tag])
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
@@ -69,13 +69,15 @@ where
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
-    tracing::subscriber::with_default(my_subscriber, || {
+    tracing::subscriber::with_default(my_subscriber, async || {
         let test_cases = match get_target_test_cases::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
             AncestorSearchMode::AllCommits,
             tags,
-        ) {
+        )
+        .await
+        {
             Ok(test_cases) => test_cases,
             Err(err) => {
                 error!("error occurred in get_target_test_cases: {:?}", err);
@@ -88,7 +90,8 @@ where
                 println!("\t{reason:?}");
             }
         }
-    });
+    })
+    .await;
 
     // FIXME: probably not the right choice to print this to stdout; ideally this cli command just prints the test
     // identifiers.
@@ -135,7 +138,7 @@ pub enum AncestorSearchMode {
     AllCommits,
 }
 
-pub fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
+pub async fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     mode: GetTestIdentifierMode,
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
@@ -174,7 +177,9 @@ where
             ancestor_search_mode,
             create_db::<TP>(TP::project_name()?)?,
             tags,
-        )? {
+        )
+        .await?
+    {
         info!(
             "relevant test cases will be computed base upon commit {:?}",
             scm.get_commit_identifier(&ancestor_commit)
@@ -239,11 +244,11 @@ where
 /// checking for any coverage data.  If a merge commit is found, then the search skips to the best common ancestor to
 /// both parents of the merge commit, and continues from there.
 #[instrument(skip_all, fields(perftrace = "read-coverage-data"))]
-fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
+async fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
-    mut coverage_db: Box<dyn CoverageDatabase<TI, CI>>,
+    mut coverage_db: impl CoverageDatabase<TI, CI>,
     tags: &[Tag],
 ) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
 where
@@ -252,7 +257,7 @@ where
     TI: TestIdentifier,
     CI: CoverageIdentifier,
 {
-    if !coverage_db.has_any_coverage_data()? {
+    if !coverage_db.has_any_coverage_data().await? {
         return Ok(None);
     }
 
@@ -260,7 +265,9 @@ where
     let commit_identifier = scm.get_commit_identifier(&commit);
     let mut coverage_data = match ancestor_search_mode {
         AncestorSearchMode::AllCommits => {
-            let coverage_data = coverage_db.read_coverage_data(&commit_identifier, tags)?;
+            let coverage_data = coverage_db
+                .read_coverage_data(&commit_identifier, tags)
+                .await?;
             trace!(
                 "commit (HEAD) id {} had coverage data? {:}",
                 commit_identifier,
@@ -294,7 +301,9 @@ where
             commit = parents.remove(0);
         }
         let commit_identifier = scm.get_commit_identifier(&commit);
-        coverage_data = coverage_db.read_coverage_data(&commit_identifier, tags)?;
+        coverage_data = coverage_db
+            .read_coverage_data(&commit_identifier, tags)
+            .await?;
         trace!(
             "commit id {} had coverage data? {:}",
             commit_identifier,
@@ -586,7 +595,7 @@ mod tests {
     }
 
     impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> for MockCoverageDatabase {
-        fn save_coverage_data(
+        async fn save_coverage_data(
             &mut self,
             _coverage_data: &CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
             _commit_identifier: &str,
@@ -597,7 +606,7 @@ mod tests {
             unreachable!()
         }
 
-        fn read_coverage_data(
+        async fn read_coverage_data(
             &mut self,
             commit_identifier: &str,
             _tags: &[Tag],
@@ -611,19 +620,19 @@ mod tests {
             }
         }
 
-        fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+        async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
             // has_any_coverage_data not currently used
             Ok(!self.commit_data.is_empty())
         }
 
-        fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+        async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
             // Not used in testing
             unreachable!()
         }
     }
 
-    #[test]
-    fn find_ancestor_no_coverage() {
+    #[tokio::test]
+    async fn find_ancestor_no_coverage() {
         let scm = MockScm {
             head_commit: String::from("abc"),
             commits: vec![MockScmCommit {
@@ -636,19 +645,20 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            Box::new(MockCoverageDatabase {
+            MockCoverageDatabase {
                 commit_data: HashMap::new(),
-            }),
+            },
             &[],
-        );
+        )
+        .await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn find_ancestor_direct_coverage() {
+    #[tokio::test]
+    async fn find_ancestor_direct_coverage() {
         let scm = MockScm {
             head_commit: String::from("c2"),
             commits: vec![
@@ -670,11 +680,12 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            Box::new(MockCoverageDatabase {
+            MockCoverageDatabase {
                 commit_data: HashMap::from([(String::from("c2"), previous_coverage_data)]),
-            }),
+            },
             &[],
-        );
+        )
+        .await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -684,8 +695,8 @@ mod tests {
         assert_eq!(result_coverage_data.all_tests().len(), 1);
     }
 
-    #[test]
-    fn find_ancestor_skip_branch_coverage() {
+    #[tokio::test]
+    async fn find_ancestor_skip_branch_coverage() {
         let scm = MockScm {
             head_commit: String::from("fake-head"),
             commits: vec![
@@ -730,14 +741,15 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            Box::new(MockCoverageDatabase {
+            MockCoverageDatabase {
                 commit_data: HashMap::from([
                     (String::from("branch-a"), branch_coverage_data),
                     (String::from("ancestor"), ancestor_coverage_data),
                 ]),
-            }),
+            },
             &[],
-        );
+        )
+        .await;
 
         assert!(result.is_ok());
         let result = result.unwrap();

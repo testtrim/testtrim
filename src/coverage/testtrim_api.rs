@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use async_std::task;
 use log::debug;
 use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
@@ -81,7 +80,7 @@ where
     TI: TestIdentifier + Serialize + DeserializeOwned,
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
-    fn save_coverage_data(
+    async fn save_coverage_data(
         &mut self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
@@ -90,178 +89,163 @@ where
     ) -> Result<(), CoverageDatabaseDetailedError> {
         // FIXME: use zstd request body compression
 
-        task::block_on(async {
-            let mut url = self.api_url.clone();
-            url.path_segments_mut()
-                .map_err(|()| {
-                    CoverageDatabaseError::ParsingError(String::from(
-                        "testtrim API URL is bad; cannot append segments",
-                    ))
-                })
-                .context("parse configured API URL")?
-                .push(&self.project_name)
-                .push(commit_identifier);
+        let mut url = self.api_url.clone();
+        url.path_segments_mut()
+            .map_err(|()| {
+                CoverageDatabaseError::ParsingError(String::from(
+                    "testtrim API URL is bad; cannot append segments",
+                ))
+            })
+            .context("parse configured API URL")?
+            .push(&self.project_name)
+            .push(commit_identifier);
 
-            debug!("HTTP request POST {url}");
-            let mut response = surf::post(url)
-                .body_json(&PostCoverageDataRequest {
-                    ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
-                    tags: tags.to_vec(),
-                    all_existing_test_set: coverage_data.existing_test_set().clone(),
-                    executed_test_set: coverage_data.executed_test_set().clone(),
-                    executed_test_to_files_map: coverage_data.executed_test_to_files_map().clone(),
-                    executed_test_to_functions_map: coverage_data
-                        .executed_test_to_functions_map()
-                        .clone(),
-                    executed_test_to_coverage_identifier_map: coverage_data
-                        .executed_test_to_coverage_identifier_map()
-                        .clone(),
-                    file_references_files_map: coverage_data.file_references_files_map().clone(),
-                })
-                .context("serializing body for coverage data POST")?
-                .await
-                .context("sending request for coverage data POST")?;
+        debug!("HTTP request POST {url}");
+        let mut response = surf::post(url)
+            .body_json(&PostCoverageDataRequest {
+                ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
+                tags: tags.to_vec(),
+                all_existing_test_set: coverage_data.existing_test_set().clone(),
+                executed_test_set: coverage_data.executed_test_set().clone(),
+                executed_test_to_files_map: coverage_data.executed_test_to_files_map().clone(),
+                executed_test_to_functions_map: coverage_data
+                    .executed_test_to_functions_map()
+                    .clone(),
+                executed_test_to_coverage_identifier_map: coverage_data
+                    .executed_test_to_coverage_identifier_map()
+                    .clone(),
+                file_references_files_map: coverage_data.file_references_files_map().clone(),
+            })
+            .context("serializing body for coverage data POST")?
+            .await
+            .context("sending request for coverage data POST")?;
 
-            debug!("HTTP response: {response:?}");
-            if response.status() != 200 {
-                return Err(CoverageDatabaseError::DatabaseError(format!(
-                    "remote server returned unexpected status {}",
-                    response.status()
-                )))
-                .context("reading response for coverage data POST");
-            }
+        debug!("HTTP response: {response:?}");
+        if response.status() != 200 {
+            return Err(CoverageDatabaseError::DatabaseError(format!(
+                "remote server returned unexpected status {}",
+                response.status()
+            )))
+            .context("reading response for coverage data POST");
+        }
 
-            let body = response
-                .body_json::<Option<String>>()
-                .await
-                .context("parsing response body for coverage data POST")?;
-
-            Ok::<_, CoverageDatabaseDetailedError>(body)
-        })?;
+        response
+            .body_json::<Option<String>>()
+            .await
+            .context("parsing response body for coverage data POST")?;
 
         Ok(())
     }
 
-    fn read_coverage_data(
+    async fn read_coverage_data(
         &mut self,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
         // FIXME: use zstd response body compression
 
-        let resp = task::block_on(async {
-            let mut url = self.api_url.clone();
-            url.path_segments_mut()
-                .map_err(|()| {
-                    CoverageDatabaseError::ParsingError(String::from(
-                        "testtrim API URL is bad; cannot append segments",
-                    ))
-                })
-                .context("parse configured API URL")?
-                .push(&self.project_name)
-                .push(commit_identifier);
-            {
-                let mut mutator = url.query_pairs_mut();
-                mutator.clear();
-                for tag in tags {
-                    mutator.append_pair(&tag.key, &tag.value);
-                }
+        let mut url = self.api_url.clone();
+        url.path_segments_mut()
+            .map_err(|()| {
+                CoverageDatabaseError::ParsingError(String::from(
+                    "testtrim API URL is bad; cannot append segments",
+                ))
+            })
+            .context("parse configured API URL")?
+            .push(&self.project_name)
+            .push(commit_identifier);
+        {
+            let mut mutator = url.query_pairs_mut();
+            mutator.clear();
+            for tag in tags {
+                mutator.append_pair(&tag.key, &tag.value);
             }
-            debug!("HTTP request GET {url}");
-            let mut response = surf::get(url)
-                .await
-                .context("sending request for coverage data GET")?;
+        }
+        debug!("HTTP request GET {url}");
+        let mut response = surf::get(url)
+            .await
+            .context("sending request for coverage data GET")?;
 
-            debug!("HTTP response: {response:?}");
-            if response.status() != 200 {
-                return Err(CoverageDatabaseError::DatabaseError(format!(
-                    "remote server returned unexpected status {}",
-                    response.status()
-                )))
-                .context("reading response for coverage data GET");
-            }
+        debug!("HTTP response: {response:?}");
+        if response.status() != 200 {
+            return Err(CoverageDatabaseError::DatabaseError(format!(
+                "remote server returned unexpected status {}",
+                response.status()
+            )))
+            .context("reading response for coverage data GET");
+        }
 
-            let body = response
-                .body_json::<Option<FullCoverageData<TI, CI>>>()
-                .await
-                .context("parsing response body for coverage data GET")?;
+        let body = response
+            .body_json::<Option<FullCoverageData<TI, CI>>>()
+            .await
+            .context("parsing response body for coverage data GET")?;
 
-            debug!("HTTP response deserialized: {body:?}");
-            Ok::<_, CoverageDatabaseDetailedError>(body)
-        })?;
-
-        Ok(resp)
+        debug!("HTTP response deserialized: {body:?}");
+        Ok(body)
     }
 
-    fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
-        let resp = task::block_on(async {
-            let mut url = self.api_url.clone();
-            url.path_segments_mut()
-                .map_err(|()| {
-                    CoverageDatabaseError::ParsingError(String::from(
-                        "testtrim API URL is bad; cannot append segments",
-                    ))
-                })
-                .context("parse configured API URL")?
-                .push(&self.project_name);
-            debug!("HTTP request GET {url}");
-            let mut response = surf::get(url)
-                .await
-                .context("sending request for coverage data GET")?;
+    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+        let mut url = self.api_url.clone();
+        url.path_segments_mut()
+            .map_err(|()| {
+                CoverageDatabaseError::ParsingError(String::from(
+                    "testtrim API URL is bad; cannot append segments",
+                ))
+            })
+            .context("parse configured API URL")?
+            .push(&self.project_name);
+        debug!("HTTP request GET {url}");
+        let mut response = surf::get(url)
+            .await
+            .context("sending request for coverage data GET")?;
 
-            debug!("HTTP response: {response:?}");
-            if response.status() != 200 {
-                return Err(CoverageDatabaseError::DatabaseError(format!(
-                    "remote server returned unexpected status {}",
-                    response.status()
-                )))
-                .context("reading response for coverage data GET");
-            }
+        debug!("HTTP response: {response:?}");
+        if response.status() != 200 {
+            return Err(CoverageDatabaseError::DatabaseError(format!(
+                "remote server returned unexpected status {}",
+                response.status()
+            )))
+            .context("reading response for coverage data GET");
+        }
 
-            let body = response
-                .body_json::<bool>()
-                .await
-                .context("parsing response body for coverage data GET")?;
+        let body = response
+            .body_json::<bool>()
+            .await
+            .context("parsing response body for coverage data GET")?;
 
-            debug!("HTTP response deserialized: {body:?}");
+        debug!("HTTP response deserialized: {body:?}");
 
-            Ok::<_, CoverageDatabaseDetailedError>(body)
-        })?;
-        Ok(resp)
+        Ok(body)
     }
 
-    fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
-        task::block_on(async {
-            let mut url = self.api_url.clone();
-            url.path_segments_mut()
-                .map_err(|()| {
-                    CoverageDatabaseError::ParsingError(String::from(
-                        "testtrim API URL is bad; cannot append segments",
-                    ))
-                })
-                .context("parse configured API URL")?
-                .push(&self.project_name);
-            debug!("HTTP request DELETE {url}");
-            let mut response = surf::delete(url)
-                .await
-                .context("sending request for coverage data DELETE")?;
+    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+        let mut url = self.api_url.clone();
+        url.path_segments_mut()
+            .map_err(|()| {
+                CoverageDatabaseError::ParsingError(String::from(
+                    "testtrim API URL is bad; cannot append segments",
+                ))
+            })
+            .context("parse configured API URL")?
+            .push(&self.project_name);
+        debug!("HTTP request DELETE {url}");
+        let mut response = surf::delete(url)
+            .await
+            .context("sending request for coverage data DELETE")?;
 
-            debug!("HTTP response: {response:?}");
-            if response.status() != 200 {
-                return Err(CoverageDatabaseError::DatabaseError(format!(
-                    "remote server returned unexpected status {}",
-                    response.status()
-                )))
-                .context("reading response for coverage data DELETE");
-            }
+        debug!("HTTP response: {response:?}");
+        if response.status() != 200 {
+            return Err(CoverageDatabaseError::DatabaseError(format!(
+                "remote server returned unexpected status {}",
+                response.status()
+            )))
+            .context("reading response for coverage data DELETE");
+        }
 
-            let body = response
-                .body_json::<Option<String>>()
-                .await
-                .context("parsing response body for coverage data DELETE")?;
-
-            Ok::<_, CoverageDatabaseDetailedError>(body)
-        })?;
+        response
+            .body_json::<Option<String>>()
+            .await
+            .context("parsing response body for coverage data DELETE")?;
 
         Ok(())
     }
@@ -322,95 +306,96 @@ mod tests {
         )
     }
 
-    fn cleanup() {
+    async fn cleanup() {
         let (_srv, mut db) = create_test_db();
         db.clear_project_data()
+            .await
             .expect("clear_project_data must succeed for test consistency");
     }
 
-    #[test]
-    fn has_any_coverage_data_false() {
+    #[tokio::test]
+    async fn has_any_coverage_data_false() {
         simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
             .expect("must config logging");
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::has_any_coverage_data_false(db);
+        db_tests::has_any_coverage_data_false(db).await;
     }
 
-    #[test]
-    fn save_empty() {
+    #[tokio::test]
+    async fn save_empty() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::save_empty(db);
+        db_tests::save_empty(db).await;
     }
 
-    #[test]
-    fn has_any_coverage_data_true() {
+    #[tokio::test]
+    async fn has_any_coverage_data_true() {
         simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
             .expect("must config logging");
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::has_any_coverage_data_true(db);
+        db_tests::has_any_coverage_data_true(db).await;
     }
 
-    #[test]
-    fn load_empty() {
+    #[tokio::test]
+    async fn load_empty() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::load_empty(db);
+        db_tests::load_empty(db).await;
     }
 
-    #[test]
-    fn save_and_load_no_ancestor() {
+    #[tokio::test]
+    async fn save_and_load_no_ancestor() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::save_and_load_no_ancestor(db);
+        db_tests::save_and_load_no_ancestor(db).await;
     }
 
-    #[test]
-    fn save_and_load_new_case_in_child() {
+    #[tokio::test]
+    async fn save_and_load_new_case_in_child() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::save_and_load_new_case_in_child(db);
+        db_tests::save_and_load_new_case_in_child(db).await;
     }
 
-    #[test]
-    fn save_and_load_replacement_case_in_child() {
+    #[tokio::test]
+    async fn save_and_load_replacement_case_in_child() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::save_and_load_replacement_case_in_child(db);
+        db_tests::save_and_load_replacement_case_in_child(db).await;
     }
 
-    #[test]
-    fn save_and_load_removed_case_in_child() {
+    #[tokio::test]
+    async fn save_and_load_removed_case_in_child() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::save_and_load_removed_case_in_child(db);
+        db_tests::save_and_load_removed_case_in_child(db).await;
     }
 
-    #[test]
-    fn remove_file_references_in_child() {
+    #[tokio::test]
+    async fn remove_file_references_in_child() {
         // simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
         //     .expect("must config logging");
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::remove_file_references_in_child(db);
+        db_tests::remove_file_references_in_child(db).await;
     }
 
-    #[test]
-    fn independent_tags() {
+    #[tokio::test]
+    async fn independent_tags() {
         let _test_mutex = TEST_MUTEX.lock();
-        cleanup();
+        cleanup().await;
         let (_srv, db) = create_test_db();
-        db_tests::independent_tags(db);
+        db_tests::independent_tags(db).await;
     }
 }

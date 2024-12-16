@@ -48,41 +48,41 @@ lazy_static! {
         });
 }
 
-pub fn has_any_coverage_data_false(
+pub async fn has_any_coverage_data_false(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
-    let result = db.has_any_coverage_data();
+    let result = db.has_any_coverage_data().await;
     assert!(result.is_ok(), "result = {result:?}");
     let has_coverage_data = result.unwrap();
     assert!(!has_coverage_data);
 }
 
-pub fn save_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
+pub async fn save_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
     let data1 = CommitCoverageData::new();
-    let result = db.save_coverage_data(&data1, "c1", None, &[]);
+    let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 }
 
-pub fn has_any_coverage_data_true(
+pub async fn has_any_coverage_data_true(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let data1 = CommitCoverageData::new();
-    let result = db.save_coverage_data(&data1, "c1", None, &[]);
+    let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
-    let result = db.has_any_coverage_data();
+    let result = db.has_any_coverage_data().await;
     assert!(result.is_ok(), "result = {result:?}");
     let has_coverage_data = result.unwrap();
     assert!(has_coverage_data);
 }
 
-pub fn load_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
-    let result = db.read_coverage_data("c1", &[]);
+pub async fn load_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
+    let result = db.read_coverage_data("c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none());
 }
 
-pub fn save_and_load_no_ancestor(
+pub async fn save_and_load_no_ancestor(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut saved_data = CommitCoverageData::new();
@@ -142,10 +142,10 @@ pub fn save_and_load_no_ancestor(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&saved_data, "c1", None, &[]);
+    let result = db.save_coverage_data(&saved_data, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c1", &[]);
+    let result = db.read_coverage_data("c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -285,7 +285,7 @@ pub fn save_and_load_no_ancestor(
 }
 
 /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
-pub fn save_and_load_new_case_in_child(
+pub async fn save_and_load_new_case_in_child(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
@@ -312,7 +312,7 @@ pub fn save_and_load_new_case_in_child(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]);
+    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 
     let mut child_data = CommitCoverageData::new();
@@ -332,10 +332,12 @@ pub fn save_and_load_new_case_in_child(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&child_data, "c2", Some("c1"), &[]);
+    let result = db
+        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]);
+    let result = db.read_coverage_data("c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -429,7 +431,7 @@ pub fn save_and_load_new_case_in_child(
 }
 
 /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
-pub fn save_and_load_replacement_case_in_child(
+pub async fn save_and_load_replacement_case_in_child(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
@@ -464,7 +466,7 @@ pub fn save_and_load_replacement_case_in_child(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]);
+    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 
     let mut child_data = CommitCoverageData::new();
@@ -483,10 +485,12 @@ pub fn save_and_load_replacement_case_in_child(
         target_file: PathBuf::from("extra_data/more-stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&child_data, "c2", Some("c1"), &[]);
+    let result = db
+        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]);
+    let result = db.read_coverage_data("c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -564,7 +568,7 @@ pub fn save_and_load_replacement_case_in_child(
 }
 
 /// Test a child coverage set which indicates a test was removed and no longer present
-pub fn save_and_load_removed_case_in_child(
+pub async fn save_and_load_removed_case_in_child(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
@@ -601,7 +605,7 @@ pub fn save_and_load_removed_case_in_child(
         target_file: PathBuf::from("extra_data/more-stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]);
+    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 
     // Also an odd case -- we'll give child_data no executed tests just to make sure that no "inner joins" turn
@@ -610,10 +614,12 @@ pub fn save_and_load_removed_case_in_child(
     let mut child_data = CommitCoverageData::new();
     child_data.add_existing_test(test2.clone());
 
-    let result = db.save_coverage_data(&child_data, "c2", Some("c1"), &[]);
+    let result = db
+        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]);
+    let result = db.read_coverage_data("c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -651,7 +657,7 @@ pub fn save_and_load_removed_case_in_child(
 }
 
 /// Test that we can remove file references from an ancestor
-pub fn remove_file_references_in_child(
+pub async fn remove_file_references_in_child(
     mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
@@ -670,7 +676,7 @@ pub fn remove_file_references_in_child(
         target_file: PathBuf::from("extra-data/abc-123.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]);
+    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 
     // Slightly weird here; the point of this test is to verify that the positive absence of data
@@ -680,10 +686,12 @@ pub fn remove_file_references_in_child(
     child_data.add_existing_test(test1.clone());
     child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
 
-    let result = db.save_coverage_data(&child_data, "c2", Some("c1"), &[]);
+    let result = db
+        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]);
+    let result = db.read_coverage_data("c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -710,7 +718,9 @@ pub fn remove_file_references_in_child(
 }
 
 /// Test that save and load use independent data based upon tags
-pub fn independent_tags(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
+pub async fn independent_tags(
+    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+) {
     let mut saved_data = CommitCoverageData::new();
     let windows = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
         package_name: String::from("windows-sys"),
@@ -735,60 +745,66 @@ pub fn independent_tags(mut db: impl CoverageDatabase<RustTestIdentifier, RustCo
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(
-        &saved_data,
-        "c1",
-        None,
-        &[
-            Tag {
-                key: String::from("platform"),
-                value: String::from("windows"),
-            },
-            Tag {
-                key: String::from("database"),
-                value: String::from("postgresql"),
-            },
-        ],
-    );
+    let result = db
+        .save_coverage_data(
+            &saved_data,
+            "c1",
+            None,
+            &[
+                Tag {
+                    key: String::from("platform"),
+                    value: String::from("windows"),
+                },
+                Tag {
+                    key: String::from("database"),
+                    value: String::from("postgresql"),
+                },
+            ],
+        )
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c1", &[]);
+    let result = db.read_coverage_data("c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none()); // should not load as we provided mismatching tags
 
-    let result = db.read_coverage_data(
-        "c1",
-        &[
-            Tag {
-                key: String::from("platform"),
-                value: String::from("linux"),
-            },
-            Tag {
-                key: String::from("database"),
-                value: String::from("postgresql"),
-            },
-        ],
-    );
+    let result = db
+        .read_coverage_data(
+            "c1",
+            &[
+                Tag {
+                    key: String::from("platform"),
+                    value: String::from("linux"),
+                },
+                Tag {
+                    key: String::from("database"),
+                    value: String::from("postgresql"),
+                },
+            ],
+        )
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none()); // should not load as we provided mismatching tags
 
     // the order of the tags is reversed, but expected to be loaded successfully -- the tag order is irrelevant (should
     // probably be a HashSet for clarity?)
-    let result = db.read_coverage_data(
-        "c1",
-        &[
-            Tag {
-                key: String::from("database"),
-                value: String::from("postgresql"),
-            },
-            Tag {
-                key: String::from("platform"),
-                value: String::from("windows"),
-            },
-        ],
-    );
+    let result = db
+        .read_coverage_data(
+            "c1",
+            &[
+                Tag {
+                    key: String::from("database"),
+                    value: String::from("postgresql"),
+                },
+                Tag {
+                    key: String::from("platform"),
+                    value: String::from("windows"),
+                },
+            ],
+        )
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());

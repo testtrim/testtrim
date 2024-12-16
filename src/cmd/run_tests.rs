@@ -12,7 +12,7 @@ use tracing::info_span;
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
-    coverage::{commit_coverage_data::CoverageIdentifier, create_db, Tag},
+    coverage::{commit_coverage_data::CoverageIdentifier, create_db, CoverageDatabase as _, Tag},
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
@@ -28,7 +28,7 @@ use super::cli::{
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(
+pub async fn cli(
     test_project_type: TestProjectType,
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,
@@ -48,7 +48,8 @@ pub fn cli(
                 source_mode,
                 jobs,
                 tags,
-            );
+            )
+            .await;
         }
         TestProjectType::Dotnet => {
             specific_cli::<_, _, _, _, DotnetTestPlatform>(
@@ -56,7 +57,8 @@ pub fn cli(
                 source_mode,
                 jobs,
                 tags,
-            );
+            )
+            .await;
         }
         TestProjectType::Golang => {
             specific_cli::<_, _, _, _, GolangTestPlatform>(
@@ -64,12 +66,13 @@ pub fn cli(
                 source_mode,
                 jobs,
                 tags,
-            );
+            )
+            .await;
         }
     }
 }
 
-fn specific_cli<TI, CI, TD, CTI, TP>(
+async fn specific_cli<TI, CI, TD, CTI, TP>(
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,
     jobs: u16,
@@ -84,14 +87,16 @@ fn specific_cli<TI, CI, TD, CTI, TP>(
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
-    tracing::subscriber::with_default(my_subscriber, || {
+    tracing::subscriber::with_default(my_subscriber, async || {
         match run_tests::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
             source_mode,
             jobs,
             tags,
-        ) {
+        )
+        .await
+        {
             Ok(out) => {
                 println!("successfully executed tests");
                 println!(
@@ -139,7 +144,8 @@ fn specific_cli<TI, CI, TD, CTI, TP>(
                 error!("error occurred in run_tests: {err:?}");
             }
         }
-    });
+    })
+    .await;
 
     // FIXME: probably not the right choice to print this to stdout; maybe log info?
     println!("Performance stats:");
@@ -159,7 +165,7 @@ pub struct RunTestsOutput<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTe
     test_identifier_type: PhantomData<TI>,
 }
 
-pub fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
+pub async fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     mode: GetTestIdentifierMode,
     scm: &MyScm,
     source_mode: SourceMode,
@@ -210,7 +216,8 @@ where
         scm,
         ancestor_search_mode,
         tags,
-    )?;
+    )
+    .await?;
 
     let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs)?;
     for tc in &test_cases.all_test_cases {
@@ -233,18 +240,21 @@ where
             .as_ref()
             .map(|c| scm.get_commit_identifier(c));
 
-        info_span!("save_coverage_data", perftrace = "write-coverage-data").in_scope(|| {
-            // .context() here is used to quietly unify the error types into anyhow::Error
-            create_db::<TP>(TP::project_name()?)
-                .context("create_db")?
-                .save_coverage_data(
-                    &coverage_data,
-                    &commit_identifier,
-                    ancestor_commit_identifier.as_deref(),
-                    tags,
-                )
-                .context("save_coverage_data")
-        })?;
+        info_span!("save_coverage_data", perftrace = "write-coverage-data")
+            .in_scope(async || {
+                // .context() here is used to quietly unify the error types into anyhow::Error
+                create_db::<TP>(TP::project_name()?)
+                    .context("create_db")?
+                    .save_coverage_data(
+                        &coverage_data,
+                        &commit_identifier,
+                        ancestor_commit_identifier.as_deref(),
+                        tags,
+                    )
+                    .await
+                    .context("save_coverage_data")
+            })
+            .await?;
     }
 
     Ok(RunTestsOutput {

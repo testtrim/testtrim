@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::{
     cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
-    coverage::{commit_coverage_data::CoverageIdentifier, create_db},
+    coverage::{commit_coverage_data::CoverageIdentifier, create_db, CoverageDatabase as _},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
@@ -32,7 +32,7 @@ use super::cli::{
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) {
+pub async fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
     } else {
@@ -41,18 +41,18 @@ pub fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) {
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs);
+            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs).await;
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs);
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs).await;
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs);
+            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs).await;
         }
     }
 }
 
-fn specific_cli<TI, CI, TD, CTI, TP>(num_commits: u16, jobs: u16)
+async fn specific_cli<TI, CI, TD, CTI, TP>(num_commits: u16, jobs: u16)
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
@@ -60,7 +60,7 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
-    match simulate_history::<_, _, _, _, _, _, TP>(&GitScm {}, num_commits, jobs) {
+    match simulate_history::<_, _, _, _, _, _, TP>(&GitScm {}, num_commits, jobs).await {
         Ok(out) => {
             let mut wtr = csv::Writer::from_writer(io::stdout());
             for rec in out.commits_simulated {
@@ -134,7 +134,7 @@ pub struct SimulateHistoryOutput<Commit: ScmCommit> {
     pub commits_simulated: Vec<SimulateCommitOutput<Commit>>,
 }
 
-fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
+async fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     num_commits: u16,
     jobs: u16,
@@ -149,7 +149,9 @@ where
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
-    create_db::<TP>(TP::project_name()?)?.clear_project_data()?;
+    create_db::<TP>(TP::project_name()?)?
+        .clear_project_data()
+        .await?;
 
     // Use git log -> get the target commits from earliest to latest.  When we hit a merge branch, we'll go up each
     // parent's path until we've found enough commits to meet the requested test count.  This might not reach a common
@@ -173,7 +175,7 @@ where
     let mut commits_simulated = Vec::<SimulateCommitOutput<Commit>>::with_capacity(commits.len());
     for commit in commits {
         info!("testing commit: {:?}", scm.get_commit_identifier(&commit));
-        commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs)?);
+        commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs).await?);
     }
 
     Ok(SimulateHistoryOutput { commits_simulated })
@@ -202,7 +204,7 @@ where
     Ok(result)
 }
 
-fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
+async fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     commit: Commit,
     jobs: u16,
@@ -235,7 +237,7 @@ where
     let start_instant = Instant::now();
 
     trace!("beginning run test subcommand");
-    let run_tests_result = tracing::subscriber::with_default(my_subscriber, || {
+    let run_tests_result = tracing::subscriber::with_default(my_subscriber, async || {
         run_tests::<_, _, _, _, _, _, TP>(
             GetTestIdentifierMode::Relevant,
             scm,
@@ -243,7 +245,9 @@ where
             jobs,
             &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic), // default tags only
         )
-    });
+        .await
+    })
+    .await;
 
     let total_time = Instant::now().duration_since(start_instant);
     let run_test_timing = perf_storage.interpret_run_test_timing();

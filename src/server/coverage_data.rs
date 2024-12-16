@@ -23,7 +23,7 @@ use crate::{
             CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
             HeuristicCoverage,
         },
-        create_db, Tag,
+        create_db, CoverageDatabase as _, Tag,
     },
     platform::{TestIdentifier, TestPlatform},
 };
@@ -79,9 +79,9 @@ async fn get_any_coverage_data<TP: TestPlatform>(
 
     let mut coverage_db = create_db::<TP>(project_name.clone())?;
 
-    // FIXME: has_any_coverage_data is not async, which will cause the web server to block; either make it async, or,
-    // use web::block
-    Ok(HttpResponse::Ok().json(serde_json::to_value(coverage_db.has_any_coverage_data()?)?))
+    Ok(HttpResponse::Ok().json(serde_json::to_value(
+        coverage_db.has_any_coverage_data().await?,
+    )?))
 }
 
 async fn get_coverage_data<TP: TestPlatform>(
@@ -105,9 +105,11 @@ async fn get_coverage_data<TP: TestPlatform>(
 
     let mut coverage_db = create_db::<TP>(project_name.clone())?;
 
-    // FIXME: read_coverage_data is not async, which will cause the web server to block; either make it async, or, use
-    // web::block
-    Ok(HttpResponse::Ok().json(coverage_db.read_coverage_data(&commit_identifier, &tags)?))
+    Ok(HttpResponse::Ok().json(
+        coverage_db
+            .read_coverage_data(&commit_identifier, &tags)
+            .await?,
+    ))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -205,14 +207,14 @@ async fn post_coverage_data<TP: TestPlatform>(
 
     let mut coverage_db = create_db::<TP>(project_name.clone())?;
 
-    // FIXME: save_coverage_data is not async, which will cause the web server to block; either make it async, or, use
-    // web::block
-    coverage_db.save_coverage_data(
-        &commit_coverage_data,
-        &commit_identifier,
-        req.ancestor_commit_identifier.as_deref(),
-        &req.tags,
-    )?;
+    coverage_db
+        .save_coverage_data(
+            &commit_coverage_data,
+            &commit_identifier,
+            req.ancestor_commit_identifier.as_deref(),
+            &req.tags,
+        )
+        .await?;
 
     Ok(HttpResponse::Ok().json(None::<String>))
 }
@@ -249,10 +251,8 @@ async fn delete_coverage_data<TP: TestPlatform>(
 
     let mut coverage_db = create_db::<TP>(project_name.clone())?;
 
-    // FIXME: delete_coverage_data is not async, which will cause the web server to block; either make it async, or, use
-    // web::block
     debug!("web: starting clear_project_data({})", project_name);
-    coverage_db.clear_project_data()?;
+    coverage_db.clear_project_data().await?;
     debug!("web: completed clear_project_data({})", project_name);
 
     Ok(HttpResponse::Ok().json(None::<String>))
@@ -328,12 +328,14 @@ mod tests {
             test_identifier: rust_test_identifier.clone(),
             coverage_identifier: rust_coverage_identifier.clone(),
         });
-        coverage_db.save_coverage_data(
-            &saved_data,
-            "test-123-correct-identifier",
-            None,
-            &Vec::new(),
-        )?;
+        coverage_db
+            .save_coverage_data(
+                &saved_data,
+                "test-123-correct-identifier",
+                None,
+                &Vec::new(),
+            )
+            .await?;
 
         let app = test::init_service(App::new().route(
             "/coverage-data/{project}/{commit_identifier}",
@@ -395,12 +397,14 @@ mod tests {
             test_identifier: dotnet_test_identifier.clone(),
             coverage_identifier: dotnet_coverage_identifier.clone(),
         });
-        coverage_db.save_coverage_data(
-            &saved_data,
-            "test-456-correct-identifier",
-            None,
-            &Vec::new(),
-        )?;
+        coverage_db
+            .save_coverage_data(
+                &saved_data,
+                "test-456-correct-identifier",
+                None,
+                &Vec::new(),
+            )
+            .await?;
 
         let app = test::init_service(App::new().route(
             "/coverage-data/{project}/{commit_identifier}",

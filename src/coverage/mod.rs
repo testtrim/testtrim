@@ -6,8 +6,10 @@ use std::{env, fmt};
 
 use anyhow::Result;
 use commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
+use enum_dispatch::enum_dispatch;
 use full_coverage_data::FullCoverageData;
 use postgres_sqlx::PostgresCoverageDatabase;
+use serde::{de::DeserializeOwned, Serialize};
 use sqlite_diesel::DieselCoverageDatabase;
 use testtrim_api::TesttrimApiCoverageDatabase;
 use thiserror::Error;
@@ -25,21 +27,23 @@ mod testtrim_api;
 
 pub use tag::Tag;
 
+#[enum_dispatch]
+#[allow(async_fn_in_trait)] // should be fine to the extent that this is only used internally to this project
 pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
-    fn save_coverage_data(
+    async fn save_coverage_data(
         &mut self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
     ) -> Result<(), CoverageDatabaseDetailedError>;
-    fn read_coverage_data(
+    async fn read_coverage_data(
         &mut self,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError>;
-    fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError>;
-    fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError>;
+    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError>;
+    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError>;
 }
 
 #[derive(Error, Debug)]
@@ -126,33 +130,35 @@ impl From<CoverageDatabaseError> for CoverageDatabaseDetailedError {
     }
 }
 
+#[enum_dispatch(CoverageDatabase<TI, CI>)]
+pub enum CoverageDatabaseDispatch<TI, CI>
+where
+    TI: TestIdentifier + Serialize + DeserializeOwned,
+    CI: CoverageIdentifier + Serialize + DeserializeOwned,
+{
+    Postgres(PostgresCoverageDatabase<TI, CI>),
+    Sqlite(DieselCoverageDatabase<TI, CI>),
+    TesttrimApi(TesttrimApiCoverageDatabase<TI, CI>),
+}
+
 pub fn create_db<TP: TestPlatform>(
     project_name: String,
-) -> Result<Box<dyn CoverageDatabase<TP::TI, TP::CI>>, CreateDatabaseError>
-// where
-//     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
-//     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
-{
+) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
     match env::var("TESTTRIM_DATABASE_URL") {
-        Ok(db_url) if db_url.starts_with("postgres") => Ok(Box::new(
-            PostgresCoverageDatabase::new(db_url, project_name),
-        )),
-        Ok(db_url) if db_url.starts_with("file://") => Ok(Box::new(
-            DieselCoverageDatabase::new_sqlite(db_url, project_name),
-        )),
-        Ok(db_url) if db_url.starts_with(":memory:") => Ok(Box::new(
-            DieselCoverageDatabase::new_sqlite(db_url, project_name),
-        )),
-        Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => {
-            Ok(Box::new(TesttrimApiCoverageDatabase::new(
-                &db_url,
-                project_name,
-                TP::platform_identifier(),
-            )?))
+        Ok(db_url) if db_url.starts_with("postgres") => {
+            Ok(PostgresCoverageDatabase::new(db_url, project_name).into())
         }
+        Ok(db_url) if db_url.starts_with("file://") => {
+            Ok(DieselCoverageDatabase::new_sqlite(db_url, project_name).into())
+        }
+        Ok(db_url) if db_url.starts_with(":memory:") => {
+            Ok(DieselCoverageDatabase::new_sqlite(db_url, project_name).into())
+        }
+        Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => Ok(
+            TesttrimApiCoverageDatabase::new(&db_url, project_name, TP::platform_identifier())?
+                .into(),
+        ),
         Ok(db_url) => Err(CreateDatabaseError::UnsupportedDatabaseUrl(db_url)),
-        Err(_) => Ok(Box::new(
-            DieselCoverageDatabase::new_sqlite_from_default_url(project_name)?,
-        )),
+        Err(_) => Ok(DieselCoverageDatabase::new_sqlite_from_default_url(project_name)?.into()),
     }
 }

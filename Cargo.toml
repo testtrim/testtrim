@@ -12,7 +12,6 @@ authors = ["Mathieu Fenniak <mathieu@fenniak.net>"]
 [dependencies]
 actix-web = "4.9.0"
 anyhow = "*"
-async-std = "*"
 cargo_toml = "*"
 cargo-lock = "*"
 clap = { version = "*", features = ["derive"] }
@@ -22,6 +21,7 @@ current_platform = "*"
 dashmap = "*"
 diesel = { version = "*", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "uuid", "time"] }
 diesel_migrations = "*"
+enum_dispatch = "0.3.13"
 glob = "0.3.1"
 gomod-rs = "0.1.1"
 lazy_static = "*"
@@ -35,12 +35,13 @@ serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 serde-map-to-array = { version = "1.1.1", features = ["std"] }
 simplelog = "*"
-sqlx = { version = "*", features = ["runtime-async-std", "postgres", "uuid", "json", "time", "migrate"] }
+sqlx = { version = "*", features = ["runtime-tokio", "postgres", "uuid", "json", "time", "migrate"] }
 surf = "2.3.2"
 tempdir = "*"
 thiserror = "*"
 threadpool = "*"
 time = "*"
+tokio = { version = "1.42.0", features = ["rt", "rt-multi-thread", "macros"] }
 tracing = "*"
 url = "2.5.4"
 uuid = { version = "*", features = ["v4"] }
