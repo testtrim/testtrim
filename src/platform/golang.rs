@@ -51,7 +51,7 @@ pub struct GolangTestIdentifier {
 impl TestIdentifier for GolangTestIdentifier {}
 impl TestIdentifierCore for GolangTestIdentifier {
     fn lightly_unique_name(&self) -> String {
-        todo!()
+        self.test_name.clone()
     }
 }
 
