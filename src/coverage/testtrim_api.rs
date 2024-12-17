@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use async_compression::tokio::bufread::ZstdEncoder;
 use log::debug;
 use serde::{de::DeserializeOwned, Serialize};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Instant};
+use tokio::io::AsyncReadExt;
 use url::Url;
 
 use crate::{
@@ -100,23 +102,38 @@ where
             .push(&self.project_name)
             .push(commit_identifier);
 
+        let post_request = PostCoverageDataRequest {
+            ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
+            tags: tags.to_vec(),
+            all_existing_test_set: coverage_data.existing_test_set().clone(),
+            executed_test_set: coverage_data.executed_test_set().clone(),
+            executed_test_to_files_map: coverage_data.executed_test_to_files_map().clone(),
+            executed_test_to_functions_map: coverage_data.executed_test_to_functions_map().clone(),
+            executed_test_to_coverage_identifier_map: coverage_data
+                .executed_test_to_coverage_identifier_map()
+                .clone(),
+            file_references_files_map: coverage_data.file_references_files_map().clone(),
+        };
+        let post_request = serde_json::to_string(&post_request)?;
+        let post_request = post_request.as_bytes();
+        debug!("POST request size (uncompressed): {}", post_request.len());
+
+        let start = Instant::now();
+        let mut zstd = ZstdEncoder::new(post_request);
+        let mut buf = Vec::with_capacity(post_request.len() / 10); // about 1/10 compression ratio expected
+        zstd.read_to_end(&mut buf).await.expect("zstd fail");
+        let duration = Instant::now().duration_since(start);
+        debug!(
+            "POST request size (compressed): {} (compressed in {} ms)",
+            buf.len(),
+            duration.as_millis()
+        );
+
         debug!("HTTP request POST {url}");
         let mut response = surf::post(url)
-            .body_json(&PostCoverageDataRequest {
-                ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
-                tags: tags.to_vec(),
-                all_existing_test_set: coverage_data.existing_test_set().clone(),
-                executed_test_set: coverage_data.executed_test_set().clone(),
-                executed_test_to_files_map: coverage_data.executed_test_to_files_map().clone(),
-                executed_test_to_functions_map: coverage_data
-                    .executed_test_to_functions_map()
-                    .clone(),
-                executed_test_to_coverage_identifier_map: coverage_data
-                    .executed_test_to_coverage_identifier_map()
-                    .clone(),
-                file_references_files_map: coverage_data.file_references_files_map().clone(),
-            })
-            .context("serializing body for coverage data POST")?
+            .body_bytes(&buf)
+            .header("Content-Type", "application/json")
+            .header("Content-Encoding", "zstd")
             .await
             .context("sending request for coverage data POST")?;
 
@@ -254,12 +271,21 @@ where
 #[cfg(test)]
 mod tests {
     use actix_test::TestServer;
-    use actix_web::{web, App};
+    use actix_web::{
+        body::MessageBody,
+        dev::{ServiceRequest, ServiceResponse},
+        middleware::{from_fn, Next},
+        web, App, Error, HttpResponse, Responder,
+    };
+    use anyhow::Result;
     use lazy_static::lazy_static;
-    use std::sync::Mutex;
+    use std::{collections::HashMap, sync::Mutex};
 
     use crate::{
-        coverage::{db_tests, CoverageDatabase},
+        coverage::{
+            commit_coverage_data::CommitCoverageData, db_tests, CoverageDatabase,
+            ResultWithContext as _,
+        },
         platform::{
             rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
             TestPlatform,
@@ -277,15 +303,54 @@ mod tests {
         static ref TEST_MUTEX: Mutex<i32> = Mutex::new(0);
     }
 
+    struct TestInterceptState {
+        last_req_headers: Mutex<Option<HashMap<String, String>>>,
+    }
+
+    async fn testing_intercept_middleware(
+        data: web::Data<TestInterceptState>,
+        req: ServiceRequest,
+        next: Next<impl MessageBody>,
+    ) -> Result<ServiceResponse<impl MessageBody>, Error> {
+        {
+            let mut header_map = HashMap::new();
+            for (key, value) in req.headers() {
+                header_map.insert(
+                    key.to_string(),
+                    String::from(value.to_str().expect("decoding HTTP header as string")),
+                );
+            }
+            let mut last_req_headers = data.last_req_headers.lock().unwrap();
+            *last_req_headers = Some(header_map);
+        }
+        next.call(req).await
+    }
+
+    async fn get_last_request_headers(data: web::Data<TestInterceptState>) -> impl Responder {
+        let lock = data.last_req_headers.lock().unwrap();
+        let value = lock.clone();
+        HttpResponse::Ok().json(value)
+    }
+
     fn create_test_server() -> TestServer {
-        actix_test::start(|| {
-            App::new().service(
-                web::scope(&format!(
-                    "/api/v0/{}",
-                    RustTestPlatform::platform_identifier()
-                ))
-                .platform::<RustTestPlatform>(),
-            )
+        let test_state = web::Data::new(TestInterceptState {
+            last_req_headers: Mutex::new(None),
+        });
+        actix_test::start(move || {
+            App::new()
+                .app_data(test_state.clone())
+                .service(
+                    web::scope(&format!(
+                        "/api/v0/{}",
+                        RustTestPlatform::platform_identifier()
+                    ))
+                    .wrap(from_fn(testing_intercept_middleware))
+                    .platform::<RustTestPlatform>(),
+                )
+                .route(
+                    "/last-request-headers",
+                    web::get().to(get_last_request_headers),
+                )
         })
     }
 
@@ -397,5 +462,38 @@ mod tests {
         cleanup().await;
         let (_srv, db) = create_test_db();
         db_tests::independent_tags(db).await;
+    }
+
+    #[tokio::test]
+    async fn http_post_body_compression() -> Result<()> {
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (srv, mut db) = create_test_db();
+
+        // Make a POST...
+        let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
+        let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
+        assert!(result.is_ok(), "result = {result:?}");
+
+        // Check what HTTP headers were sent:
+        let http_headers = surf::get(srv.url("/last-request-headers"))
+            .await
+            .context("GET /last-request-headers")?
+            .body_json::<Option<HashMap<String, String>>>()
+            .await
+            .context("parsing response body for GET /last-request-headers")?;
+        assert!(
+            http_headers.is_some(),
+            "must have saved/returned http headers"
+        );
+        let http_headers = http_headers.unwrap();
+        // We don't need to assert much here -- if the Content-Encoding header was sent and every other test passed, we
+        // can be pretty confident that compression & decompression was done correctly.
+        assert_eq!(
+            http_headers.get("content-encoding"),
+            Some(&String::from("zstd"))
+        );
+
+        Ok(())
     }
 }

@@ -4,7 +4,10 @@
 
 use std::net::ToSocketAddrs;
 
-use actix_web::{get, web, App, HttpRequest, HttpServer, Scope};
+use actix_web::{
+    dev::{ServiceFactory, ServiceRequest},
+    get, web, App, HttpRequest, HttpServer, Scope,
+};
 use coverage_data::InstallCoverageDataHandlers as _;
 use log::debug;
 
@@ -24,7 +27,10 @@ pub trait InstallTestPlatform {
     fn platform<TP: TestPlatform + 'static>(self) -> Self;
 }
 
-impl InstallTestPlatform for Scope {
+impl<T> InstallTestPlatform for Scope<T>
+where
+    T: ServiceFactory<ServiceRequest, Config = (), Error = actix_web::Error, InitError = ()>,
+{
     fn platform<TP: TestPlatform + 'static>(self) -> Self {
         self.service(web::scope("/coverage-data").coverage_data_handlers::<TP>())
     }

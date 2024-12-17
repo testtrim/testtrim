@@ -12,6 +12,7 @@ authors = ["Mathieu Fenniak <mathieu@fenniak.net>"]
 [dependencies]
 actix-web = "4.9.0"
 anyhow = "*"
+async-compression = { version = "0.4.18", features = ["tokio", "zstd"] }
 cargo_toml = "*"
 cargo-lock = "*"
 clap = { version = "*", features = ["derive"] }
