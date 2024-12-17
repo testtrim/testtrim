@@ -219,7 +219,7 @@ where
     )
     .await?;
 
-    let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs)?;
+    let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs).await?;
     for tc in &test_cases.all_test_cases {
         coverage_data.add_existing_test(tc.test_identifier().clone());
     }

@@ -11,9 +11,10 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command as SyncCommand, Output},
     str::FromStr,
 };
+use tokio::process::Command;
 
 use super::{
     trace::{Trace, UnifiedSocketAddr},
@@ -210,7 +211,7 @@ enum ParseLine {
 
 impl STraceSysTraceCommand {
     pub fn is_available() -> bool {
-        let output = Command::new("strace").arg("--help").output();
+        let output = SyncCommand::new("strace").arg("--help").output();
         match output {
             Ok(output) => output.status.success(),
             Err(_) => false,
@@ -513,7 +514,7 @@ impl STraceSysTraceCommand {
 }
 
 impl SysTraceCommand for STraceSysTraceCommand {
-    fn trace_command(&self, orig_cmd: Command, tmp: &Path) -> Result<(Output, Trace)> {
+    async fn trace_command(&self, orig_cmd: Command, tmp: &Path) -> Result<(Output, Trace)> {
         let mut new_cmd = Command::new("strace");
         new_cmd
             .arg("--follow-forks")
@@ -521,21 +522,21 @@ impl SysTraceCommand for STraceSysTraceCommand {
             .arg("--output")
             .arg(tmp);
 
-        new_cmd.arg(orig_cmd.get_program());
-        for arg in orig_cmd.get_args() {
+        new_cmd.arg(orig_cmd.as_std().get_program());
+        for arg in orig_cmd.as_std().get_args() {
             new_cmd.arg(arg);
         }
-        for (ref key, ref value) in orig_cmd.get_envs() {
+        for (ref key, ref value) in orig_cmd.as_std().get_envs() {
             match value {
                 Some(value) => new_cmd.env(key, value),
                 None => new_cmd.env_remove(key),
             };
         }
-        if let Some(cwd) = orig_cmd.get_current_dir() {
+        if let Some(cwd) = orig_cmd.as_std().get_current_dir() {
             new_cmd.current_dir(cwd);
         }
 
-        let output = new_cmd.output()?;
+        let output = new_cmd.output().await?;
         let mut trace = Trace::new();
 
         if output.status.success() {
@@ -555,7 +556,7 @@ impl SysTraceCommand for STraceSysTraceCommand {
         //         .join(tmp.file_name().unwrap()),
         // )?;
 
-        Ok((new_cmd.output()?, trace))
+        Ok((output, trace))
     }
 }
 

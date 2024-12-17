@@ -39,9 +39,8 @@ sqlx = { version = "*", features = ["runtime-tokio", "postgres", "uuid", "json",
 surf = "2.3.2"
 tempdir = "*"
 thiserror = "*"
-threadpool = "*"
 time = "*"
-tokio = { version = "1.42.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.42.0", features = ["rt", "rt-multi-thread", "macros", "process"] }
 tracing = "*"
 url = "2.5.4"
 uuid = { version = "*", features = ["v4"] }

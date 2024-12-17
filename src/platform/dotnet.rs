@@ -13,14 +13,12 @@ use std::env::current_dir;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::process::Command;
-use std::rc::Rc;
-use std::sync::mpsc::channel;
+use std::process::Command as SyncCommand;
 use std::sync::Arc;
 use std::{fmt, fs};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
-use threadpool::ThreadPool;
+use tokio::process::Command;
 use tracing::dispatcher::{self, get_default};
 use tracing::instrument;
 
@@ -31,6 +29,7 @@ use crate::errors::{
 };
 
 use super::dotnet_cobertura::Coverage;
+use super::util::spawn_limited_concurrency;
 use super::TestReason;
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
@@ -168,7 +167,7 @@ impl DotnetTestPlatform {
     fn get_all_test_cases() -> Result<HashSet<DotnetConcreteTestIdentifier>> {
         let mut result: HashSet<DotnetConcreteTestIdentifier> = HashSet::new();
 
-        let output = Command::new("dotnet")
+        let output = SyncCommand::new("dotnet")
             .args(["test", "--list-tests", "--", "NUnit.DisplayName=FullName"])
             .output()
             .expect("Failed to execute dotnet test --list-tests command");
@@ -200,7 +199,7 @@ impl DotnetTestPlatform {
         Ok(result)
     }
 
-    fn run_test(
+    async fn run_test(
         test_case: &DotnetConcreteTestIdentifier,
         _tmp_path: &Path,
         _binaries: &DashSet<PathBuf>,
@@ -240,6 +239,7 @@ impl DotnetTestPlatform {
                 // "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeAssembliesWithoutSources=None",
             ])
             .output()
+            .await
             .expect("Failed to execute dotnet test --list-tests command");
 
         if !output.status.success() {
@@ -656,7 +656,7 @@ impl TestPlatform for DotnetTestPlatform {
         })
     }
 
-    fn run_tests<'a, I>(
+    async fn run_tests<'a, I>(
         test_cases: I,
         _jobs: u16, // FIXME: parallel tests are causing errors
     ) -> Result<CommitCoverageData<DotnetTestIdentifier, DotnetCoverageIdentifier>, RunTestsErrors>
@@ -682,56 +682,48 @@ impl TestPlatform for DotnetTestPlatform {
         let mut coverage_data = CommitCoverageData::new();
         let binaries = Arc::new(DashSet::new());
 
-        let pool = Rc::new(ThreadPool::new(1));
-        /*if jobs == 0 {
-            num_cpus::get()
-        } else {
-            jobs.into()
-        }));
-        */
-        let (tx, rx) = channel();
-
-        let mut outstanding_tests = 0;
+        let mut futures = vec![];
         for test_case in test_cases {
             let tc = test_case.clone();
             let tmp_path = PathBuf::from(tmp_dir.path());
             let b = binaries.clone();
             // let dep_map = dep_map.clone(); // TODO: external dependency tracking
-            let tx = tx.clone();
-            let pool = pool.clone();
 
             // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
             // performance data from them.  Note that, as we're running these tests in parallel, the performance data
             // starts to deviate from wall-clock time at this point.
-            get_default(move |dispatcher| {
+            let future = get_default(move |dispatcher| {
                 let tc = tc.clone();
                 let tmp_path = tmp_path.clone();
                 let b = b.clone();
                 // let dep_map = dep_map.clone(); // TODO: external dependency tracking
-                let tx = tx.clone();
                 let dispatcher = dispatcher.clone();
-                pool.execute(move || {
-                    dispatcher::with_default(&dispatcher, || {
-                        tx.send(Self::run_test(&tc, &tmp_path, &b)).unwrap();
-                    });
-                });
+                async move {
+                    dispatcher::with_default(&dispatcher, async || {
+                        Self::run_test(&tc, &tmp_path, &b).await
+                    })
+                    .await
+                }
             });
-
-            outstanding_tests += 1;
+            futures.push(future);
         }
 
-        pool.join();
+        let concurrency = 1; /* if jobs == 0 {
+                                 num_cpus::get()
+                             } else {
+                                 jobs.into()
+                             }; */
+        let results = spawn_limited_concurrency(concurrency, futures).await?;
 
         let mut failed_test_results = vec![];
-        while outstanding_tests > 0 {
-            match rx.recv()? {
+        for result in results {
+            match result {
                 Ok(res) => coverage_data.merge_in(res),
                 Err(RunTestError::TestExecutionFailure(failed_test_result)) => {
                     failed_test_results.push(failed_test_result);
                 }
                 Err(e) => return Err(e.into()),
             }
-            outstanding_tests -= 1;
         }
 
         if failed_test_results.is_empty() {

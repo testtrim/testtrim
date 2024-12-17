@@ -4,6 +4,7 @@
 
 use std::{io, path::PathBuf};
 use thiserror::Error;
+use tokio::{sync::AcquireError, task::JoinError};
 
 use crate::{coverage::CoverageDatabaseError, platform::TestIdentifierCore};
 
@@ -73,6 +74,10 @@ pub enum RunTestsErrors {
     /// Any `RunTestError` other than a `TestExecutionFailure` will be passed-through via `UnexpectedTestError`.
     #[error(transparent)]
     UnexpectedTestError(#[from] RunTestError),
+
+    /// Errors that occur when running tests w/ concurrency.
+    #[error(transparent)]
+    SpawnError(#[from] SpawnError),
 }
 
 /// Error that occurred while running the "run-tests" command.
@@ -102,4 +107,12 @@ pub enum RustLlvmError {
 
     #[error("coverage point found in profiling data was not found in binary's coverage map")]
     CoverageMismatch,
+}
+
+#[derive(Error, Debug)]
+pub enum SpawnError {
+    #[error(transparent)]
+    JoinError(#[from] JoinError),
+    #[error(transparent)]
+    AcquireError(#[from] AcquireError),
 }

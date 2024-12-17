@@ -15,13 +15,11 @@ use std::fs::{read_to_string, File};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::rc::Rc;
-use std::sync::mpsc::channel;
+use std::process::Command as SyncCommand;
 use std::sync::Arc;
 use std::{fmt, fs, io};
 use tempdir::TempDir;
-use threadpool::ThreadPool;
+use tokio::process::Command;
 use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
@@ -32,11 +30,12 @@ use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
-use crate::platform::rust::RustTestPlatform;
+use crate::platform::util::normalize_path;
 use crate::scm::{Scm, ScmCommit};
-use crate::sys_trace::sys_trace_command;
 use crate::sys_trace::trace::{Trace, UnifiedSocketAddr};
+use crate::sys_trace::{sys_trace_command, SysTraceCommand as _};
 
+use super::util::spawn_limited_concurrency;
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
     TestIdentifierCore, TestPlatform, TestReason,
@@ -299,7 +298,7 @@ impl GolangTestPlatform {
         module_info: &ModuleInfo,
         tmp_dir: &TempDir,
         module: &ModulePath,
-    ) -> Command {
+    ) -> SyncCommand {
         // form the coverpkg arg out of all the dependencies
         let mut coverpkg = String::with_capacity(1024);
         for dep in &module_info.dependencies {
@@ -308,7 +307,7 @@ impl GolangTestPlatform {
         }
         coverpkg.push_str("./..."); // include this package and all local subpackages
 
-        let mut cmd = Command::new("go");
+        let mut cmd = SyncCommand::new("go");
         cmd.args([
             "test",
             "-c",
@@ -361,7 +360,7 @@ impl GolangTestPlatform {
     // This same problem *probably* exists if you don't have an external dependency too!  Const values during package
     // initialization would always show as being touched by every test.  A future investigation should be done to
     // identify the best behavior in this case.
-    fn get_baseline_ext(
+    async fn get_baseline_ext(
         test_binary_path: &Path,
         tmp_path: &Path,
     ) -> Result<HashMap<GoCoverageStatementIdentity, i32>> {
@@ -372,7 +371,7 @@ impl GolangTestPlatform {
             &profile_file,
         );
         debug!("running: {cmd:?}");
-        let output = cmd.output()?;
+        let output = cmd.output().await?;
         if !output.status.success() {
             return Err(anyhow!(
                 "failed to run go test for baseline; exit code: {:?}",
@@ -404,7 +403,7 @@ impl GolangTestPlatform {
         Ok(retval)
     }
 
-    fn run_test(
+    async fn run_test(
         test_case: &GolangConcreteTestIdentifier,
         tmp_path: &Path,
         module_info: &ModuleInfo,
@@ -439,15 +438,16 @@ impl GolangTestPlatform {
             test_case, profile_file
         );
         let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
-            .in_scope(|| {
-            let cmd = Self::get_run_test_command(
-                &test_case.binary_path,
-                // make sure we're matching the one and only test:
-                &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
-                &profile_file,
-            );
-            sys_trace_command.trace_command(cmd, &strace_file)
-        })?;
+            .in_scope(async || {
+                let cmd = Self::get_run_test_command(
+                    &test_case.binary_path,
+                    // make sure we're matching the one and only test:
+                    &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
+                    &profile_file,
+                );
+                sys_trace_command.trace_command(cmd, &strace_file).await
+            })
+            .await?;
 
         if !output.status.success() {
             return Err(RunTestError::TestExecutionFailure(FailedTestResult {
@@ -608,7 +608,7 @@ impl GolangTestPlatform {
                     test_case.test_identifier
                 );
 
-                let target_path = crate::platform::rust::RustTestPlatform::normalize_path(
+                let target_path = normalize_path(
                     path,
                     &repo_root.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
                     &repo_root,
@@ -1018,7 +1018,7 @@ impl GolangTestPlatform {
         let mut all_test_cases: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
         for dirent in fs::read_dir(tmp_dir.path())? {
             let dirent = dirent?;
-            let mut cmd = Command::new(dirent.path());
+            let mut cmd = SyncCommand::new(dirent.path());
             cmd.args(["-test.list", "."]);
             debug!("running: {cmd:?}");
             let output = cmd.output()?;
@@ -1080,7 +1080,7 @@ impl TestPlatform for GolangTestPlatform {
         let module_info = Self::parse_module_info()?;
 
         // Discover the modules to work with; this limits it to those with tests:
-        let mut cmd = Command::new("go");
+        let mut cmd = SyncCommand::new("go");
         cmd.args([
             "list",
             "-f",
@@ -1165,7 +1165,7 @@ impl TestPlatform for GolangTestPlatform {
         })
     }
 
-    fn run_tests<'a, I>(
+    async fn run_tests<'a, I>(
         test_cases: I,
         jobs: u16,
     ) -> Result<CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>, RunTestsErrors>
@@ -1190,6 +1190,7 @@ impl TestPlatform for GolangTestPlatform {
                 package_baseline.insert(
                     test_case.test_identifier.module_path.clone(),
                     Self::get_baseline_ext(&test_case.binary_path, tmp_dir.path())
+                        .await
                         .map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
                 );
             }
@@ -1197,62 +1198,55 @@ impl TestPlatform for GolangTestPlatform {
         }
         let package_baseline = Arc::new(package_baseline); // FIXME: can this be done without an Arc since it will be immutable?
 
-        let mut coverage_data = CommitCoverageData::new();
-
-        let pool = Rc::new(ThreadPool::new(if jobs == 0 {
-            num_cpus::get()
-        } else {
-            jobs.into()
-        }));
-        let (tx, rx) = channel();
-
-        let mut outstanding_tests = 0;
+        let mut futures = vec![];
         for test_case in vec_test_cases {
             let tc = test_case.clone();
             let tmp_path = PathBuf::from(tmp_dir.path());
-            let tx = tx.clone();
-            let pool = pool.clone();
             let module_info = module_info.clone();
             let package_baseline = package_baseline.clone();
 
             // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
             // performance data from them.  Note that, as we're running these tests in parallel, the performance data
             // starts to deviate from wall-clock time at this point.
-            get_default(move |dispatcher| {
+            let future = get_default(move |dispatcher| {
                 let tc = tc.clone();
                 let tmp_path = tmp_path.clone();
-                let tx = tx.clone();
                 let dispatcher = dispatcher.clone();
                 let module_info = module_info.clone();
                 let package_baseline = package_baseline.clone();
-                pool.execute(move || {
-                    dispatcher::with_default(&dispatcher, || {
-                        tx.send(GolangTestPlatform::run_test(
+                async move {
+                    dispatcher::with_default(&dispatcher, async || {
+                        GolangTestPlatform::run_test(
                             &tc,
                             &tmp_path,
                             &module_info,
                             &package_baseline,
-                        ))
-                        .unwrap();
-                    });
-                });
+                        )
+                        .await
+                    })
+                    .await
+                }
             });
-
-            outstanding_tests += 1;
+            futures.push(future);
         }
 
-        pool.join();
+        let concurrency = if jobs == 0 {
+            num_cpus::get()
+        } else {
+            jobs.into()
+        };
+        let results = spawn_limited_concurrency(concurrency, futures).await?;
 
         let mut failed_test_results = vec![];
-        while outstanding_tests > 0 {
-            match rx.recv()? {
+        let mut coverage_data = CommitCoverageData::new();
+        for result in results {
+            match result {
                 Ok(res) => coverage_data.merge_in(res),
                 Err(RunTestError::TestExecutionFailure(failed_test_result)) => {
                     failed_test_results.push(failed_test_result);
                 }
                 Err(e) => return Err(e.into()),
             }
-            outstanding_tests -= 1;
         }
 
         if failed_test_results.is_empty() {
@@ -1282,14 +1276,9 @@ impl TestPlatform for GolangTestPlatform {
                     debug!("found that {file:?} references {target_path:?}");
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
-                    let target_path = RustTestPlatform::normalize_path(
-                        &target_path,
-                        file,
-                        &repo_root,
-                        |warning| {
-                            warn!("file {file:?} had a //go:embed, but reference could not be followed: {warning}");
-                        },
-                    );
+                    let target_path = normalize_path(&target_path, file, &repo_root, |warning| {
+                        warn!("file {file:?} had a //go:embed, but reference could not be followed: {warning}");
+                    });
 
                     if let Some(target_path) = target_path {
                         coverage_data.add_file_reference(FileReference {

@@ -23,6 +23,7 @@ mod dotnet_cobertura;
 pub mod golang;
 pub mod rust;
 mod rust_llvm;
+mod util;
 
 /// `TestIdentifier` is a machine-independent way to reference a test in a project.
 ///
@@ -74,6 +75,7 @@ pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier, CI: Coverage
     pub external_dependencies_changed: Option<usize>,
 }
 
+#[allow(async_fn_in_trait)] // should be fine to the extent that this is only used internally to this project
 pub trait TestPlatform {
     type TI: TestIdentifier + Serialize + DeserializeOwned + 'static;
     type CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static;
@@ -87,7 +89,7 @@ pub trait TestPlatform {
 
     fn discover_tests() -> Result<Self::TD>;
 
-    fn run_tests<'a, I>(
+    async fn run_tests<'a, I>(
         test_cases: I,
         jobs: u16,
     ) -> Result<CommitCoverageData<Self::TI, Self::CI>, RunTestsErrors>

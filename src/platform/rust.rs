@@ -16,15 +16,13 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Component, PathBuf};
-use std::process::Command;
-use std::rc::Rc;
+use std::process::Command as SyncCommand;
 use std::str::FromStr;
-use std::sync::mpsc::channel;
 use std::sync::{Arc, RwLock};
 use std::{env, fmt, fs, io};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
-use threadpool::ThreadPool;
+use tokio::process::Command;
 use tracing::dispatcher::{self, get_default};
 use tracing::{info_span, instrument};
 
@@ -38,8 +36,10 @@ use crate::errors::{
 };
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::UnifiedSocketAddr;
+use crate::sys_trace::SysTraceCommand as _;
 use crate::sys_trace::{sys_trace_command, trace::Trace};
 
+use super::util::{normalize_path, spawn_limited_concurrency};
 use super::TestReason;
 use super::{
     rust_llvm::{CoverageLibrary, ProfilingData},
@@ -252,7 +252,7 @@ impl RustTestPlatform {
         let tmp_dir = TempDir::new("testtrim")?;
         let repo_root = env::current_dir()?;
 
-        let output = Command::new("cargo")
+        let output = SyncCommand::new("cargo")
             .args([
                 "test",
                 "--workspace",
@@ -333,7 +333,7 @@ impl RustTestPlatform {
         let mut result: HashSet<RustConcreteTestIdentifier> = HashSet::new();
 
         for binary in test_binaries {
-            let output = Command::new(&binary.executable_path)
+            let output = SyncCommand::new(&binary.executable_path)
                 .arg("--list")
                 .env(
                     "LLVM_PROFILE_FILE",
@@ -472,7 +472,7 @@ impl RustTestPlatform {
                     test_case.test_identifier
                 );
 
-                let target_path = Self::normalize_path(
+                let target_path = normalize_path(
                     path,
                     &current_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
                     &repo_root,
@@ -502,7 +502,7 @@ impl RustTestPlatform {
         Ok(())
     }
 
-    fn run_test(
+    async fn run_test(
         test_case: &RustConcreteTestIdentifier,
         tmp_path: &Path,
         binaries: &DashSet<PathBuf>,
@@ -557,15 +557,16 @@ impl RustTestPlatform {
             test_case, profile_file, test_wd
         );
         let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
-            .in_scope(|| {
-            let mut cmd = Command::new(&test_case.test_binary.executable_path);
-            cmd.arg("--exact")
-                .arg(&test_case.test_identifier.test_name)
-                .env("LLVM_PROFILE_FILE", &profile_file)
-                .env("RUSTFLAGS", "-C instrument-coverage")
-                .current_dir(test_wd);
-            sys_trace_command.trace_command(cmd, &strace_file)
-        })?;
+            .in_scope(async || {
+                let mut cmd = Command::new(&test_case.test_binary.executable_path);
+                cmd.arg("--exact")
+                    .arg(&test_case.test_identifier.test_name)
+                    .env("LLVM_PROFILE_FILE", &profile_file)
+                    .env("RUSTFLAGS", "-C instrument-coverage")
+                    .current_dir(test_wd);
+                sys_trace_command.trace_command(cmd, &strace_file).await
+            })
+            .await?;
 
         if !output.status.success() {
             return Err(RunTestError::TestExecutionFailure(FailedTestResult {
@@ -609,54 +610,6 @@ impl RustTestPlatform {
         }
 
         Ok(result)
-    }
-
-    /// Given a path which is referenced from `relative_to` (eg. "src/module/lib.rs"), normalize it to a relative
-    /// reference within the absolute path `repo_root` where the files exist.
-    ///
-    /// The path is canonicalized, and therefore the file must exist.
-    ///
-    /// For example, if path is "../blah.txt", `relative_to` is "src/module/lib.rs", then "src/blah.txt" would be
-    /// returned.  `repo_root` is used to ensure that the path reference stays within the repo.
-    ///
-    /// The expectation is that problems, if they occur, are not errors but might be warnings.  Therefore the parameter
-    /// `warn` represents a function that can be called to provide contextual warnings about the problem.
-    pub fn normalize_path<T: FnOnce(&str)>(
-        path: &Path,
-        relative_to: &Path,
-        repo_root: &Path,
-        warn: T,
-    ) -> Option<PathBuf> {
-        // Target path within the referencing file will be relative to the target file; so first we pretend we're in the
-        // referencing file's path and join in the target file name...
-        let target_path = if let Some(parent) = relative_to.parent() {
-            parent.join(path)
-        } else {
-            warn("couldn't get relative_to's parent");
-            return None;
-        };
-
-        // Now the file path may have relative elements in it (eg. ../../some/thing); we need a canonical form of the
-        // path in order to strip the repo root.  This will fail if the file doesn't exist.
-        let target_path = match target_path.canonicalize() {
-            Ok(canonical) => canonical,
-            Err(e) => {
-                warn(&format!("error occurred in canonicalize: {e:?}"));
-                return None;
-            }
-        };
-
-        // Now we strip the repo root so that we get to the repo-relative path to the included file, which is the form
-        // that we'll later look for this file when we do a git diff to see changed files.
-        let target_path = match target_path.strip_prefix(repo_root) {
-            Ok(stripped) => stripped,
-            Err(e) => {
-                warn(&format!("error occurred stripping repo root: {e:?}"));
-                return None;
-            }
-        };
-
-        Some(PathBuf::from(target_path))
     }
 }
 
@@ -750,7 +703,7 @@ impl TestPlatform for RustTestPlatform {
         })
     }
 
-    fn run_tests<'a, I>(
+    async fn run_tests<'a, I>(
         test_cases: I,
         jobs: u16,
     ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestsErrors>
@@ -764,55 +717,47 @@ impl TestPlatform for RustTestPlatform {
         let mut coverage_data = CommitCoverageData::new();
         let binaries = Arc::new(DashSet::new());
 
-        let pool = Rc::new(ThreadPool::new(if jobs == 0 {
-            num_cpus::get()
-        } else {
-            jobs.into()
-        }));
-        let (tx, rx) = channel();
-
-        let mut outstanding_tests = 0;
+        let mut futures = vec![];
         for test_case in test_cases {
-            let tc = test_case.clone();
             let tmp_path = PathBuf::from(tmp_dir.path());
             let b = binaries.clone();
             let cl = coverage_library.clone();
-            let tx = tx.clone();
-            let pool = pool.clone();
 
             // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
             // performance data from them.  Note that, as we're running these tests in parallel, the performance data
             // starts to deviate from wall-clock time at this point.
-            get_default(move |dispatcher| {
-                let tc = tc.clone();
+            let future = get_default(move |dispatcher| {
+                let tc = test_case.clone();
                 let tmp_path = tmp_path.clone();
                 let b = b.clone();
                 let cl = cl.clone();
-                let tx = tx.clone();
                 let dispatcher = dispatcher.clone();
-                pool.execute(move || {
-                    dispatcher::with_default(&dispatcher, || {
-                        tx.send(RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl))
-                            .unwrap();
-                    });
-                });
+                async move {
+                    dispatcher::with_default(&dispatcher, async || {
+                        RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl).await
+                    })
+                    .await
+                }
             });
-
-            outstanding_tests += 1;
+            futures.push(future);
         }
 
-        pool.join();
+        let concurrency = if jobs == 0 {
+            num_cpus::get()
+        } else {
+            jobs.into()
+        };
+        let results = spawn_limited_concurrency(concurrency, futures).await?;
 
         let mut failed_test_results = vec![];
-        while outstanding_tests > 0 {
-            match rx.recv()? {
+        for result in results {
+            match result {
                 Ok(res) => coverage_data.merge_in(res),
                 Err(RunTestError::TestExecutionFailure(failed_test_result)) => {
                     failed_test_results.push(failed_test_result);
                 }
                 Err(e) => return Err(e.into()),
             }
-            outstanding_tests -= 1;
         }
 
         if failed_test_results.is_empty() {
@@ -841,14 +786,9 @@ impl TestPlatform for RustTestPlatform {
                 for target_path in Self::find_compile_time_includes(file)? {
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
-                    let target_path = Self::normalize_path(
-                        &target_path,
-                        file,
-                        &repo_root,
-                        |warning| {
-                            warn!("file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}");
-                        },
-                    );
+                    let target_path = normalize_path(&target_path, file, &repo_root, |warning| {
+                        warn!("file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}");
+                    });
 
                     if let Some(target_path) = target_path {
                         coverage_data.add_file_reference(FileReference {
