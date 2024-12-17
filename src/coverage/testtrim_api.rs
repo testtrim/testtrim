@@ -180,6 +180,10 @@ where
         }
         debug!("HTTP request GET {url}");
         let mut response = surf::get(url)
+            // FIXME: can't use this because surf->isahc->libcurl will read the `Content-Encoding: zstd`` response and
+            // provide an error without giving us any chance to handle the content.  In order to support this we'll have
+            // to go to a different http client library.
+            // .header("Accept-Encoding", "zstd")
             .await
             .context("sending request for coverage data GET")?;
 
@@ -274,7 +278,7 @@ mod tests {
     use actix_web::{
         body::MessageBody,
         dev::{ServiceRequest, ServiceResponse},
-        middleware::{from_fn, Next},
+        middleware::{self, from_fn, Next},
         web, App, Error, HttpResponse, Responder,
     };
     use anyhow::Result;
@@ -305,6 +309,7 @@ mod tests {
 
     struct TestInterceptState {
         last_req_headers: Mutex<Option<HashMap<String, String>>>,
+        last_resp_headers: Mutex<Option<HashMap<String, String>>>,
     }
 
     async fn testing_intercept_middleware(
@@ -323,7 +328,19 @@ mod tests {
             let mut last_req_headers = data.last_req_headers.lock().unwrap();
             *last_req_headers = Some(header_map);
         }
-        next.call(req).await
+        let resp = next.call(req).await;
+        if let Ok(ref resp) = resp {
+            let mut header_map = HashMap::new();
+            for (key, value) in resp.headers() {
+                header_map.insert(
+                    key.to_string(),
+                    String::from(value.to_str().expect("decoding HTTP header as string")),
+                );
+            }
+            let mut last_resp_headers = data.last_resp_headers.lock().unwrap();
+            *last_resp_headers = Some(header_map);
+        }
+        resp
     }
 
     async fn get_last_request_headers(data: web::Data<TestInterceptState>) -> impl Responder {
@@ -332,9 +349,16 @@ mod tests {
         HttpResponse::Ok().json(value)
     }
 
+    async fn get_last_response_headers(data: web::Data<TestInterceptState>) -> impl Responder {
+        let lock = data.last_resp_headers.lock().unwrap();
+        let value = lock.clone();
+        HttpResponse::Ok().json(value)
+    }
+
     fn create_test_server() -> TestServer {
         let test_state = web::Data::new(TestInterceptState {
             last_req_headers: Mutex::new(None),
+            last_resp_headers: Mutex::new(None),
         });
         actix_test::start(move || {
             App::new()
@@ -344,12 +368,17 @@ mod tests {
                         "/api/v0/{}",
                         RustTestPlatform::platform_identifier()
                     ))
+                    .wrap(middleware::Compress::default())
                     .wrap(from_fn(testing_intercept_middleware))
                     .platform::<RustTestPlatform>(),
                 )
                 .route(
                     "/last-request-headers",
                     web::get().to(get_last_request_headers),
+                )
+                .route(
+                    "/last-response-headers",
+                    web::get().to(get_last_response_headers),
                 )
         })
     }
@@ -492,6 +521,65 @@ mod tests {
         assert_eq!(
             http_headers.get("content-encoding"),
             Some(&String::from("zstd"))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_get_body_compression() -> Result<()> {
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (srv, mut db) = create_test_db();
+
+        // Make a GET...
+        let result = db.read_coverage_data("c1", &[]).await;
+        assert!(result.is_ok(), "result = {result:?}");
+
+        // Check what HTTP headers were sent:
+        let request_headers = surf::get(srv.url("/last-request-headers"))
+            .await
+            .context("GET /last-request-headers")?
+            .body_json::<Option<HashMap<String, String>>>()
+            .await
+            .context("parsing response body for GET /last-request-headers")?;
+        assert!(
+            request_headers.is_some(),
+            "must have saved/returned http headers"
+        );
+        let request_headers = request_headers.unwrap();
+        println!("request_headers: {request_headers:?}");
+
+        let response_headers = surf::get(srv.url("/last-response-headers"))
+            .await
+            .context("GET /last-response-headers")?
+            .body_json::<Option<HashMap<String, String>>>()
+            .await
+            .context("parsing response body for GET /last-response-headers")?;
+        assert!(
+            response_headers.is_some(),
+            "must have saved/returned http headers"
+        );
+        let response_headers = response_headers.unwrap();
+        println!("response_headers: {response_headers:?}");
+
+        // We don't need to assert too much here -- just inspect the request & response headers to ensure that
+        // compression was requested and provided, and it seems safe to assume that any failure to actually perform the
+        // compression/decompression would cause other assertion failures.
+        //
+        // Ideally we'd use zstd based upon the testing we did in https://codeberg.org/testtrim/testtrim/issues/112, but
+        // current client (surf->isahc->libcurl) doesn't support zstd (even though curl does, for some reason?).  Well,
+        // this is OK anyway -- in the future if it changes, the key point of this test is to make sure that *some
+        // useful* compression is being requested, and when responded with, it works, *AND then if it changes* due to
+        // any library upgrades, it really should be cross-checked with the run-server impl to make sure it's supported
+        // but that's basically the same implementation we'll be using to test here.
+        assert_eq!(
+            request_headers.get("accept-encoding"),
+            Some(&String::from("deflate, gzip"))
+        );
+        assert_eq!(
+            response_headers.get("content-encoding"),
+            Some(&String::from("gzip"))
         );
 
         Ok(())
