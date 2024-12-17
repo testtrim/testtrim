@@ -10,7 +10,8 @@ use std::{
 use actix_web::{
     body::BoxBody,
     http::{header::ContentType, StatusCode},
-    web, HttpResponse, Responder, ResponseError, Scope,
+    web::{self, JsonConfig},
+    HttpResponse, Responder, ResponseError, Scope,
 };
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,13 @@ pub trait InstallCoverageDataHandlers {
 
 impl InstallCoverageDataHandlers for Scope {
     fn coverage_data_handlers<TP: TestPlatform + 'static>(self) -> Self {
-        self.route("/{project}", web::get().to(get_any_coverage_data::<TP>))
+        let size_64_mb = 1 << 26;
+        self
+            // Allow larger content than the default (2MB); a full coverage data upload from an Open Source project
+            // (ripgrep) for a "first commit" is about 9MB, so 64MB still gives us some breathing room for larger
+            // projects but doesn't go crazy.  Not sure if this is measured before, or after,
+            .app_data(JsonConfig::default().limit(size_64_mb))
+            .route("/{project}", web::get().to(get_any_coverage_data::<TP>))
             .route(
                 "/{project}/{commit_identifier}",
                 web::get().to(get_coverage_data::<TP>),
