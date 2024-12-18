@@ -162,3 +162,9 @@ pub fn create_db<TP: TestPlatform>(
         Err(_) => Ok(DieselCoverageDatabase::new_sqlite_from_default_url(project_name)?.into()),
     }
 }
+
+pub fn create_test_db<TP: TestPlatform>(
+    project_name: String,
+) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
+    Ok(DieselCoverageDatabase::new_sqlite(String::from(":memory:"), project_name).into())
+}

@@ -24,14 +24,12 @@ jobs:
           POSTGRES_USER: testtrim
           POSTGRES_PASSWORD: testtrim
 
-    env:
-      DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
-      TESTTRIM_DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
-
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - run: apt-get update && apt-get install -y sudo postgresql-client # install-nix-actions requires `sudo`...
       - name: verify pgsql service is available
+        env:
+          DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
         run: timeout 30 bash -c 'while ! psql $DATABASE_URL -c "SELECT 1"; do sleep 1; done'
       - uses: https://github.com/cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
@@ -39,9 +37,11 @@ jobs:
       # understand. So we replace github.com in the access-token field of the nix.conf file.
       - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
       - name: .sqlx verify clean & correct
+        env:
+          DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
         run: |
           nix develop .# --command sqlx migrate run --source ./db/postgres/migrations
-          nix develop .# --command cargo sqlx prepare
+          nix develop .# --command cargo sqlx prepare -- --tests
           if [ -z "$(git status --porcelain)" ]; then
             echo "Clean working directory. 👍"
           else
@@ -52,9 +52,10 @@ jobs:
       - name: cargo build
         run: nix develop .# --command cargo build
       - name: run tests
-        run: nix develop .# --command cargo nextest run
         env:
+          TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
+        run: nix develop .# --command cargo nextest run
       - name: verify clippy warning-free
         run: nix develop .# --command cargo clippy -- -D warnings
       - name: verify clippy on tests warning-free

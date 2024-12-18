@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM project WHERE name = 'testtrim-tests'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "930f81a91d2adbc53e6967e3ad20e6920fc5b334b16500c43442cd8813a6a6b4"
+}

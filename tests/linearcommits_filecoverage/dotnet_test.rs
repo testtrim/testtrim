@@ -9,7 +9,7 @@ use tempdir::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorSearchMode};
 use testtrim::cmd::run_tests::run_tests;
-use testtrim::coverage::{create_db, CoverageDatabase as _};
+use testtrim::coverage::{create_test_db, CoverageDatabase as _};
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
 use testtrim::platform::dotnet::DotnetTestPlatform;
 use testtrim::scm::git::GitScm;
@@ -30,7 +30,7 @@ async fn dotnet_linearcommits_filecoverage() -> Result<()> {
     let _tmp_dir_cwd2 =
         ChangeWorkingDirectory::new(&tmp_dir.path().join("dotnet-coverage-specimen")); // FIXME: hack assumes folder name
 
-    create_db::<DotnetTestPlatform>(String::from("dotnet-coverage-specimen"))?
+    create_test_db::<DotnetTestPlatform>(String::from("dotnet-coverage-specimen"))?
         .clear_project_data()
         .await?;
 

@@ -1021,10 +1021,11 @@ mod tests {
         static ref DB_MUTEX: Mutex<i32> = Mutex::new(0);
     }
     fn create_test_db() -> PostgresCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> {
-        PostgresCoverageDatabase::new(
-            env::var("TESTTRIM_DATABASE_URL").unwrap(),
-            String::from("testtrim-tests"),
-        )
+        let test_db_url = env::var("TESTTRIM_UNITTEST_PGSQL_URL")
+            .or(env::var("TESTTRIM_DATABASE_URL"))
+            .expect("TESTTRIM_UNITTEST_PGSQL_URL or TESTTRIM_DATABASE_URL must be set for postgres_sqlx tests");
+
+        PostgresCoverageDatabase::new(test_db_url, String::from("testtrim-tests"))
     }
 
     async fn cleanup() {

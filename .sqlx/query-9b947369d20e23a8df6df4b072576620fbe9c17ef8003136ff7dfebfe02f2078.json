@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    coverage_map.id, coverage_map.last_read_timestamp\n                FROM\n                    coverage_map\n                    INNER JOIN scm_commit ON (scm_commit.id = coverage_map.scm_commit_id)\n                    INNER JOIN project ON (project.id = scm_commit.project_id)\n                WHERE\n                    project.name = $1 AND\n                    scm_commit.scm_identifier = $2\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_read_timestamp",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "9b947369d20e23a8df6df4b072576620fbe9c17ef8003136ff7dfebfe02f2078"
+}

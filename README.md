@@ -201,16 +201,21 @@ testtrim uses [direnv](https://direnv.net/) so that you can just drop into the t
 
 The development dependencies are provided by a [Nix shell](https://nix.dev/), which requires the Nix package manager to be installed.  The Nix shell then provides the correct version of all development tools, eg. rustc, cargo, etc.
 
-testtrim's PostgreSQL tests require a functional PostgreSQL database to be available.  This database must be available at the URL defined by the `TESTTRIM_DATABASE_URL` environment variable.  You can define this manually, or you can define it in a `.localenvrc` file which would not be checked in, and would be local to your workspace.  For example:
+## PostgreSQL Backend
+
+testtrim's PostgreSQL tests require a functional PostgreSQL database to be available.  This database must be available at the URL defined by the `TESTTRIM_UNITTEST_PGSQL_URL` env variable (w/ fallback to `TESTTRIM_DATABASE_URL`).  You can define this manually, or you can define it in a `.localenvrc` file which would not be checked in, and would be local to your workspace.  For example:
 
 ```bash
 $ cat .localenvrc
-export DATABASE_URL="postgres://user:password@localhost/database"
 export TESTTRIM_DATABASE_URL="postgres://user:password@localhost/database"
 ```
 
-The database must also have a schema, which can be provided by running:
+Two operations also require a `DATABASE_URL` PostgreSQL parameter; running sqlx migrations to prepare a PostgreSQL database, and freezing any sqlx queries defined in `postgres_sqlx.rs`.
 
 ```bash
+# Prepare database for future execution or query modifications:
 DATABASE_URL=$TESTTRIM_DATABASE_URL sqlx migrate run --source ./db/postgres/migrations
+
+# Freeze queries:
+DATABASE_URL=$TESTTRIM_DATABASE_URL cargo sqlx prepare
 ```

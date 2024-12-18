@@ -8,7 +8,7 @@ use actix_web::{
     dev::{ServiceFactory, ServiceRequest},
     get, middleware, web, App, HttpRequest, HttpServer, Scope,
 };
-use coverage_data::InstallCoverageDataHandlers as _;
+use coverage_data::{CoverageDatabaseFactoryHolder, InstallCoverageDataHandlers as _};
 use log::debug;
 
 use crate::platform::{
@@ -25,6 +25,11 @@ async fn index(req: HttpRequest) -> &'static str {
 
 pub trait InstallTestPlatform {
     fn platform<TP: TestPlatform + 'static>(self) -> Self;
+    #[allow(dead_code)] // used in tests only
+    fn platform_with_db_factory<TP: TestPlatform + 'static>(
+        self,
+        factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+    ) -> Self;
 }
 
 impl<T> InstallTestPlatform for Scope<T>
@@ -33,6 +38,14 @@ where
 {
     fn platform<TP: TestPlatform + 'static>(self) -> Self {
         self.service(web::scope("/coverage-data").coverage_data_handlers::<TP>())
+    }
+    fn platform_with_db_factory<TP: TestPlatform + 'static>(
+        self,
+        factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+    ) -> Self {
+        self.service(
+            web::scope("/coverage-data").coverage_data_handlers_with_db_factory::<TP>(factory),
+        )
     }
 }
 

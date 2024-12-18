@@ -283,7 +283,10 @@ mod tests {
     };
     use anyhow::Result;
     use lazy_static::lazy_static;
-    use std::{collections::HashMap, sync::Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use crate::{
         coverage::{
@@ -294,7 +297,7 @@ mod tests {
             rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
             TestPlatform,
         },
-        server::InstallTestPlatform as _,
+        server::{coverage_data::CoverageDatabaseFactoryHolder, InstallTestPlatform as _},
     };
 
     use super::TesttrimApiCoverageDatabase;
@@ -356,6 +359,13 @@ mod tests {
     }
 
     fn create_test_server() -> TestServer {
+        let coverage_db =
+            crate::coverage::create_test_db::<RustTestPlatform>(String::from("in-memory-project"))
+                .unwrap();
+        let factory = web::Data::new(CoverageDatabaseFactoryHolder::<RustTestPlatform>::Fixture(
+            Arc::new(tokio::sync::Mutex::new(coverage_db)),
+        ));
+
         let test_state = web::Data::new(TestInterceptState {
             last_req_headers: Mutex::new(None),
             last_resp_headers: Mutex::new(None),
@@ -370,7 +380,7 @@ mod tests {
                     ))
                     .wrap(middleware::Compress::default())
                     .wrap(from_fn(testing_intercept_middleware))
-                    .platform::<RustTestPlatform>(),
+                    .platform_with_db_factory::<RustTestPlatform>(factory.clone()),
                 )
                 .route(
                     "/last-request-headers",
