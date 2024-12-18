@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO coverage_map_test_case_executed\n                    (test_case_execution_id, coverage_map_id)\n                SELECT\n                    test_case_execution_id, $2\n                FROM\n                    coverage_map_test_case_executed\n                    INNER JOIN coverage_map ON (coverage_map_test_case_executed.coverage_map_id = coverage_map.id)\n                    INNER JOIN test_case_execution ON (coverage_map_test_case_executed.test_case_execution_id = test_case_execution.id)\n                WHERE\n                    -- Copy-forward everything from the ancestor commit...\n                    coverage_map.scm_commit_id = $1 AND\n\n                    -- Unless the same test_case_id is present on the new coverage map already.\n                    NOT EXISTS (\n                        SELECT 1 FROM\n                            coverage_map_test_case_executed inner_executed\n                            INNER JOIN test_case_execution inner_execution ON (inner_executed.test_case_execution_id = inner_execution.id)\n                        WHERE\n                            inner_executed.coverage_map_id = $2 AND\n                            inner_execution.test_case_id = test_case_execution.test_case_id\n                    ) AND\n\n                    -- And the test case must be a part of the new commit\n                    EXISTS (\n                        SELECT 1 FROM\n                            commit_test_case ctc\n                        WHERE\n                            ctc.scm_commit_id = $3\n                            AND ctc.test_case_id = test_case_execution.test_case_id\n                    )\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "677b8b5e97fc327f93ea7d6813373fe762c421791c0b33ebcb8f1e39100f6bcb"
+}

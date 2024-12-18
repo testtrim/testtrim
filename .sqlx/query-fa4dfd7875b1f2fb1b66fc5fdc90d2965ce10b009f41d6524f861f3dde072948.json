@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO commit_test_case_executed\n                (scm_commit_id, test_case_execution_id)\n            SELECT\n                $1, *\n            FROM\n                UNNEST($2::uuid[])\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa4dfd7875b1f2fb1b66fc5fdc90d2965ce10b009f41d6524f861f3dde072948"
+}

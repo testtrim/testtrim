@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO scm_commit\n                (id, project_id, ancestor_scm_commit_id, scm_identifier, tags)\n            VALUES\n                (uuid_generate_v4(), $1, $2, $3, $4)\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd444501214ed21d0a7ae99df116d6c0c2727545e4ba12725c2340bc58ae09f9"
+}

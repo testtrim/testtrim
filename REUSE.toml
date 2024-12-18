@@ -12,3 +12,12 @@ path = [
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
+
+# .sqlx files are generated from queries and contain them; they have the same GPL license as the source that contains
+# the queries.
+[[annotations]]
+path = [
+    ".sqlx/*",
+]
+SPDX-FileCopyrightText = "2024 Mathieu Fenniak <mathieu@fenniak.net>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

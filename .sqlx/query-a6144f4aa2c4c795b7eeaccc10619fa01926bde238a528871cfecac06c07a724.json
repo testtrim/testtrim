@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO commit_file_reference\n                    (id, scm_commit_id, referencing_filepath, target_filepath)\n                SELECT\n                    uuid_generate_v4(), $1, referencing_filepath, target_filepath\n                FROM\n                    commit_file_reference\n                WHERE\n                    -- Copy-forward everything from the ancestor commit...\n                    commit_file_reference.scm_commit_id = $2 AND\n\n                    -- Unless the same referencing_filepath is present on the new commit already.\n                    NOT EXISTS (\n                        SELECT 1 FROM\n                            commit_file_reference inner_reference\n                        WHERE\n                            inner_reference.scm_commit_id = $1 AND\n                            inner_reference.referencing_filepath = commit_file_reference.referencing_filepath\n                    ) AND\n\n                        -- Exclude files that are known to have no references in the new commit\n                        NOT (referencing_filepath = ANY ($3::text[]))\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a6144f4aa2c4c795b7eeaccc10619fa01926bde238a528871cfecac06c07a724"
+}

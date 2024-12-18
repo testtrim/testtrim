@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO test_case_function_covered\n                (test_case_execution_id, function_identifier)\n            SELECT\n                *\n            FROM\n                UNNEST($1::uuid[], $2::jsonb[])\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3e92df0229afa8d12de85d4e0b41b7845d2e5ef0ac0b1f3083e26635e587adfd"
+}

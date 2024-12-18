@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                test_case_execution.test_case_id, test_case_coverage_identifier_covered.coverage_identifier\n            FROM\n                coverage_map\n                INNER JOIN coverage_map_test_case_executed ON (coverage_map_test_case_executed.coverage_map_id = coverage_map.id)\n                INNER JOIN test_case_execution ON (test_case_execution.id = coverage_map_test_case_executed.test_case_execution_id)\n                INNER JOIN test_case_coverage_identifier_covered ON (test_case_coverage_identifier_covered.test_case_execution_id = test_case_execution.id)\n            WHERE\n                coverage_map.id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "test_case_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "coverage_identifier",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9c010a337da5d2f0867a181800a31399db1c373ee7eb4c74110513583eb9729b"
+}

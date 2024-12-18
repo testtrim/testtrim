@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                referencing_filepath, target_filepath\n            FROM\n                commit_file_reference\n                INNER JOIN scm_commit ON (commit_file_reference.scm_commit_id = scm_commit.id)\n            WHERE\n                scm_commit.project_id = $1 AND\n                scm_commit.scm_identifier = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "referencing_filepath",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "target_filepath",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9305aaf4561d9d013837639dcaa9da4430e04baad6fbeedc76e01bee1117bff5"
+}

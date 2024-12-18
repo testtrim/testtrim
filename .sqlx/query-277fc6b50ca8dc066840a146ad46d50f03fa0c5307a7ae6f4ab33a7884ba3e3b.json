@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE coverage_map\n            SET last_read_timestamp = NOW()\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "277fc6b50ca8dc066840a146ad46d50f03fa0c5307a7ae6f4ab33a7884ba3e3b"
+}

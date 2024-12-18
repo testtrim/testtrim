@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO commit_file_reference\n                (referencing_filepath, target_filepath, id, scm_commit_id)\n            SELECT\n                *, uuid_generate_v4(), $1\n            FROM\n                UNNEST($2::text[], $3::text[])\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b9710f9a8eacc4f2b5ac433e0c9f248d334d59dba5cc6192c594a2331856bad"
+}

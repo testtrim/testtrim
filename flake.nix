@@ -81,13 +81,7 @@
         };
 
       packages = let
-        # FIXME: work version into the build, I guess, so that the binary can identify itself?
         testtrimVersion = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
-        # Before building app, sqlx queries must be "prepared":
-        #   cargo sqlx prepare
-        # and because the nix flake system will only see files that are added to git, then...
-        #   git add .sqlx
-        # but it shouldn't be commited in that state.
         appPackage = rustPlatform.buildRustPackage {
           name = "testtrim";
 
@@ -138,16 +132,16 @@
           installPhase = ''
             runHook preInstall
 
-            mkdir -p $out/usr/bin
-            cp target/release/testtrim $out/usr/bin/
+            mkdir -p $out/bin
+            cp target/release/testtrim $out/bin/
 
             runHook postInstall
           '';
         };
       in
       {
-        # nix build --print-build-logs .#app
-        app = appPackage;
+        # nix build --print-build-logs .#testtrim
+        testtrim = appPackage;
 
         # nix build --print-build-logs .#docker && podman load -i result -q && podman run -it --rm -p 127.0.0.1:8080:8080 codeberg.org/testtrim/server:0.2.1
         docker = pkgs.dockerTools.buildLayeredImage {
@@ -162,7 +156,7 @@
 
           config = {
             Cmd = [
-              "${appPackage}/usr/bin/testtrim"
+              "${appPackage}/bin/testtrim"
               "run-server"
               # Default bind is localhost; but for port forwards to work correctly containers are expected to listen on
               # 0.0.0.0.

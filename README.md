@@ -153,8 +153,8 @@ Oh, well, I'm not quite sure I'd recommend that right now.  But it could be fun 
     git clone https://codeberg.org/testtrim/testtrim.git
     ```
 
-- Run DB migrations to create a testtrim database; see notes under [Development](#development) below for more information:
-    ```
+- (Optional, for PostgreSQL backend): Run DB migrations to create a testtrim database; see notes under [Development](#development) below for more information:
+    ```bash
     sqlx migrate run --source ./db/postgres/migrations
     ```
 
@@ -201,10 +201,16 @@ testtrim uses [direnv](https://direnv.net/) so that you can just drop into the t
 
 The development dependencies are provided by a [Nix shell](https://nix.dev/), which requires the Nix package manager to be installed.  The Nix shell then provides the correct version of all development tools, eg. rustc, cargo, etc.
 
-testtrim's PostgreSQL tests require a functional PostgreSQL database to be available.  Awkwardly, this variable is referenced during build-time as `DATABASE_URL` (for sqlx to compile `query!` macros), but then it is referenced at runtime as `TESTTRIM_DATABASE_URL` so that it doesn't conflict with any usage of `DATABASE_URL` in a target project.  In order to keep this available at all times while working on the project, you can define it in a `.localenvrc` file which would not be checked in, and would be local to your workspace.  For example:
+testtrim's PostgreSQL tests require a functional PostgreSQL database to be available.  This database must be available at the URL defined by the `TESTTRIM_DATABASE_URL` environment variable.  You can define this manually, or you can define it in a `.localenvrc` file which would not be checked in, and would be local to your workspace.  For example:
 
 ```bash
 $ cat .localenvrc
 export DATABASE_URL="postgres://user:password@localhost/database"
 export TESTTRIM_DATABASE_URL="postgres://user:password@localhost/database"
+```
+
+The database must also have a schema, which can be provided by running:
+
+```bash
+DATABASE_URL=$TESTTRIM_DATABASE_URL sqlx migrate run --source ./db/postgres/migrations
 ```

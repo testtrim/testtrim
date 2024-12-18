@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO coverage_map (id, scm_commit_id)\n            VALUES (uuid_generate_v4(), $1)\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5bef7ad6665fd2d97993b1044e07c3d4d0e272813e5158a4e7d3d5a3a72f5ac1"
+}

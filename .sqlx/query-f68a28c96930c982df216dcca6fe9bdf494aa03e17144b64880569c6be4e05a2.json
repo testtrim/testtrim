@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO coverage_map_test_case_executed\n                (test_case_execution_id, coverage_map_id)\n            SELECT\n                *, $1\n            FROM\n                UNNEST($2::uuid[])\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f68a28c96930c982df216dcca6fe9bdf494aa03e17144b64880569c6be4e05a2"
+}
