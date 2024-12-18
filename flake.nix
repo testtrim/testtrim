@@ -116,7 +116,6 @@
 
           # FIXME: not sure what dependencies are leftover here that might be affecting the binary output -- for
           # example, "cargo" -- that shouldn't be present after build...
-
           buildInputs = myBuildInputs;
           nativeBuildInputs = myNativeBuildInputs;
 
@@ -127,13 +126,22 @@
           # having to run it, `git add .sqlx`, but not keep them.  But it would require starting Postgres here and running
           # the SQL migrations, which is pretty awkward in a build script.
           buildPhase = ''
+            runHook preBuild
+
             find .
             find .sqlx
+            export CARGO_HOME=$TMPDIR # prevents any output to /homeless-shelter with cargo cache DBs
             cargo build --release
+
+            runHook postBuild
           '';
           installPhase = ''
+            runHook preInstall
+
             mkdir -p $out/usr/bin
             cp target/release/testtrim $out/usr/bin/
+
+            runHook postInstall
           '';
         };
       in
