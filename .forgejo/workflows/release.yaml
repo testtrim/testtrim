@@ -14,8 +14,8 @@ on:
 concurrency: release
 
 jobs:
-  deploy:
-    name: testtrim release
+  release:
+    name: testtrim-release # no whitespace; https://github.com/containers/podman/issues/24869
     runs-on: debian-latest
     container:
       options: --volume nix-forgejo-cache-public:/nix
