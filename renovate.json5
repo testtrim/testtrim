@@ -10,7 +10,8 @@
     "config:best-practices",
     ":dependencyDashboard",
     ":maintainLockFilesWeekly",
-    ":automergeMinor"
+    ":automergeMinor",
+    ":semanticCommitTypeAll(chore)"
   ],
   "packageRules": [
     {
