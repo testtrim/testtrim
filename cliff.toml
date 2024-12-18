@@ -34,7 +34,7 @@ body = """
 {% endif %}\
 {# Tag messages seemed like a good way to publish manually written note amendments, but with auto-generated releases
 they're just repeating the same thing.  Keep the first original manual note, but then get rid of this onwards... #}\
-{% if message is containing("First tagged release") %}
+{% if message and message is containing("First tagged release") %}
     {{ message }}
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
