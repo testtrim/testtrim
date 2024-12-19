@@ -304,9 +304,9 @@ mod tests {
 
     lazy_static! {
         // Avoid running multiple concurrent tests; assuming they're working well they would conflict on each other with
-        // the data being stored and retrieved.  NOTE: The Mutex is ineffective when tests are run in multiple
-        // processes; eg. with testtrim, or cargo-nextest -- for nextest they also have to be configured in
-        // nextest.toml.
+        // the data being stored and retrieved.  Even though tests are often run in multiple processes (eg. w/ testtrim,
+        // cargo-nextest), this in-process Mutex is sufficient because the database used during the tests is an
+        // in-memory SQLite database.
         static ref TEST_MUTEX: Mutex<i32> = Mutex::new(0);
     }
 

@@ -1004,8 +1004,9 @@ where
 #[cfg(test)]
 mod tests {
     use lazy_static::lazy_static;
+    use named_lock::NamedLock;
     use serde_json::Value;
-    use std::{env, sync::Mutex};
+    use std::env;
 
     use crate::{
         coverage::{
@@ -1016,10 +1017,10 @@ mod tests {
     };
 
     lazy_static! {
-        // Avoid running multiple concurrent tests that use the external DB.  Note that a Mutex is ineffective when
-        // tests are run in multiple processes; eg. with testtrim, or cargo-nextest; so this is kinda an interim
-        // solution.
-        static ref DB_MUTEX: Mutex<i32> = Mutex::new(0);
+        // Avoid running multiple concurrent tests that use the external DB.  An external intra-process lock is used to
+        // allow these tests to exclude each other even when run in multiple processes, eg. with testtrim or
+        // cargo-nexttest.
+        static ref DB_MUTEX: NamedLock = NamedLock::create("testtrim-postgres_sqlx-tests").unwrap();
     }
     fn create_test_db() -> PostgresCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> {
         let test_db_url = env::var("TESTTRIM_UNITTEST_PGSQL_URL")

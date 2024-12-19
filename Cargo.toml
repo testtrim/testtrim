@@ -48,6 +48,7 @@ uuid = { version = "1.11.0", features = ["v4"] }
 
 [dev-dependencies]
 actix-test = "0.1.5"
+named-lock = "0.4.1"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
