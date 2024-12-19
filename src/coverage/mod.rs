@@ -31,19 +31,19 @@ pub use tag::Tag;
 #[allow(async_fn_in_trait)] // should be fine to the extent that this is only used internally to this project
 pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     async fn save_coverage_data(
-        &mut self,
+        &self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
     ) -> Result<(), CoverageDatabaseDetailedError>;
     async fn read_coverage_data(
-        &mut self,
+        &self,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError>;
-    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError>;
-    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError>;
+    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError>;
+    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError>;
 }
 
 #[derive(Error, Debug)]

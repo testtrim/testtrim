@@ -30,6 +30,7 @@ use std::{
 };
 use thiserror::Error;
 use time::{OffsetDateTime, PrimitiveDateTime};
+use tokio::sync::{Mutex, MutexGuard, OnceCell};
 use uuid::Uuid;
 
 use super::{
@@ -99,7 +100,7 @@ impl From<uuid::Error> for CoverageDatabaseDetailedError {
 pub struct DieselCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
     project_name: String,
-    connection: Option<SqliteConnection>,
+    connection: OnceCell<Mutex<SqliteConnection>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
 }
@@ -141,35 +142,37 @@ impl<
         DieselCoverageDatabase {
             database_url,
             project_name,
-            connection: None,
+            connection: OnceCell::new(),
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
         }
     }
 
-    fn get_connection(&mut self) -> Result<&mut SqliteConnection, CoverageDatabaseDetailedError> {
-        // Check if the connection already exists
-        if self.connection.is_none() {
-            // Create a new connection if it doesn't exist
-            let mut connection = SqliteConnection::establish(&self.database_url)
-                .context("connecting to the database")?;
-            connection.set_instrumentation(DbLogger {});
+    async fn get_connection(
+        &self,
+    ) -> Result<MutexGuard<'_, SqliteConnection>, CoverageDatabaseDetailedError> {
+        Ok(self
+            .connection
+            .get_or_try_init(async || {
+                // Create a new connection if it doesn't exist
+                let mut connection = SqliteConnection::establish(&self.database_url)
+                    .context("connecting to the database")?;
+                connection.set_instrumentation(DbLogger {});
 
-            connection.batch_execute(
-                "
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = OFF; -- don't fsync; let OS handle it
-            PRAGMA wal_autocheckpoint = 1000;
-            PRAGMA wal_checkpoint(TRUNCATE);
-            ",
-            )?;
-            // FIXME: maybe enable foreign_keys -- but would have a performance hit so it might not be important for now
-
-            self.connection = Some(connection);
-        }
-
-        // Unwrap is safe here because we've ensured it's `Some`
-        Ok(self.connection.as_mut().unwrap())
+                connection.batch_execute(
+                    "
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = OFF; -- don't fsync; let OS handle it
+                PRAGMA wal_autocheckpoint = 1000;
+                PRAGMA wal_checkpoint(TRUNCATE);
+                ",
+                )?;
+                // FIXME: maybe enable foreign_keys -- but would have a performance hit so it might not be important for now
+                Ok::<_, CoverageDatabaseDetailedError>(Mutex::new(connection))
+            })
+            .await?
+            .lock()
+            .await)
     }
 
     fn save_test_case_file_coverage(
@@ -463,7 +466,7 @@ impl<
 {
     // impl CoverageDatabase<TI, CI> for DieselCoverageDatabase {
     async fn save_coverage_data(
-        &mut self,
+        &self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -477,7 +480,8 @@ impl<
         // SQLite isn't going to do a JSON-aware comparison when searching, so we use a sorted serialization to try to
         // get consistent outputs that will work for a bare string comparison.
         let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
-        let conn = self.get_connection()?;
+        let mut conn_guard = self.get_connection().await?;
+        let conn = &mut *conn_guard;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
@@ -659,7 +663,7 @@ impl<
     }
 
     async fn read_coverage_data(
-        &mut self,
+        &self,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
@@ -673,7 +677,8 @@ impl<
         // SQLite isn't going to do a JSON-aware comparison when searching, so we use a sorted serialization to try to
         // get consistent outputs that will work for a bare string comparison.
         let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
-        let conn = self.get_connection()?;
+        let mut conn_guard = self.get_connection().await?;
+        let conn = &mut *conn_guard;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
@@ -844,11 +849,12 @@ impl<
         Ok(Some(coverage_data))
     }
 
-    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
         use crate::schema::{coverage_map, scm_commit};
 
         let project_name = self.project_name.clone();
-        let conn = self.get_connection()?;
+        let mut conn_guard = self.get_connection().await?;
+        let conn = &mut *conn_guard;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
@@ -867,7 +873,7 @@ impl<
         Ok(coverage_map_id.is_some())
     }
 
-    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, coverage_map,
             coverage_map_test_case_executed, project, scm_commit, test_case,
@@ -875,7 +881,8 @@ impl<
             test_case_function_covered,
         };
 
-        let conn = self.get_connection()?;
+        let mut conn_guard = self.get_connection().await?;
+        let conn = &mut *conn_guard;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
@@ -954,18 +961,18 @@ mod tests {
     async fn load_updates_last_read_timestamp() {
         use crate::schema::*;
 
-        let mut db =
-            DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-                String::from(":memory:"),
-                String::from("testtrim-tests"),
-            );
+        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+            String::from(":memory:"),
+            String::from("testtrim-tests"),
+        );
 
         let saved_data = CommitCoverageData::new();
         let result = db.save_coverage_data(&saved_data, "c1", None, &[]).await;
         assert!(result.is_ok());
 
         {
-            let conn = db.get_connection().unwrap();
+            let mut conn_guard = db.get_connection().await.unwrap();
+            let conn = &mut *conn_guard;
 
             let data = coverage_map::dsl::coverage_map
                 .inner_join(scm_commit::dsl::scm_commit)
@@ -988,7 +995,8 @@ mod tests {
         assert!(result.is_some());
 
         {
-            let conn = db.get_connection().unwrap();
+            let mut conn_guard = db.get_connection().await.unwrap();
+            let conn = &mut *conn_guard;
 
             let data = coverage_map::dsl::coverage_map
                 .inner_join(scm_commit::dsl::scm_commit)

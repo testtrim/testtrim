@@ -49,7 +49,7 @@ lazy_static! {
 }
 
 pub async fn has_any_coverage_data_false(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let result = db.has_any_coverage_data().await;
     assert!(result.is_ok(), "result = {result:?}");
@@ -57,14 +57,14 @@ pub async fn has_any_coverage_data_false(
     assert!(!has_coverage_data);
 }
 
-pub async fn save_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
+pub async fn save_empty(db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
     let data1 = CommitCoverageData::new();
     let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
 }
 
 pub async fn has_any_coverage_data_true(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let data1 = CommitCoverageData::new();
     let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
@@ -75,7 +75,7 @@ pub async fn has_any_coverage_data_true(
     assert!(has_coverage_data);
 }
 
-pub async fn load_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
+pub async fn load_empty(db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
     let result = db.read_coverage_data("c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
@@ -83,7 +83,7 @@ pub async fn load_empty(mut db: impl CoverageDatabase<RustTestIdentifier, RustCo
 }
 
 pub async fn save_and_load_no_ancestor(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut saved_data = CommitCoverageData::new();
     // note -- no ancestor, so the only case that makes sense is for all existing tests to be executed tests
@@ -286,7 +286,7 @@ pub async fn save_and_load_no_ancestor(
 
 /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
 pub async fn save_and_load_new_case_in_child(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
     ancestor_data.add_executed_test(test1.clone());
@@ -432,7 +432,7 @@ pub async fn save_and_load_new_case_in_child(
 
 /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
 pub async fn save_and_load_replacement_case_in_child(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
     ancestor_data.add_executed_test(test1.clone());
@@ -569,7 +569,7 @@ pub async fn save_and_load_replacement_case_in_child(
 
 /// Test a child coverage set which indicates a test was removed and no longer present
 pub async fn save_and_load_removed_case_in_child(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
     ancestor_data.add_executed_test(test1.clone());
@@ -658,7 +658,7 @@ pub async fn save_and_load_removed_case_in_child(
 
 /// Test that we can remove file references from an ancestor
 pub async fn remove_file_references_in_child(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut ancestor_data = CommitCoverageData::new();
     ancestor_data.add_executed_test(test1.clone());
@@ -719,7 +719,7 @@ pub async fn remove_file_references_in_child(
 
 /// Test that save and load use independent data based upon tags
 pub async fn independent_tags(
-    mut db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let mut saved_data = CommitCoverageData::new();
     let windows = RustCoverageIdentifier::PackageDependency(RustPackageDependency {

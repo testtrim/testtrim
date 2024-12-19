@@ -83,7 +83,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
     async fn save_coverage_data(
-        &mut self,
+        &self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -155,7 +155,7 @@ where
     }
 
     async fn read_coverage_data(
-        &mut self,
+        &self,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
@@ -205,7 +205,7 @@ where
         Ok(body)
     }
 
-    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -239,7 +239,7 @@ where
         Ok(body)
     }
 
-    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -363,7 +363,7 @@ mod tests {
             crate::coverage::create_test_db::<RustTestPlatform>(String::from("in-memory-project"))
                 .unwrap();
         let factory = web::Data::new(CoverageDatabaseFactoryHolder::<RustTestPlatform>::Fixture(
-            Arc::new(tokio::sync::Mutex::new(coverage_db)),
+            Arc::new(coverage_db),
         ));
 
         let test_state = web::Data::new(TestInterceptState {
@@ -411,7 +411,7 @@ mod tests {
     }
 
     async fn cleanup() {
-        let (_srv, mut db) = create_test_db();
+        let (_srv, db) = create_test_db();
         db.clear_project_data()
             .await
             .expect("clear_project_data must succeed for test consistency");
@@ -507,7 +507,7 @@ mod tests {
     async fn http_post_body_compression() -> Result<()> {
         let _test_mutex = TEST_MUTEX.lock();
         cleanup().await;
-        let (srv, mut db) = create_test_db();
+        let (srv, db) = create_test_db();
 
         // Make a POST...
         let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
@@ -540,7 +540,7 @@ mod tests {
     async fn http_get_body_compression() -> Result<()> {
         let _test_mutex = TEST_MUTEX.lock();
         cleanup().await;
-        let (srv, mut db) = create_test_db();
+        let (srv, db) = create_test_db();
 
         // Make a GET...
         let result = db.read_coverage_data("c1", &[]).await;

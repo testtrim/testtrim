@@ -18,7 +18,6 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_map_to_array::HashMapToArray;
 use thiserror::Error;
-use tokio::sync::Mutex;
 
 use crate::{
     coverage::{
@@ -41,17 +40,17 @@ type FactoryFunction<TP> = fn(
 pub enum CoverageDatabaseFactoryHolder<TP: TestPlatform> {
     Function(FactoryFunction<TP>),
     #[allow(dead_code)] // used in tests only
-    Fixture(Arc<Mutex<CoverageDatabaseDispatch<TP::TI, TP::CI>>>),
+    Fixture(Arc<CoverageDatabaseDispatch<TP::TI, TP::CI>>),
 }
 
-// FIXME: this Rc<Mutex<..>> is super ugly but used for two reasons:
-// - the CoverageDatabase trait uses (&mut self) methods, but should be changed to be &self w/ interior thread safety
-// - the CoverageDatabaseFactoryHolder has one approach (factory) that returns an owned object, and one approach
-//   (fixture) that returns a reference to an object, hence the Rc.  If coverage databases were stored/cached we
-//   wouldn't need to do this, but then we'd have to get rid of project_name as an input during creation and instead use
-//   it as an input during the methods.
+// FIXME: this Arc<..> usage is a little ugly, but it is used because the CoverageDatabaseFactoryHolder has one approach
+// (factory) that returns an owned object, and one approach (fixture) that returns a reference to an object, hence the
+// Arc.  If coverage databases were stored/cached we wouldn't need to do this, but then we'd have to get rid of
+// project_name as an input during creation and instead use it as an input during the methods.  Switching to this model
+// of a purely injected coverage database seems like the right thing to do, but practically probably doesn't have much
+// value.
 type ThreadsafeCoverageDatabase<TP> =
-    Arc<Mutex<CoverageDatabaseDispatch<<TP as TestPlatform>::TI, <TP as TestPlatform>::CI>>>;
+    Arc<CoverageDatabaseDispatch<<TP as TestPlatform>::TI, <TP as TestPlatform>::CI>>;
 
 impl<TP: TestPlatform> CoverageDatabaseFactoryHolder<TP> {
     // Rc<T> is a little ugly here; &'a where 'a is the life of this would be better, but we don't hold the result of
@@ -61,9 +60,7 @@ impl<TP: TestPlatform> CoverageDatabaseFactoryHolder<TP> {
         project_name: String,
     ) -> Result<ThreadsafeCoverageDatabase<TP>, CreateDatabaseError> {
         match self {
-            CoverageDatabaseFactoryHolder::Function(f) => {
-                f(project_name).map(|r| Arc::new(Mutex::new(r)))
-            }
+            CoverageDatabaseFactoryHolder::Function(f) => f(project_name).map(Arc::new),
             CoverageDatabaseFactoryHolder::Fixture(f) => Ok(f.clone()),
         }
     }
@@ -140,10 +137,10 @@ async fn get_any_coverage_data<TP: TestPlatform>(
     debug!("get_any_coverage_data received: {:?}", project_name);
 
     let coverage_db = db_factory.get_db(project_name.clone())?;
-    let mut mut_coverage_db = coverage_db.lock().await;
+    // let mut mut_coverage_db = coverage_db.lock().await;
 
     Ok(HttpResponse::Ok().json(serde_json::to_value(
-        mut_coverage_db.has_any_coverage_data().await?,
+        coverage_db.has_any_coverage_data().await?,
     )?))
 }
 
@@ -167,10 +164,9 @@ async fn get_coverage_data<TP: TestPlatform>(
         .collect::<Vec<Tag>>();
 
     let coverage_db = db_factory.get_db(project_name.clone())?;
-    let mut mut_coverage_db = coverage_db.lock().await;
 
     Ok(HttpResponse::Ok().json(
-        mut_coverage_db
+        coverage_db
             .read_coverage_data(&commit_identifier, &tags)
             .await?,
     ))
@@ -271,9 +267,8 @@ async fn post_coverage_data<TP: TestPlatform>(
     }
 
     let coverage_db = db_factory.get_db(project_name.clone())?;
-    let mut mut_coverage_db = coverage_db.lock().await;
 
-    mut_coverage_db
+    coverage_db
         .save_coverage_data(
             &commit_coverage_data,
             &commit_identifier,
@@ -317,10 +312,9 @@ async fn delete_coverage_data<TP: TestPlatform>(
     debug!("delete_coverage_data received: {:?}", project_name);
 
     let coverage_db = db_factory.get_db(project_name.clone())?;
-    let mut mut_coverage_db = coverage_db.lock().await;
 
     debug!("web: starting clear_project_data({})", project_name);
-    mut_coverage_db.clear_project_data().await?;
+    coverage_db.clear_project_data().await?;
     debug!("web: completed clear_project_data({})", project_name);
 
     Ok(HttpResponse::Ok().json(None::<String>))
@@ -382,7 +376,7 @@ mod tests {
     #[actix_web::test]
     async fn test_get_coverage_rust() -> Result<()> {
         let test_project = String::from("testtrim-tests-2");
-        let mut coverage_db = create_test_db::<RustTestPlatform>(test_project.clone())?;
+        let coverage_db = create_test_db::<RustTestPlatform>(test_project.clone())?;
 
         let mut saved_data =
             CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
@@ -406,7 +400,7 @@ mod tests {
             .await?;
 
         let factory = web::Data::new(CoverageDatabaseFactoryHolder::<RustTestPlatform>::Fixture(
-            Arc::new(Mutex::new(coverage_db)),
+            Arc::new(coverage_db),
         ));
         let app = test::init_service(App::new().app_data(factory).route(
             "/coverage-data/{project}/{commit_identifier}",
@@ -454,7 +448,7 @@ mod tests {
     #[actix_web::test]
     async fn test_get_coverage_dotnet() -> Result<()> {
         let test_project = String::from("testtrim-tests-3");
-        let mut coverage_db = create_test_db::<DotnetTestPlatform>(test_project.clone())?;
+        let coverage_db = create_test_db::<DotnetTestPlatform>(test_project.clone())?;
 
         let mut saved_data =
             CommitCoverageData::<DotnetTestIdentifier, DotnetCoverageIdentifier>::new();
@@ -478,9 +472,7 @@ mod tests {
             .await?;
 
         let factory = web::Data::new(
-            CoverageDatabaseFactoryHolder::<DotnetTestPlatform>::Fixture(Arc::new(Mutex::new(
-                coverage_db,
-            ))),
+            CoverageDatabaseFactoryHolder::<DotnetTestPlatform>::Fixture(Arc::new(coverage_db)),
         );
         let app = test::init_service(App::new().app_data(factory).route(
             "/coverage-data/{project}/{commit_identifier}",

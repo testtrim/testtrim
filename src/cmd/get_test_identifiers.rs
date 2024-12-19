@@ -248,7 +248,7 @@ async fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
-    mut coverage_db: impl CoverageDatabase<TI, CI>,
+    coverage_db: impl CoverageDatabase<TI, CI>,
     tags: &[Tag],
 ) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
 where
@@ -596,7 +596,7 @@ mod tests {
 
     impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> for MockCoverageDatabase {
         async fn save_coverage_data(
-            &mut self,
+            &self,
             _coverage_data: &CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
             _commit_identifier: &str,
             _ancestor_commit_identifier: Option<&str>,
@@ -607,7 +607,7 @@ mod tests {
         }
 
         async fn read_coverage_data(
-            &mut self,
+            &self,
             commit_identifier: &str,
             _tags: &[Tag],
         ) -> Result<
@@ -620,12 +620,12 @@ mod tests {
             }
         }
 
-        async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+        async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
             // has_any_coverage_data not currently used
             Ok(!self.commit_data.is_empty())
         }
 
-        async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+        async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
             // Not used in testing
             unreachable!()
         }

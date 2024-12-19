@@ -7,6 +7,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use sqlx::{postgres::PgPoolOptions, Executor, Pool, Postgres, Transaction};
 use std::{collections::HashMap, marker::PhantomData, path::PathBuf};
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 use crate::platform::TestIdentifier;
@@ -23,7 +24,7 @@ use super::{
 pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
     project_name: String,
-    connection: Option<Pool<Postgres>>,
+    connection: OnceCell<Pool<Postgres>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
 }
@@ -70,30 +71,30 @@ where
         PostgresCoverageDatabase {
             database_url,
             project_name,
-            connection: None,
+            connection: OnceCell::new(),
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
         }
     }
 
-    async fn get_pool(&mut self) -> Result<&Pool<Postgres>, CoverageDatabaseError> {
-        // Check if the connection already exists
-        if self.connection.is_none() {
-            let pool = PgPoolOptions::new()
-                .max_connections(5)
-                .connect(&self.database_url)
-                .await?;
-            // FIXME: since create_db keeps creating new instances of this pretty frequently (eg. when used in
-            // simulate_history, or when used in the API server), this migration keeps re-running... and our connection
-            // pool is lost and recreated over and over again.  A smarter shared cache of some kind should be used?
-            sqlx::migrate!("./db/postgres/migrations")
-                .run(&pool)
-                .await?;
-            self.connection = Some(pool);
-        }
-
-        // Unwrap is safe here because we've ensured it's `Some`
-        Ok(self.connection.as_mut().unwrap())
+    async fn get_pool(&self) -> Result<&Pool<Postgres>, CoverageDatabaseError> {
+        self.connection
+            .get_or_try_init(|| async {
+                let pool = PgPoolOptions::new()
+                    .max_connections(5)
+                    .connect(&self.database_url)
+                    .await?;
+                // FIXME: since create_db keeps creating new instances of this pretty frequently (eg. when used in
+                // simulate_history, or when used in the API server), this migration keeps re-running... and our
+                // connection pool is lost and recreated over and over again.  A smarter shared cache of some kind
+                // should be used?
+                sqlx::migrate!("./db/postgres/migrations")
+                    .run(&pool)
+                    .await?;
+                Ok(pool)
+                // *connection = Some(pool);
+            })
+            .await
     }
 
     async fn upsert_project<'e, E>(
@@ -807,7 +808,7 @@ where
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
     async fn save_coverage_data(
-        &mut self,
+        &self,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -884,7 +885,7 @@ where
     }
 
     async fn read_coverage_data(
-        &mut self,
+        &self,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
@@ -965,7 +966,7 @@ where
         Ok(Some(coverage_data))
     }
 
-    async fn has_any_coverage_data(&mut self) -> Result<bool, CoverageDatabaseDetailedError> {
+    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool().await?;
 
@@ -989,7 +990,7 @@ where
         Ok(coverage_map_id.is_some())
     }
 
-    async fn clear_project_data(&mut self) -> Result<(), CoverageDatabaseDetailedError> {
+    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
         let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool().await?;
         sqlx::query!("DELETE FROM project WHERE name = $1", project_name)
