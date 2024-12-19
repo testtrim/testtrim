@@ -170,7 +170,10 @@ impl DotnetTestPlatform {
         let output = SyncCommand::new("dotnet")
             .args(["test", "--list-tests", "--", "NUnit.DisplayName=FullName"])
             .output()
-            .expect("Failed to execute dotnet test --list-tests command");
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: "dotnet test --list-tests".to_string(),
+                error: e,
+            })?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
@@ -240,7 +243,10 @@ impl DotnetTestPlatform {
             ])
             .output()
             .await
-            .expect("Failed to execute dotnet test --list-tests command");
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: "dotnet test --filter ...".to_string(),
+                error: e,
+            })?;
 
         if !output.status.success() {
             return Err(RunTestError::TestExecutionFailure(FailedTestResult {

@@ -10,6 +10,9 @@ use crate::{coverage::CoverageDatabaseError, platform::TestIdentifierCore};
 
 #[derive(Error, Debug)]
 pub enum SubcommandErrors {
+    #[error("test sub-command {command:?} could not be started due to err: {error:?}")]
+    UnableToStart { command: String, error: io::Error },
+
     #[error(
         "test sub-command '{command:?}' failed with exit code {status:?} and stderr {stderr:?})"
     )]
@@ -45,6 +48,9 @@ pub struct FailedTestResult {
 /// Error running a single test.
 #[derive(Error, Debug)]
 pub enum RunTestError {
+    #[error(transparent)]
+    SubcommandError(#[from] SubcommandErrors),
+
     #[error(transparent)]
     IoError(#[from] io::Error),
 

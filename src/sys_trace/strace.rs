@@ -16,6 +16,8 @@ use std::{
 };
 use tokio::process::Command;
 
+use crate::errors::SubcommandErrors;
+
 use super::{
     trace::{Trace, UnifiedSocketAddr},
     SysTraceCommand,
@@ -536,7 +538,13 @@ impl SysTraceCommand for STraceSysTraceCommand {
             new_cmd.current_dir(cwd);
         }
 
-        let output = new_cmd.output().await?;
+        let output = new_cmd
+            .output()
+            .await
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: "strace ...".to_string(),
+                error: e,
+            })?;
         let mut trace = Trace::new();
 
         if output.status.success() {

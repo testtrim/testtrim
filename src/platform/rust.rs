@@ -269,7 +269,10 @@ impl RustTestPlatform {
             )
             .env("RUSTFLAGS", "-C instrument-coverage")
             .output()
-            .expect("Failed to execute cargo test command");
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: "cargo test --no-run".to_string(),
+                error: e,
+            })?;
 
         // Check for non-zero exit status
         if !output.status.success() {
@@ -340,7 +343,10 @@ impl RustTestPlatform {
                     Path::join(tmp_dir.path(), "get_all_test_cases_%m_%p.profraw"),
                 )
                 .output()
-                .expect("Failed to execute binary --list command");
+                .map_err(|e| SubcommandErrors::UnableToStart {
+                    command: format!("{binary:?} --list").to_string(),
+                    error: e,
+                })?;
 
             if !output.status.success() {
                 return Err(SubcommandErrors::SubcommandFailed {

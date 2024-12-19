@@ -12,6 +12,8 @@ use strace::STraceSysTraceCommand;
 use tokio::process::Command;
 use trace::Trace;
 
+use crate::errors::SubcommandErrors;
+
 #[cfg(target_os = "linux")]
 mod strace;
 pub mod trace;
@@ -31,7 +33,15 @@ pub struct SysTraceCommandUnsupported;
 
 impl SysTraceCommand for SysTraceCommandUnsupported {
     async fn trace_command(&self, mut cmd: Command, _tmp: &Path) -> Result<(Output, Trace)> {
-        Ok((cmd.output().await?, Trace::new()))
+        Ok((
+            cmd.output()
+                .await
+                .map_err(|e| SubcommandErrors::UnableToStart {
+                    command: format!("{:?} ...", cmd.as_std().get_program()).to_string(),
+                    error: e,
+                })?,
+            Trace::new(),
+        ))
     }
 }
 

@@ -371,7 +371,13 @@ impl GolangTestPlatform {
             &profile_file,
         );
         debug!("running: {cmd:?}");
-        let output = cmd.output().await?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: format!("{test_binary_path:?} ...run-noop-test...").to_string(),
+                error: e,
+            })?;
         if !output.status.success() {
             return Err(anyhow!(
                 "failed to run go test for baseline; exit code: {:?}",
@@ -999,7 +1005,11 @@ impl GolangTestPlatform {
         // First we build all test binaries:
         let mut cmd = Self::get_build_test_command(module_info, &tmp_dir, module_path);
         debug!("running: {cmd:?}");
-        let output = cmd.output()?;
+        let output = cmd.output().map_err(|e| SubcommandErrors::UnableToStart {
+            command: "go test ...build...".to_string(),
+            error: e,
+        })?;
+
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
                 command: String::from("go test -c"),
@@ -1021,7 +1031,10 @@ impl GolangTestPlatform {
             let mut cmd = SyncCommand::new(dirent.path());
             cmd.args(["-test.list", "."]);
             debug!("running: {cmd:?}");
-            let output = cmd.output()?;
+            let output = cmd.output().map_err(|e| SubcommandErrors::UnableToStart {
+                command: format!("{:?} -test.list", cmd.get_program()).to_string(),
+                error: e,
+            })?;
             if !output.status.success() {
                 return Err(SubcommandErrors::SubcommandFailed {
                     command: String::from("'test-binary' -test.list ."),
@@ -1088,7 +1101,10 @@ impl TestPlatform for GolangTestPlatform {
             "./...",
         ]);
         debug!("running: {cmd:?}");
-        let output = cmd.output()?;
+        let output = cmd.output().map_err(|e| SubcommandErrors::UnableToStart {
+            command: "go list ...discover modules...".to_string(),
+            error: e,
+        })?;
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
                 command: String::from("go list -f {{if .TestGoFiles}}{{.ImportPath}}{{end}} ./..."),
