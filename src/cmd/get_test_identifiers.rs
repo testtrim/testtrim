@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 
-use crate::coverage::{create_db, Tag};
+use crate::coverage::{create_db_infallible, Tag};
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -75,6 +75,7 @@ where
             &GitScm {},
             AncestorSearchMode::AllCommits,
             tags,
+            &create_db_infallible::<TP>(),
         )
         .await
         {
@@ -143,6 +144,7 @@ pub async fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
     tags: &[Tag],
+    coverage_db: &impl CoverageDatabase<TI, CI>,
 ) -> Result<TargetTestCases<Commit, TI, CTI, CI>>
 where
     Commit: ScmCommit,
@@ -175,7 +177,7 @@ where
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
-            create_db::<TP>(TP::project_name()?)?,
+            coverage_db,
             tags,
         )
         .await?
@@ -248,7 +250,7 @@ async fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
-    coverage_db: impl CoverageDatabase<TI, CI>,
+    coverage_db: &impl CoverageDatabase<TI, CI>,
     tags: &[Tag],
 ) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
 where
@@ -645,7 +647,7 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            MockCoverageDatabase {
+            &MockCoverageDatabase {
                 commit_data: HashMap::new(),
             },
             &[],
@@ -680,7 +682,7 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            MockCoverageDatabase {
+            &MockCoverageDatabase {
                 commit_data: HashMap::from([(String::from("c2"), previous_coverage_data)]),
             },
             &[],
@@ -741,7 +743,7 @@ mod tests {
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
-            MockCoverageDatabase {
+            &MockCoverageDatabase {
                 commit_data: HashMap::from([
                     (String::from("branch-a"), branch_coverage_data),
                     (String::from("ancestor"), ancestor_coverage_data),

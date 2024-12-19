@@ -8,6 +8,7 @@ use anyhow::Result;
 use commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
 use enum_dispatch::enum_dispatch;
 use full_coverage_data::FullCoverageData;
+use log::error;
 use postgres_sqlx::PostgresCoverageDatabase;
 use serde::{de::DeserializeOwned, Serialize};
 use sqlite_diesel::DieselCoverageDatabase;
@@ -167,4 +168,23 @@ pub fn create_test_db<TP: TestPlatform>(
     project_name: String,
 ) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
     Ok(DieselCoverageDatabase::new_sqlite(String::from(":memory:"), project_name).into())
+}
+
+#[must_use]
+pub fn create_db_infallible<TP: TestPlatform>() -> CoverageDatabaseDispatch<TP::TI, TP::CI> {
+    let project_name = match TP::project_name() {
+        Ok(project_name) => project_name,
+        Err(e) => {
+            error!("Unable to identify project_name: {e:?}");
+            panic!("Unable to identify project_name: {e:?}");
+        }
+    };
+
+    match create_db::<TP>(project_name) {
+        Ok(db) => db,
+        Err(e) => {
+            error!("Unable to create coverage DB: {e:?}");
+            panic!("Unable to create coverage DB: {e:?}");
+        }
+    }
 }

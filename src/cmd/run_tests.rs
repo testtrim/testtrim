@@ -12,7 +12,9 @@ use tracing::info_span;
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
-    coverage::{commit_coverage_data::CoverageIdentifier, create_db, CoverageDatabase as _, Tag},
+    coverage::{
+        commit_coverage_data::CoverageIdentifier, create_db_infallible, CoverageDatabase, Tag,
+    },
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
@@ -94,6 +96,7 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
             source_mode,
             jobs,
             tags,
+            &create_db_infallible::<TP>(),
         )
         .await
         {
@@ -171,6 +174,7 @@ pub async fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     source_mode: SourceMode,
     jobs: u16,
     tags: &[Tag],
+    coverage_db: &impl CoverageDatabase<TI, CI>,
 ) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>
 where
     Commit: ScmCommit,
@@ -216,6 +220,7 @@ where
         scm,
         ancestor_search_mode,
         tags,
+        coverage_db,
     )
     .await?;
 
@@ -240,11 +245,10 @@ where
             .as_ref()
             .map(|c| scm.get_commit_identifier(c));
 
+        // let coverage_db = Arc::new(coverage_db);
         info_span!("save_coverage_data", perftrace = "write-coverage-data")
-            .in_scope(async || {
-                // .context() here is used to quietly unify the error types into anyhow::Error
-                create_db::<TP>(TP::project_name()?)
-                    .context("create_db")?
+            .in_scope(async move || {
+                coverage_db
                     .save_coverage_data(
                         &coverage_data,
                         &commit_identifier,

@@ -9,9 +9,11 @@ use tempdir::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorSearchMode};
 use testtrim::cmd::run_tests::run_tests;
-use testtrim::coverage::{create_test_db, CoverageDatabase as _};
+use testtrim::coverage::{create_test_db, CoverageDatabase};
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
-use testtrim::platform::golang::GolangTestPlatform;
+use testtrim::platform::golang::{
+    GolangCoverageIdentifier, GolangTestIdentifier, GolangTestPlatform,
+};
 use testtrim::platform::ConcreteTestIdentifier as _;
 use testtrim::scm::git::GitScm;
 
@@ -30,9 +32,8 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
     git_clone("go-coverage-specimen")?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("go-coverage-specimen")); // FIXME: hack assumes folder name
 
-    create_test_db::<GolangTestPlatform>(String::from("go-coverage-specimen"))?
-        .clear_project_data()
-        .await?;
+    let coverage_db = create_test_db::<GolangTestPlatform>(String::from("go-coverage-specimen"))?;
+    coverage_db.clear_project_data().await?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a
@@ -376,7 +377,10 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
         },
     ];
 
-    async fn execute_test(commit_test_data: &CommitTestData<'_>) -> Result<()> {
+    async fn execute_test(
+        commit_test_data: &CommitTestData<'_>,
+        coverage_db: &impl CoverageDatabase<GolangTestIdentifier, GolangCoverageIdentifier>,
+    ) -> Result<()> {
         let scm = GitScm {};
         let tags = &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic);
 
@@ -388,6 +392,7 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             &scm,
             AncestorSearchMode::AllCommits,
             tags,
+            coverage_db,
         )
         .await?
         .target_test_cases;
@@ -412,6 +417,7 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             &scm,
             AncestorSearchMode::AllCommits,
             tags,
+            coverage_db,
         )
         .await?
         .target_test_cases;
@@ -437,6 +443,7 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             SourceMode::Automatic,
             0,
             tags,
+            coverage_db,
         )
         .await
         {
@@ -480,7 +487,7 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
     }
 
     for commit_test_data in test_commits {
-        execute_test(&commit_test_data).await?;
+        execute_test(&commit_test_data, &coverage_db).await?;
     }
 
     Ok(())

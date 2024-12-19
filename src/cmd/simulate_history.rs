@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::{
     cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
-    coverage::{commit_coverage_data::CoverageIdentifier, create_db, CoverageDatabase as _},
+    coverage::{commit_coverage_data::CoverageIdentifier, create_db_infallible, CoverageDatabase},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
@@ -60,7 +60,14 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
-    match simulate_history::<_, _, _, _, _, _, TP>(&GitScm {}, num_commits, jobs).await {
+    match simulate_history::<_, _, _, _, _, _, TP>(
+        &GitScm {},
+        num_commits,
+        jobs,
+        &create_db_infallible::<TP>(),
+    )
+    .await
+    {
         Ok(out) => {
             let mut wtr = csv::Writer::from_writer(io::stdout());
             for rec in out.commits_simulated {
@@ -138,6 +145,7 @@ async fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     num_commits: u16,
     jobs: u16,
+    coverage_db: &impl CoverageDatabase<TI, CI>,
 ) -> Result<SimulateHistoryOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -149,9 +157,7 @@ where
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
-    create_db::<TP>(TP::project_name()?)?
-        .clear_project_data()
-        .await?;
+    coverage_db.clear_project_data().await?;
 
     // Use git log -> get the target commits from earliest to latest.  When we hit a merge branch, we'll go up each
     // parent's path until we've found enough commits to meet the requested test count.  This might not reach a common
@@ -175,7 +181,8 @@ where
     let mut commits_simulated = Vec::<SimulateCommitOutput<Commit>>::with_capacity(commits.len());
     for commit in commits {
         info!("testing commit: {:?}", scm.get_commit_identifier(&commit));
-        commits_simulated.push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs).await?);
+        commits_simulated
+            .push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs, coverage_db).await?);
     }
 
     Ok(SimulateHistoryOutput { commits_simulated })
@@ -208,6 +215,7 @@ async fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     commit: Commit,
     jobs: u16,
+    coverage_db: &impl CoverageDatabase<TI, CI>,
 ) -> Result<SimulateCommitOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -244,6 +252,7 @@ where
             SourceMode::CleanCommit,
             jobs,
             &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic), // default tags only
+            coverage_db,
         )
         .await
     })
