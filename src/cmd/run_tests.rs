@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{borrow::Cow, collections::HashSet, marker::PhantomData, path::PathBuf, sync::Arc};
+use std::{
+    borrow::Cow, collections::HashSet, marker::PhantomData, path::PathBuf, process::ExitCode,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use log::{error, info};
@@ -36,7 +39,7 @@ pub async fn cli(
     source_mode: SourceMode,
     jobs: u16,
     tags: &[Tag],
-) {
+) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
     } else {
@@ -51,7 +54,7 @@ pub async fn cli(
                 jobs,
                 tags,
             )
-            .await;
+            .await
         }
         TestProjectType::Dotnet => {
             specific_cli::<_, _, _, _, DotnetTestPlatform>(
@@ -60,7 +63,7 @@ pub async fn cli(
                 jobs,
                 tags,
             )
-            .await;
+            .await
         }
         TestProjectType::Golang => {
             specific_cli::<_, _, _, _, GolangTestPlatform>(
@@ -69,7 +72,7 @@ pub async fn cli(
                 jobs,
                 tags,
             )
-            .await;
+            .await
         }
     }
 }
@@ -79,7 +82,8 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
     source_mode: SourceMode,
     jobs: u16,
     tags: &[Tag],
-) where
+) -> ExitCode
+where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
@@ -89,7 +93,7 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
-    tracing::subscriber::with_default(my_subscriber, async || {
+    let exit_code = tracing::subscriber::with_default(my_subscriber, async || {
         match run_tests::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
@@ -108,6 +112,7 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
                     out.all_test_cases.len(),
                     100 * out.target_test_cases.len() / out.all_test_cases.len(),
                 );
+                ExitCode::SUCCESS
             }
             Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
                 ref test_failures,
@@ -142,9 +147,11 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
                         }
                     }
                 }
+                ExitCode::FAILURE
             }
             Err(err) => {
                 error!("error occurred in run_tests: {err:?}");
+                ExitCode::FAILURE
             }
         }
     })
@@ -153,6 +160,8 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
     // FIXME: probably not the right choice to print this to stdout; maybe log info?
     println!("Performance stats:");
     perf_storage.print();
+
+    exit_code
 }
 
 pub struct RunTestsOutput<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTestIdentifier<TI>> {

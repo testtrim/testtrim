@@ -4,7 +4,7 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
-use std::{fmt::Debug, net::SocketAddr};
+use std::{fmt::Debug, net::SocketAddr, process::ExitCode};
 
 use crate::{
     coverage::Tag,
@@ -154,7 +154,7 @@ pub enum SourceMode {
     WorkingTree,
 }
 
-pub async fn run_cli() {
+pub async fn run_cli() -> ExitCode {
     let cli = Cli::parse();
 
     TermLogger::init(
@@ -166,7 +166,7 @@ pub async fn run_cli() {
     .expect("termlogger init failed");
 
     match &cli.command {
-        Commands::Noop => {}
+        Commands::Noop => ExitCode::SUCCESS,
         Commands::GetTestIdentifiers { target_parameters } => {
             get_test_identifiers::cli(
                 target_parameters.test_project_type,
@@ -176,7 +176,7 @@ pub async fn run_cli() {
                     target_parameters.platform_tagging_mode,
                 ),
             )
-            .await;
+            .await
         }
         Commands::RunTests {
             target_parameters,
@@ -193,18 +193,18 @@ pub async fn run_cli() {
                     target_parameters.platform_tagging_mode,
                 ),
             )
-            .await;
+            .await
         }
         Commands::SimulateHistory {
             test_project_type,
             num_commits,
             execution_parameters,
         } => {
-            simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs)
-                .await;
+            simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs).await
         }
         Commands::RunServer { bind_socket } => {
             server::cli(bind_socket).await;
+            ExitCode::SUCCESS
         }
     }
 }

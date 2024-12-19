@@ -4,6 +4,7 @@
 
 use std::{
     io,
+    process::ExitCode,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -32,7 +33,7 @@ use super::cli::{
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub async fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) {
+pub async fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
     } else {
@@ -41,18 +42,18 @@ pub async fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs).await;
+            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs).await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs).await;
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs).await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs).await;
+            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs).await
         }
     }
 }
 
-async fn specific_cli<TI, CI, TD, CTI, TP>(num_commits: u16, jobs: u16)
+async fn specific_cli<TI, CI, TD, CTI, TP>(num_commits: u16, jobs: u16) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
@@ -74,9 +75,11 @@ where
                 wtr.serialize(rec)
                     .expect("serialize SimulateCommitOutput and write to stdout");
             }
+            ExitCode::SUCCESS
         }
         Err(err) => {
             error!("error occurred in simulate_history: {err:?}");
+            ExitCode::FAILURE
         }
     }
 }

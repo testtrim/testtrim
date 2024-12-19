@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
@@ -38,7 +39,7 @@ pub async fn cli(
     test_project_type: TestProjectType,
     test_selection_mode: GetTestIdentifierMode,
     tags: &[Tag],
-) {
+) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
     } else {
@@ -47,18 +48,21 @@ pub async fn cli(
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(test_selection_mode, tags).await;
+            specific_cli::<_, _, _, _, RustTestPlatform>(test_selection_mode, tags).await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags).await;
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags).await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(test_selection_mode, tags).await;
+            specific_cli::<_, _, _, _, GolangTestPlatform>(test_selection_mode, tags).await
         }
     }
 }
 
-async fn specific_cli<TI, CI, TD, CTI, TP>(test_selection_mode: GetTestIdentifierMode, tags: &[Tag])
+async fn specific_cli<TI, CI, TD, CTI, TP>(
+    test_selection_mode: GetTestIdentifierMode,
+    tags: &[Tag],
+) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
@@ -69,7 +73,7 @@ where
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
-    tracing::subscriber::with_default(my_subscriber, async || {
+    let exit_code = tracing::subscriber::with_default(my_subscriber, async || {
         let test_cases = match get_target_test_cases::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
@@ -82,7 +86,7 @@ where
             Ok(test_cases) => test_cases,
             Err(err) => {
                 error!("error occurred in get_target_test_cases: {:?}", err);
-                return;
+                return ExitCode::FAILURE;
             }
         };
         for (cti, reasons) in test_cases.target_test_cases {
@@ -91,6 +95,7 @@ where
                 println!("\t{reason:?}");
             }
         }
+        ExitCode::SUCCESS
     })
     .await;
 
@@ -98,6 +103,8 @@ where
     // identifiers.
     println!("Performance stats:");
     perf_storage.print();
+
+    exit_code
 }
 
 #[must_use]
