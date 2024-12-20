@@ -5,6 +5,7 @@
 use anyhow::{anyhow, Result};
 use log::info;
 use std::collections::HashSet;
+use std::sync::Arc;
 use tempdir::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorSearchMode};
@@ -16,9 +17,11 @@ use testtrim::platform::golang::{
 };
 use testtrim::platform::ConcreteTestIdentifier as _;
 use testtrim::scm::git::GitScm;
+use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
+use tracing::instrument::WithSubscriber as _;
 
 use crate::util::ChangeWorkingDirectory;
-use crate::{git_checkout, git_clone, CWD_MUTEX};
+use crate::{assert_performance_tracing, git_checkout, git_clone, CWD_MUTEX};
 
 #[tokio::test]
 async fn golang_linearcommits_filecoverage() -> Result<()> {
@@ -486,9 +489,15 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
         }
     }
 
+    let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
-        execute_test(&commit_test_data, &coverage_db).await?;
+        execute_test(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
     }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
 
     Ok(())
 }

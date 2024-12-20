@@ -20,8 +20,7 @@ use std::sync::Arc;
 use std::{fmt, fs, io};
 use tempdir::TempDir;
 use tokio::process::Command;
-use tracing::dispatcher::{self, get_default};
-use tracing::{info_span, instrument};
+use tracing::{info_span, instrument, Instrument as _};
 
 use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, HeuristicCoverage,
@@ -443,17 +442,21 @@ impl GolangTestPlatform {
             "Execute test case {:?} into {:?}...",
             test_case, profile_file
         );
-        let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
-            .in_scope(async || {
-                let cmd = Self::get_run_test_command(
-                    &test_case.binary_path,
-                    // make sure we're matching the one and only test:
-                    &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
-                    &profile_file,
-                );
-                sys_trace_command.trace_command(cmd, &strace_file).await
-            })
-            .await?;
+        let (output, trace) = async {
+            let cmd = Self::get_run_test_command(
+                &test_case.binary_path,
+                // make sure we're matching the one and only test:
+                &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
+                &profile_file,
+            );
+            sys_trace_command.trace_command(cmd, &strace_file).await
+        }
+        .instrument(info_span!(
+            "execute-test",
+            perftrace = "run-test",
+            parallel = true
+        ))
+        .await?;
 
         if !output.status.success() {
             return Err(RunTestError::TestExecutionFailure(FailedTestResult {
@@ -1220,30 +1223,9 @@ impl TestPlatform for GolangTestPlatform {
             let tmp_path = PathBuf::from(tmp_dir.path());
             let module_info = module_info.clone();
             let package_baseline = package_baseline.clone();
-
-            // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
-            // performance data from them.  Note that, as we're running these tests in parallel, the performance data
-            // starts to deviate from wall-clock time at this point.
-            let future = get_default(move |dispatcher| {
-                let tc = tc.clone();
-                let tmp_path = tmp_path.clone();
-                let dispatcher = dispatcher.clone();
-                let module_info = module_info.clone();
-                let package_baseline = package_baseline.clone();
-                async move {
-                    dispatcher::with_default(&dispatcher, async || {
-                        GolangTestPlatform::run_test(
-                            &tc,
-                            &tmp_path,
-                            &module_info,
-                            &package_baseline,
-                        )
-                        .await
-                    })
-                    .await
-                }
+            futures.push(async move {
+                GolangTestPlatform::run_test(&tc, &tmp_path, &module_info, &package_baseline).await
             });
-            futures.push(future);
         }
 
         let concurrency = if jobs == 0 {

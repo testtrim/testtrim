@@ -5,7 +5,9 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::process::Command;
+use std::time::Duration;
 use std::{env, sync::Mutex};
+use testtrim::timing_tracer::RunTestTiming;
 use thiserror::Error;
 
 mod linearcommits_filecoverage;
@@ -81,4 +83,38 @@ pub fn git_checkout(commit: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn assert_performance_tracing(timings: RunTestTiming) {
+    assert_ne!(
+        timings.discover_tests,
+        Duration::ZERO,
+        "discover_tests timing was 0"
+    );
+    assert_ne!(
+        timings.read_historical_coverage_data,
+        Duration::ZERO,
+        "read_historical_coverage_data timing was 0"
+    );
+    assert_ne!(
+        timings.test_determination,
+        Duration::ZERO,
+        "test_determination timing was 0"
+    );
+    assert_ne!(
+        timings.addt_platform_specific_test_determination,
+        Duration::ZERO,
+        "addt_platform_specific_test_determination timing was 0"
+    );
+    assert_ne!(timings.run_tests, Duration::ZERO, "run_tests timing was 0");
+    assert_ne!(
+        timings.read_new_coverage_data,
+        Duration::ZERO,
+        "read_new_coverage_data timing was 0"
+    );
+    assert_ne!(
+        timings.write_new_coverage_data,
+        Duration::ZERO,
+        "write_new_coverage_data timing was 0"
+    );
 }

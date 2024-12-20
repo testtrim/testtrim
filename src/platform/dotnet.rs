@@ -19,8 +19,7 @@ use std::{fmt, fs};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
 use tokio::process::Command;
-use tracing::dispatcher::{self, get_default};
-use tracing::instrument;
+use tracing::{info_span, instrument, Instrument as _};
 
 use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage};
 use crate::coverage::full_coverage_data::FullCoverageData;
@@ -242,6 +241,7 @@ impl DotnetTestPlatform {
                 // "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeAssembliesWithoutSources=None",
             ])
             .output()
+            .instrument(info_span!("execute-test", perftrace = "run-test", parallel = true))
             .await
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "dotnet test --filter ...".to_string(),
@@ -694,24 +694,7 @@ impl TestPlatform for DotnetTestPlatform {
             let tmp_path = PathBuf::from(tmp_dir.path());
             let b = binaries.clone();
             // let dep_map = dep_map.clone(); // TODO: external dependency tracking
-
-            // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
-            // performance data from them.  Note that, as we're running these tests in parallel, the performance data
-            // starts to deviate from wall-clock time at this point.
-            let future = get_default(move |dispatcher| {
-                let tc = tc.clone();
-                let tmp_path = tmp_path.clone();
-                let b = b.clone();
-                // let dep_map = dep_map.clone(); // TODO: external dependency tracking
-                let dispatcher = dispatcher.clone();
-                async move {
-                    dispatcher::with_default(&dispatcher, async || {
-                        Self::run_test(&tc, &tmp_path, &b).await
-                    })
-                    .await
-                }
-            });
-            futures.push(future);
+            futures.push(async move { Self::run_test(&tc, &tmp_path, &b).await });
         }
 
         let concurrency = 1; /* if jobs == 0 {

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use log::{error, info};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tracing::info_span;
+use tracing::{info_span, instrument::WithSubscriber, Instrument as _};
 
 use crate::{
     cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
@@ -93,7 +93,7 @@ where
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
-    let exit_code = tracing::subscriber::with_default(my_subscriber, async || {
+    let exit_code = async {
         match run_tests::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
@@ -154,7 +154,8 @@ where
                 ExitCode::FAILURE
             }
         }
-    })
+    }
+    .with_subscriber(my_subscriber)
     .await;
 
     // FIXME: probably not the right choice to print this to stdout; maybe log info?
@@ -254,20 +255,22 @@ where
             .as_ref()
             .map(|c| scm.get_commit_identifier(c));
 
-        // let coverage_db = Arc::new(coverage_db);
-        info_span!("save_coverage_data", perftrace = "write-coverage-data")
-            .in_scope(async move || {
-                coverage_db
-                    .save_coverage_data(
-                        &coverage_data,
-                        &commit_identifier,
-                        ancestor_commit_identifier.as_deref(),
-                        tags,
-                    )
-                    .await
-                    .context("save_coverage_data")
-            })
-            .await?;
+        async move {
+            coverage_db
+                .save_coverage_data(
+                    &coverage_data,
+                    &commit_identifier,
+                    ancestor_commit_identifier.as_deref(),
+                    tags,
+                )
+                .await
+                .context("save_coverage_data")
+        }
+        .instrument(info_span!(
+            "save_coverage_data",
+            perftrace = "write-coverage-data"
+        ))
+        .await?;
     }
 
     Ok(RunTestsOutput {

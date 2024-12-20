@@ -12,6 +12,7 @@ use tokio::{
     sync::{AcquireError, Semaphore},
     task::JoinSet,
 };
+use tracing::instrument::WithSubscriber as _;
 
 use crate::errors::SpawnError;
 
@@ -78,10 +79,15 @@ where
 
     for future in futures {
         let my_semaphore = semaphore.clone();
-        set.spawn(async move {
-            let _permit = my_semaphore.acquire().await?;
-            Ok::<_, AcquireError>(future.await)
-        });
+        set.spawn(
+            async move {
+                let _permit = my_semaphore.acquire().await?;
+                Ok::<_, AcquireError>(future.await)
+            }
+            // propogate our task subscriber into the new spawn(); normally a `spawn` it would have no subscriber and
+            // lose all instrumentation from this point.
+            .with_current_subscriber(),
+        );
     }
 
     while let Some(res) = set.join_next().await {

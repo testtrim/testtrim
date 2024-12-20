@@ -20,5 +20,5 @@ mod schema;
 pub mod scm;
 mod server;
 mod sys_trace;
-mod timing_tracer;
+pub mod timing_tracer;
 mod util;

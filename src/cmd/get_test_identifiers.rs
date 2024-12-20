@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
+use tracing::instrument::WithSubscriber;
 
 use crate::coverage::{create_db_infallible, Tag};
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
@@ -73,7 +74,7 @@ where
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
-    let exit_code = tracing::subscriber::with_default(my_subscriber, async || {
+    let exit_code = async {
         let test_cases = match get_target_test_cases::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
@@ -96,7 +97,8 @@ where
             }
         }
         ExitCode::SUCCESS
-    })
+    }
+    .with_subscriber(my_subscriber)
     .await;
 
     // FIXME: probably not the right choice to print this to stdout; ideally this cli command just prints the test

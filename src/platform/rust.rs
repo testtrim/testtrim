@@ -23,8 +23,7 @@ use std::{env, fmt, fs, io};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
 use tokio::process::Command;
-use tracing::dispatcher::{self, get_default};
-use tracing::{info_span, instrument};
+use tracing::{info_span, instrument, Instrument};
 
 use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
@@ -562,16 +561,21 @@ impl RustTestPlatform {
             "Execute test case {:?} into {:?} from working-dir {:?}...",
             test_case, profile_file, test_wd
         );
-        let (output, trace) = info_span!("execute-test", perftrace = "run-test", parallel = true)
-            .in_scope(async || {
-                let mut cmd = Command::new(&test_case.test_binary.executable_path);
-                cmd.arg("--exact")
-                    .arg(&test_case.test_identifier.test_name)
-                    .env("LLVM_PROFILE_FILE", &profile_file)
-                    .env("RUSTFLAGS", "-C instrument-coverage")
-                    .current_dir(test_wd);
-                sys_trace_command.trace_command(cmd, &strace_file).await
-            })
+
+        let mut cmd = Command::new(&test_case.test_binary.executable_path);
+        cmd.arg("--exact")
+            .arg(&test_case.test_identifier.test_name)
+            .env("LLVM_PROFILE_FILE", &profile_file)
+            .env("RUSTFLAGS", "-C instrument-coverage")
+            .current_dir(test_wd);
+
+        let (output, trace) = sys_trace_command
+            .trace_command(cmd, &strace_file)
+            .instrument(info_span!(
+                "execute-test",
+                perftrace = "run-test",
+                parallel = true
+            ))
             .await?;
 
         if !output.status.success() {
@@ -709,6 +713,7 @@ impl TestPlatform for RustTestPlatform {
         })
     }
 
+    #[instrument(skip_all)]
     async fn run_tests<'a, I>(
         test_cases: I,
         jobs: u16,
@@ -728,24 +733,8 @@ impl TestPlatform for RustTestPlatform {
             let tmp_path = PathBuf::from(tmp_dir.path());
             let b = binaries.clone();
             let cl = coverage_library.clone();
-
-            // Dance around a bit here to share the same tracing subscriber in the subthreads, allowing us to collect
-            // performance data from them.  Note that, as we're running these tests in parallel, the performance data
-            // starts to deviate from wall-clock time at this point.
-            let future = get_default(move |dispatcher| {
-                let tc = test_case.clone();
-                let tmp_path = tmp_path.clone();
-                let b = b.clone();
-                let cl = cl.clone();
-                let dispatcher = dispatcher.clone();
-                async move {
-                    dispatcher::with_default(&dispatcher, async || {
-                        RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl).await
-                    })
-                    .await
-                }
-            });
-            futures.push(future);
+            let tc = test_case.clone();
+            futures.push(async move { RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl).await });
         }
 
         let concurrency = if jobs == 0 {

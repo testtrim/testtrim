@@ -72,7 +72,14 @@ pub struct RunTestTiming {
     pub write_new_coverage_data: Duration,
 }
 
+impl Default for PerformanceStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerformanceStorage {
+    #[must_use]
     pub fn new() -> Self {
         PerformanceStorage {
             span_storage: DashMap::new(),
@@ -113,6 +120,7 @@ impl PerformanceStorage {
         }
     }
 
+    #[must_use]
     pub fn interpret_run_test_timing(&self) -> RunTestTiming {
         let accumulated_time = self.aggregate_cumulative_time();
         let m = |str: &str| *accumulated_time.get(str).unwrap_or(&Duration::ZERO);
@@ -140,6 +148,7 @@ pub struct PerformanceStoringTracingSubscriber {
 }
 
 impl PerformanceStoringTracingSubscriber {
+    #[must_use]
     pub fn new(storage: Arc<PerformanceStorage>) -> Self {
         PerformanceStoringTracingSubscriber { storage }
     }

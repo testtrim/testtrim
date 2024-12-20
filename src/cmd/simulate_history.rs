@@ -13,6 +13,7 @@ use anyhow::Result;
 use log::{error, info, trace, warn};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tracing::instrument::WithSubscriber;
 
 use crate::{
     cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
@@ -248,7 +249,7 @@ where
     let start_instant = Instant::now();
 
     trace!("beginning run test subcommand");
-    let run_tests_result = tracing::subscriber::with_default(my_subscriber, async || {
+    let run_tests_result = async {
         run_tests::<_, _, _, _, _, _, TP>(
             GetTestIdentifierMode::Relevant,
             scm,
@@ -258,7 +259,8 @@ where
             coverage_db,
         )
         .await
-    })
+    }
+    .with_subscriber(my_subscriber)
     .await;
 
     let total_time = Instant::now().duration_since(start_instant);
