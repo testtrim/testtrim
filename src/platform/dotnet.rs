@@ -26,6 +26,7 @@ use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
+use crate::network::NetworkDependency;
 
 use super::dotnet_cobertura::Coverage;
 use super::util::spawn_limited_concurrency;
@@ -69,6 +70,14 @@ pub struct DotnetPackageDependency {
 }
 
 impl CoverageIdentifier for DotnetCoverageIdentifier {}
+
+impl TryFrom<DotnetCoverageIdentifier> for NetworkDependency {
+    type Error = &'static str;
+
+    fn try_from(_value: DotnetCoverageIdentifier) -> std::result::Result<Self, Self::Error> {
+        Err("not supported")
+    }
+}
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub struct DotnetConcreteTestIdentifier {
@@ -653,8 +662,10 @@ impl TestPlatform for DotnetTestPlatform {
     ) -> anyhow::Result<
         PlatformSpecificRelevantTestCaseData<DotnetTestIdentifier, DotnetCoverageIdentifier>,
     > {
-        let test_cases: HashMap<DotnetTestIdentifier, Vec<TestReason<DotnetCoverageIdentifier>>> =
-            HashMap::new();
+        let test_cases: HashMap<
+            DotnetTestIdentifier,
+            HashSet<TestReason<DotnetCoverageIdentifier>>,
+        > = HashMap::new();
 
         Ok(PlatformSpecificRelevantTestCaseData {
             additional_test_cases: test_cases,

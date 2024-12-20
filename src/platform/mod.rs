@@ -57,7 +57,7 @@ pub trait TestDiscovery<CTI: ConcreteTestIdentifier<TI>, TI: TestIdentifier> {
     fn map_ti_to_cti(&self, test_identifier: TI) -> Option<CTI>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum TestReason<CI: CoverageIdentifier> {
     NoCoverageMap,
     NewTest,
@@ -69,7 +69,7 @@ pub enum TestReason<CI: CoverageIdentifier> {
 
 pub struct PlatformSpecificRelevantTestCaseData<TI: TestIdentifier, CI: CoverageIdentifier> {
     /// Key data, which additional test cases should be executed
-    pub additional_test_cases: HashMap<TI, Vec<TestReason<CI>>>,
+    pub additional_test_cases: HashMap<TI, HashSet<TestReason<CI>>>,
 
     /// Instrumentation: how many "external dependencies" changed that caused those additional test cases?
     pub external_dependencies_changed: Option<usize>,

@@ -15,6 +15,7 @@
 pub mod cmd;
 pub mod coverage;
 pub mod errors;
+mod network;
 pub mod platform;
 mod schema;
 pub mod scm;

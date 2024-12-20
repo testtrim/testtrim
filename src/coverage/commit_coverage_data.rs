@@ -12,7 +12,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_map_to_array::HashMapToArray;
 
-use crate::platform::TestIdentifier;
+use crate::{network::NetworkDependency, platform::TestIdentifier};
 
 /// `CommitCoverageData` represents the coverage data that could be collected from test execution on a single commit.
 ///
@@ -54,7 +54,10 @@ pub struct FileReference {
     pub target_file: PathBuf,
 }
 
-pub trait CoverageIdentifier: Eq + Hash + Clone + Debug + Serialize + DeserializeOwned {}
+pub trait CoverageIdentifier:
+    Eq + Hash + Clone + Debug + Serialize + DeserializeOwned + TryInto<NetworkDependency>
+{
+}
 
 impl<TI: TestIdentifier, CI: CoverageIdentifier> Default for CommitCoverageData<TI, CI> {
     fn default() -> Self {

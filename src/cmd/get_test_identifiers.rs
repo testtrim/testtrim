@@ -17,6 +17,7 @@ use tracing::instrument;
 use tracing::instrument::WithSubscriber;
 
 use crate::coverage::{create_db_infallible, Tag};
+use crate::network::compute_tests_from_network_accesses;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -132,7 +133,7 @@ pub struct TargetTestCases<
 > {
     // Test discovery and analysis results
     pub all_test_cases: HashSet<CTI>,
-    pub target_test_cases: HashMap<CTI, Vec<TestReason<CI>>>,
+    pub target_test_cases: HashMap<CTI, HashSet<TestReason<CI>>>,
     pub ancestor_commit: Option<Commit>,
 
     // Change discovery results
@@ -172,7 +173,7 @@ where
             all_test_cases: all_test_cases.clone(),
             target_test_cases: all_test_cases
                 .iter()
-                .map(|tc| (tc.clone(), vec![TestReason::NoCoverageMap]))
+                .map(|tc| (tc.clone(), HashSet::from([TestReason::NoCoverageMap])))
                 .collect(),
             ancestor_commit: None,
             files_changed: None,
@@ -202,7 +203,7 @@ where
             all_test_cases: all_test_cases.clone(),
             target_test_cases: all_test_cases
                 .iter()
-                .map(|tc| (tc.clone(), vec![TestReason::NoCoverageMap]))
+                .map(|tc| (tc.clone(), HashSet::from([TestReason::NoCoverageMap])))
                 .collect(),
             ancestor_commit: None,
             files_changed: None,
@@ -229,6 +230,12 @@ where
         &coverage_data,
     )?;
     for (ti, reasons) in platform_specific.additional_test_cases {
+        relevant_test_cases.entry(ti).or_default().extend(reasons);
+    }
+
+    for (ti, reasons) in
+        compute_tests_from_network_accesses::<TP>(&coverage_data, &all_test_identifiers)
+    {
         relevant_test_cases.entry(ti).or_default().extend(reasons);
     }
 
@@ -342,7 +349,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     eval_target_changed_files: &HashSet<PathBuf>,
     coverage_data: &FullCoverageData<TI, CI>,
-) -> Result<HashMap<TI, Vec<TestReason<CI>>>> {
+) -> Result<HashMap<TI, HashSet<TestReason<CI>>>> {
     let mut retval = HashMap::new();
 
     compute_all_new_test_cases(eval_target_test_cases, coverage_data, &mut retval);
@@ -378,7 +385,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
 fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     coverage_data: &FullCoverageData<TI, CI>,
-    retval: &mut HashMap<TI, Vec<TestReason<CI>>>,
+    retval: &mut HashMap<TI, HashSet<TestReason<CI>>>,
 ) {
     for tc in eval_target_test_cases {
         if !coverage_data.all_tests().contains(tc) {
@@ -386,7 +393,7 @@ fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
             retval
                 .entry(tc.clone())
                 .or_default()
-                .push(TestReason::NewTest);
+                .insert(TestReason::NewTest);
         }
     }
 }
@@ -395,7 +402,7 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     eval_target_test_cases: &HashSet<TI>,
     changed_file: &PathBuf,
     coverage_data: &FullCoverageData<TI, CI>,
-    retval: &mut HashMap<TI, Vec<TestReason<CI>>>,
+    retval: &mut HashMap<TI, HashSet<TestReason<CI>>>,
     recurse_ignore_files: &mut HashSet<PathBuf>,
     override_reason: Option<&TestReason<CI>>,
 ) -> Result<()> {
@@ -412,7 +419,10 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
             // then we can't run it anymore; typically happens when a test case is removed.
             if eval_target_test_cases.contains(test) {
                 debug!("marked!");
-                retval.entry(test.clone()).or_default().push(reason.clone());
+                retval
+                    .entry(test.clone())
+                    .or_default()
+                    .insert(reason.clone());
             }
         }
     }

@@ -33,6 +33,7 @@ use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
+use crate::network::NetworkDependency;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::UnifiedSocketAddr;
 use crate::sys_trace::SysTraceCommand as _;
@@ -76,6 +77,18 @@ pub enum RustCoverageIdentifier {
 }
 
 impl CoverageIdentifier for RustCoverageIdentifier {}
+
+impl TryFrom<RustCoverageIdentifier> for NetworkDependency {
+    type Error = &'static str;
+
+    #[allow(clippy::match_wildcard_for_single_variants)] // really unlikely that new variations will match
+    fn try_from(value: RustCoverageIdentifier) -> std::result::Result<Self, Self::Error> {
+        match value {
+            RustCoverageIdentifier::NetworkDependency(socket) => Ok(Self { socket }),
+            _ => Err("not supported"),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct RustPackageDependency {
@@ -167,7 +180,7 @@ impl RustTestPlatform {
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
-        test_cases: &mut HashMap<RustTestIdentifier, Vec<TestReason<RustCoverageIdentifier>>>,
+        test_cases: &mut HashMap<RustTestIdentifier, HashSet<TestReason<RustCoverageIdentifier>>>,
     ) -> Result<usize> {
         // I think there might be plausible cases where Cargo.lock loading from the previous commit would fail, but we
         // wouldn't want to error out... for example, if Cargo.lock was added since the ancestor commit?.  But I'm not
@@ -234,10 +247,9 @@ impl RustTestPlatform {
                     for test in tests {
                         if eval_target_test_cases.contains(test) {
                             debug!("test {test:?} needs rerun");
-                            test_cases
-                                .entry(test.clone())
-                                .or_default()
-                                .push(TestReason::CoverageIdentifier(coverage_identifier.clone()));
+                            test_cases.entry(test.clone()).or_default().insert(
+                                TestReason::CoverageIdentifier(coverage_identifier.clone()),
+                            );
                         }
                     }
                 }
@@ -678,8 +690,10 @@ impl TestPlatform for RustTestPlatform {
         coverage_data: &FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
     ) -> Result<PlatformSpecificRelevantTestCaseData<RustTestIdentifier, RustCoverageIdentifier>>
     {
-        let mut test_cases: HashMap<RustTestIdentifier, Vec<TestReason<RustCoverageIdentifier>>> =
-            HashMap::new();
+        let mut test_cases: HashMap<
+            RustTestIdentifier,
+            HashSet<TestReason<RustCoverageIdentifier>>,
+        > = HashMap::new();
 
         let mut external_dependencies_changed = None;
         // FIXME: I'm not confident that this check is right -- could there be multiple lock files in a realistic repo?
@@ -692,19 +706,6 @@ impl TestPlatform for RustTestPlatform {
                 coverage_data,
                 &mut test_cases,
             )?);
-        }
-
-        for ci in coverage_data.coverage_identifier_to_test_map() {
-            if let (RustCoverageIdentifier::NetworkDependency(_sockaddr), tests) = ci {
-                for test in tests {
-                    if eval_target_test_cases.contains(test) {
-                        test_cases
-                            .entry(test.clone())
-                            .or_default()
-                            .push(TestReason::CoverageIdentifier(ci.0.clone()));
-                    }
-                }
-            }
         }
 
         Ok(PlatformSpecificRelevantTestCaseData {

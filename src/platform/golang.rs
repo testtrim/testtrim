@@ -29,6 +29,7 @@ use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
+use crate::network::NetworkDependency;
 use crate::platform::util::normalize_path;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::{Trace, UnifiedSocketAddr};
@@ -68,6 +69,18 @@ pub enum GolangCoverageIdentifier {
 }
 
 impl CoverageIdentifier for GolangCoverageIdentifier {}
+
+impl TryFrom<GolangCoverageIdentifier> for NetworkDependency {
+    type Error = &'static str;
+
+    #[allow(clippy::match_wildcard_for_single_variants)] // really unlikely that new variations will match
+    fn try_from(value: GolangCoverageIdentifier) -> std::result::Result<Self, Self::Error> {
+        match value {
+            GolangCoverageIdentifier::NetworkDependency(socket) => Ok(Self { socket }),
+            _ => Err("not supported"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct GolangConcreteTestIdentifier {
@@ -716,7 +729,10 @@ impl GolangTestPlatform {
         scm: &MyScm,
         ancestor_commit: &Commit,
         coverage_data: &FullCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
-        test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+        test_cases: &mut HashMap<
+            GolangTestIdentifier,
+            HashSet<TestReason<GolangCoverageIdentifier>>,
+        >,
     ) -> Result<usize> {
         // I think there might be plausible cases where Cargo.lock loading from the previous commit would fail, but we
         // wouldn't want to error out... for example, if Cargo.lock was added since the ancestor commit?.  But I'm not
@@ -801,7 +817,7 @@ impl GolangTestPlatform {
                             for test in tests {
                                 if eval_target_test_cases.contains(test) {
                                     debug!("test {test:?} needs rerun");
-                                    test_cases.entry(test.clone()).or_default().push(
+                                    test_cases.entry(test.clone()).or_default().insert(
                                         TestReason::CoverageIdentifier(coverage_identifier.clone()),
                                     );
                                 }
@@ -818,7 +834,10 @@ impl GolangTestPlatform {
     fn guess_tests_from_test_file_changed(
         file: &Path,
         all_test_cases: &HashSet<GolangTestIdentifier>,
-        test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+        test_cases: &mut HashMap<
+            GolangTestIdentifier,
+            HashSet<TestReason<GolangCoverageIdentifier>>,
+        >,
         source_reason: &TestReason<GolangCoverageIdentifier>,
     ) -> Result<()> {
         if !fs::exists(file)? {
@@ -853,7 +872,7 @@ impl GolangTestPlatform {
                     test_cases
                         .entry(tc.clone())
                         .or_default()
-                        .push(TestReason::SideEffect(
+                        .insert(TestReason::SideEffect(
                             // Because this happened... probably a FileChanged...
                             Box::new(source_reason.clone()),
                             // We did this inference and found this test case should be run.
@@ -877,7 +896,10 @@ impl GolangTestPlatform {
         changed_file: &PathBuf,
         coverage_data: &FullCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
         eval_target_test_cases: &HashSet<GolangTestIdentifier>,
-        test_cases: &mut HashMap<GolangTestIdentifier, Vec<TestReason<GolangCoverageIdentifier>>>,
+        test_cases: &mut HashMap<
+            GolangTestIdentifier,
+            HashSet<TestReason<GolangCoverageIdentifier>>,
+        >,
         prevent_recursive: &mut HashSet<PathBuf>,
         override_reason: Option<&TestReason<GolangCoverageIdentifier>>,
     ) -> Result<()> {
@@ -1139,7 +1161,7 @@ impl TestPlatform for GolangTestPlatform {
     {
         let mut test_cases: HashMap<
             GolangTestIdentifier,
-            Vec<TestReason<GolangCoverageIdentifier>>,
+            HashSet<TestReason<GolangCoverageIdentifier>>,
         > = HashMap::new();
 
         let mut external_dependencies_changed = None;
@@ -1163,19 +1185,6 @@ impl TestPlatform for GolangTestPlatform {
                 &mut prevent_recursive,
                 None,
             )?;
-        }
-
-        for ci in coverage_data.coverage_identifier_to_test_map() {
-            if let (GolangCoverageIdentifier::NetworkDependency(_sockaddr), tests) = ci {
-                for test in tests {
-                    if eval_target_test_cases.contains(test) {
-                        test_cases
-                            .entry(test.clone())
-                            .or_default()
-                            .push(TestReason::CoverageIdentifier(ci.0.clone()));
-                    }
-                }
-            }
         }
 
         Ok(PlatformSpecificRelevantTestCaseData {
