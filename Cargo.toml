@@ -25,6 +25,7 @@ diesel_migrations = "2.2.0"
 enum_dispatch = "0.3.13"
 glob = "0.3.1"
 gomod-rs = "0.1.1"
+ipnet = { version = "2.10.1", features = ["serde"] }
 lazy_static = "1.5.0"
 llvm_profparser = "0.7.0"
 log = "0.4.22"
@@ -42,6 +43,7 @@ tempdir = "0.3.7"
 thiserror = "2.0.0"
 time = "0.3.37"
 tokio = { version = "1.42.0", features = ["rt", "rt-multi-thread", "macros", "process"] }
+toml = "0.8.19"
 tracing = "0.1.41"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["v4"] }

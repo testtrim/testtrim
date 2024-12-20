@@ -63,6 +63,7 @@ pub enum TestReason<CI: CoverageIdentifier> {
     NewTest,
     FileChanged(PathBuf),
     CoverageIdentifier(CI),
+    NetworkPolicy(String),
     // This is reason 0 caused reason 1 -- for example, changing "file a" caused "file b" to be considered change.
     SideEffect(Box<TestReason<CI>>, Box<TestReason<CI>>),
 }

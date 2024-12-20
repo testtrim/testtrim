@@ -18,6 +18,7 @@ use tracing::instrument::WithSubscriber;
 
 use crate::coverage::{create_db_infallible, Tag};
 use crate::network::compute_tests_from_network_accesses;
+use crate::repo_config::get_repo_config;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
@@ -233,10 +234,17 @@ where
         relevant_test_cases.entry(ti).or_default().extend(reasons);
     }
 
-    for (ti, reasons) in
-        compute_tests_from_network_accesses::<TP>(&coverage_data, &all_test_identifiers)
-    {
-        relevant_test_cases.entry(ti).or_default().extend(reasons);
+    let repo_config = get_repo_config()?;
+
+    for (ti, reasons) in compute_tests_from_network_accesses::<TP>(
+        &coverage_data,
+        repo_config.network_policy(),
+        &changed_files,
+    ) {
+        if all_test_identifiers.contains(&ti) {
+            // ignore deleted tests
+            relevant_test_cases.entry(ti).or_default().extend(reasons);
+        }
     }
 
     debug!("relevant_test_cases: {:?}", relevant_test_cases);

@@ -37,7 +37,9 @@ Some tests might embed local files during their compile; in Rust, using the `inc
 
 ### Network Access
 
-The long-term goal of testtrim is to work with tests that require network services via distributed tracing using OpenTelemetry.  Presently this capability is on the drawing board only.
+The long-term goal of testtrim is to work with tests that require network services via distributed tracing using OpenTelemetry, in a complicated dance of figuring out whether external dependencies have changed by understanding them in depth.  Presently this capability is on the drawing board only.
+
+testtrim does detect access to external processes through the network.  It's default behavior is that any test that touches the network will always be rerun on a future commit, but [this can be configured](#network-configuration) to meet a variety of needs.
 
 ### Tags & Platforms
 
@@ -194,6 +196,154 @@ Oh, well, I'm not quite sure I'd recommend that right now.  But it could be fun 
 
 - Note that testtrim will by-default store coverage data in `$XDG_CACHE_HOME/testtrim/testtrim.db`, or `$HOME/.cache` if `$XDG_CACHE_HOME` is undefined; or uses a PostgreSQL database defined at the environment variable `TESTTRIM_DATABASE_URL`.  This data allows testtrim to make determinations on what tests need to be executed for future changes.
 
+## Network Configuration
+
+By default, every time a test accesses the network it will be assumed that on future commits the test will need to be rerun in order to continue to verify its assertions hold true.  This is a conservative choice aimed at never missing a regression; if the test accessed the network then testtrim assumes it might test something that could have changed since last run.
+
+However, there are a few common cases where this assumption isn't the case and you might want to change the behavior.  testtrim supports reading a `.config/testtrim.toml` file from the source repo and tweaking its network behavior based upon that.
+
+It is important to remember that network detection builds on top of code-coverage testing; it doesn't replace it.  When code is changed that affects a test it will always rerun related tests regardless of the network configured rules.
+
+The starting point for evaluating what network configuration rules are required in your project is:
+
+1. Run `testtrim run-tests --source-mode=clean-commit` on your repo.
+
+    `--source-mode=clean-commit` indicates to testtrim that you expect this test run to be on a clean repo, generating a coverage record for this run.  If the repo isn't clean, the command will fail.
+
+    If no coverage record is available, we won't be able to identify what tests access the network.  But if you've already run testtrim and saved a coverage record, this isn't needed.
+
+2. Run `testtrim get-test-identifiers`:
+
+    Example output:
+    ```
+    RustTestIdentifier { test_src_path: "src/lib.rs", test_name: "network::tests::test_tcp_connection_to_google" }
+        CoverageIdentifier(NetworkDependency(Inet([2607:f8b0:400a:800::200e]:80)))
+        CoverageIdentifier(NetworkDependency(Unix("/var/run/nscd/socket" (pathname))))
+        CoverageIdentifier(NetworkDependency(Inet([2607:f8b0:400a:800::200e]:0)))
+        CoverageIdentifier(NetworkDependency(Inet(142.251.215.238:0)))
+    ```
+
+    This will output every test that testtrim believes needs to be run, and indented after the test **why** testtrim believes the test needs to be run.  In this example, it is indicating that the test made four network connections -- two connections to `2607:f8b0:400a:800::200e`, one to `142.251.215.238`, and one to the Unix socket `/var/run/nscd/socket`.
+
+3. Evaluate each test and determine the desired behavior.
+
+    This typically falls into these categories:
+    - The network connection is related to the subject under test, but it needs to be rerun only when another file changes.  Create a `network-policy` that matches it and set `apply.run-if-files-changed`.
+    - The network connection is related to the subject under test, and it is desirable that the test always be run to ensure the test assertions are correct.  Don't do anything; that's the default behavior.
+    - The network connection is internal, unexpected, or unrelated to the subject under test.  Create a `network-policy` that matches it and set `apply = "ignore"` on the policy so that the test is not always run.
+
+Here are some real-world examples of network configuration:
+
+### Internal Networking
+
+If a test does internal networking -- for example, starting up a network server itself, and then connecting to it as part of test assertions -- it would make perfect sense to ignore this network access completely.
+
+testtrim itself has a couple examples of this.
+1. Within its remote API tests, it needs to make HTTP requests to a test server which it starts itself.
+2. When running .NET builds, the `dotnet` subprocess uses sockets for interprocess communication.
+
+To prevent tests that do this from rerunning all the time, you can selectively disable network access from triggering tests by identifying the network access that is safe and creating an "ignore" policy for it.  The below policy stored into `.config/testtrim.toml` would ignore access to a localhost port range where a test server might run, for example.  (See [config file reference](#config-file-reference) for more detail on options)
+
+```toml
+[[network-policy]]
+name = "local test server"
+apply = "ignore"
+[[network-policy.match]]
+address-port-range = ["127.0.0.1/32", "8000-8100"]
+```
+
+### Network Related Changes
+
+Another case where network access will commonly occur during tests is when you integrate with a database server.  In this case, you might want to selectively run tests only if related code files have changed.
+
+testtrim itself has an example of this; its PostgreSQL coverage database module runs against a live PostgreSQL database server.  Even though these tests touch the network in order to reach PostgreSQL, they do not need to be rerun every time testtrim is tested.  Instead, we can configure a policy to rerun these tests when there are other indications that their behavior might be affected:
+1. If the PostgreSQL schema has been changed,
+2. Or if the test environment has been changed,
+3. (Or if the code for the module or tests has been changed -- but this is automatic with the code coverage checks).
+
+The below policy stored into `.config/testtrim.toml` would ignore access to PostgreSQL during the tests unless the schema or test environment is changed:  (See [config file reference](#config-file-reference) for more detail on options)
+
+```toml
+[[network-policy]]
+name = "PostgreSQL access"
+apply.run-if-files-changed = [
+    ".forgejo/workflows/rust-check.yaml",
+    "db/postgres/*.sql",
+]
+[[network-policy.match]]
+port = 5432
+```
+
+### Change Defaults
+
+If you wanted to change the default behavior of running any test that touched the network, you could also ignore all network access.
+
+```toml
+[[network-policy]]
+name = "all network access"
+apply = 'ignore'
+[[network-policy.match]]
+unix-socket = "**"
+[[network-policy.match]]
+address = "0.0.0.0/0"
+[[network-policy.match]]
+address = "::/0"
+```
+
+# Config File Reference
+
+The config file must be found within the repository under test at the location `config/testtrim.toml`.
+
+## network-policy
+
+One or more network-policy tables can exist in the file, which must contain:
+
+- `name` -- the name of the policy.  This will appear in the output of the `get-test-identifiers` subcommand and various debug logs to help identify the impact of the policy.
+- `apply` -- the outcome of the policy.  If a test performed network access that matched the policy, then the `apply` value is evaluated and...
+    - `ignore` -- will cause that network access to be ignored.
+    - `run-always` -- will cause this network access to run this test.  This overrides any other ignores that might be present, allowing you to define broad ignore rules and then enable specific network access to be rerun.
+    - `run-if-files-changed` -- will cause this network access to run this test *if* one-or-more files has been changed.  The value of `run-if-files-changed` must be an array of paths, which can contain `**` (wildcard) and `*` (wildcard within directory) wildcards.
+- `match` -- one or more match policies which are evaluated against the network access to see if the policy should be applied.  `match` can contain one of:
+    - `unix_socket` -- path to a unix socket, which can contain `**` (wildcard) and `*` (wildcard within directory) wildcards.
+    - `port` -- a single network port; all addresses will match.
+    - `address` -- an IPv4 or IPv6 subnet CIDR (eg. `10.0.0.0/8`, `192.168.1.0/24`, `127.0.0.1/32`, `::1/128`); all ports will match.
+    - `port-range` -- an inclusive range of network ports, eg. `"8000-8100"`; all addresses will match.  Note that this range must be quoted otherwise the TOML parser will believe it is a number and fail.
+    - `address-port` -- an array of an address and a port, eg. `["127.0.0.1/32", 8080]`
+    - `address-port-range` -- an address of an address and port range, eg. `["127.0.0.1/32", "8085-8086"]`
+
+Here is a complete config file showing all available options (although having little logical meaning; see [Network Configuration](#network-configuration) for an explanation of plausible real-world configurations:
+
+```toml
+[[network-policy]]
+name = "DNS access" # used to report test reasons in get-test-identifiers
+apply = 'run-always'
+[[network-policy.match]]
+unix-socket = "/var/run/nscd/socket"
+[[network-policy.match]]
+port = 53
+
+[[network-policy]]
+name = "internal test servers"
+apply = 'ignore'
+[[network-policy.match]]
+port-range = "16384-32768"
+[[network-policy.match]]
+address = "10.0.0.0/8"
+[[network-policy.match]]
+address = "::1/128"
+[[network-policy.match]]
+address-port = ["127.0.0.1/32", 8080]
+[[network-policy.match]]
+address-port-range = ["127.0.0.1/32", "8085-8086"]
+
+[[network-policy]]
+name = "PostgreSQL server"
+apply.run-if-files-changed = [
+    "db/postgres/*.sql",
+]
+[[network-policy.match]]
+port = 5432
+```
 
 # Development
 

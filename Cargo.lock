@@ -2013,6 +2013,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnet"
+version = "2.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3626,6 +3635,7 @@ dependencies = [
  "enum_dispatch",
  "glob",
  "gomod-rs",
+ "ipnet",
  "lazy_static",
  "llvm_profparser",
  "log",
@@ -3644,6 +3654,7 @@ dependencies = [
  "thiserror 2.0.8",
  "time 0.3.37",
  "tokio",
+ "toml",
  "tracing",
  "url",
  "uuid",
