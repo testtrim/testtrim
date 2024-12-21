@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     ops::RangeInclusive,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use ipnet::IpNet;
@@ -139,7 +139,7 @@ fn check_policy_match(network_dependency: &NetworkDependency, policy: &PolicyMat
     match network_dependency.socket {
         UnifiedSocketAddr::Unix(ref nd) => match policy {
             PolicyMatch::UnixSocket(ref mtch) => {
-                nd.as_pathname().is_some_and(|path| path == Path::new(mtch))
+                evaluate_glob(mtch, &HashSet::from([nd.clone()])).is_some()
             }
             _ => false,
         },
@@ -268,7 +268,7 @@ mod tests {
     use std::{
         collections::HashSet,
         net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-        path::{Path, PathBuf},
+        path::PathBuf,
         str::FromStr as _,
     };
 
@@ -476,34 +476,24 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn test_match_unix_socket() {
-        let nd = NetworkDependency {
-            socket: UnifiedSocketAddr::Unix(
-                std::os::unix::net::SocketAddr::from_pathname(Path::new("/tmp/socket")).unwrap(),
-            ),
-        };
-        let pm = PolicyMatch::UnixSocket(String::from("/tmp/socket"));
-        assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::UnixSocket(String::from("/tmp/socket2"));
-        assert!(!check_policy_match(&nd, &pm));
-
-        // FIXME: wildcard
-    }
-
-    #[test]
-    #[cfg(not(unix))]
     fn test_match_unix_socket() {
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Unix(PathBuf::from("/tmp/socket")),
         };
         let pm = PolicyMatch::UnixSocket(String::from("/tmp/socket"));
         assert!(check_policy_match(&nd, &pm));
-
         let pm = PolicyMatch::UnixSocket(String::from("/tmp/socket2"));
         assert!(!check_policy_match(&nd, &pm));
 
-        // FIXME: wildcard
+        let nd = NetworkDependency {
+            socket: UnifiedSocketAddr::Unix(PathBuf::from("/tmp/dir/socket")),
+        };
+        let pm = PolicyMatch::UnixSocket(String::from("/**/*"));
+        assert!(check_policy_match(&nd, &pm));
+        let pm = PolicyMatch::UnixSocket(String::from("/tmp/dir/sock*"));
+        assert!(check_policy_match(&nd, &pm));
+        let pm = PolicyMatch::UnixSocket(String::from("/var/run/*"));
+        assert!(!check_policy_match(&nd, &pm));
     }
 
     #[test]
@@ -816,7 +806,7 @@ mod tests {
 
         // default case; a network access that isn't part of the policy
         let test1_network_ci = RustCoverageIdentifier::NetworkDependency(UnifiedSocketAddr::Unix(
-            std::os::unix::net::SocketAddr::from_pathname(Path::new("/tmp/socket")).unwrap(),
+            PathBuf::from("/tmp/socket"),
         ));
         coverage_data.add_heuristic_coverage_to_test(test1.clone(), test1_network_ci.clone());
 

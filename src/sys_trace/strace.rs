@@ -337,9 +337,7 @@ impl STraceSysTraceCommand {
         connect.captures(trace).and_then(|cap| {
             #[allow(clippy::manual_map)] // more extensible with current pattern
             let socket_addr = if let Some(unix_path) = cap.name("unix_path") {
-                Some(UnifiedSocketAddr::Unix(
-                    std::os::unix::net::SocketAddr::from_pathname(unix_path.as_str()).unwrap(),
-                ))
+                Some(UnifiedSocketAddr::Unix(PathBuf::from(unix_path.as_str())))
             } else if let Some(sin6_addr) = cap.name("sin6_addr") {
                 let port = u16::from_str(&cap["sin6_port"]).unwrap();
                 if port == 0 {
@@ -844,9 +842,7 @@ mod tests {
         assert_eq!(
             res,
             Some(ConnectParse::IndeterminateResult {
-                socket_addr: UnifiedSocketAddr::Unix(
-                    std::os::unix::net::SocketAddr::from_pathname("/var/run/nscd/socket").unwrap(),
-                ),
+                socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
             })
         );
 
@@ -983,9 +979,9 @@ mod tests {
 
         let sockets = trace.get_connect_sockets();
 
-        assert!(sockets.contains(&UnifiedSocketAddr::Unix(
-            std::os::unix::net::SocketAddr::from_pathname("/var/run/nscd/socket").unwrap(),
-        )));
+        assert!(sockets.contains(&UnifiedSocketAddr::Unix(PathBuf::from(
+            "/var/run/nscd/socket"
+        ))));
 
         assert!(
             sockets.contains(&UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(

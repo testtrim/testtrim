@@ -2,165 +2,18 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{collections::HashSet, fmt, hash::Hash, path::PathBuf};
+use std::{collections::HashSet, hash::Hash, path::PathBuf};
 
-use serde::{
-    de::{self, MapAccess, Visitor},
-    ser::SerializeStruct,
-    Deserialize, Deserializer, Serialize,
-};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum UnifiedSocketAddr {
     Inet(std::net::SocketAddr),
 
-    #[cfg(unix)]
-    Unix(std::os::unix::net::SocketAddr),
-    // In order to support deserialization of this type, when using a shared testtrim DB with someone on another
-    // platform, we still put Unix socket types in here, but just not as a SocketAddr...
-    #[cfg(not(unix))]
+    // Because unix::net::SocketAddr is only buildable on Unix (even though we might need to deserialize this data on
+    // another platform), and, we don't really *use* the SocketAddr (eg. for connecting), the Unix version of this enum
+    // just keeps a PathBuf.
     Unix(PathBuf),
-}
-
-impl PartialEq for UnifiedSocketAddr {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Inet(l0), Self::Inet(r0)) => l0 == r0,
-            #[cfg(unix)]
-            (Self::Unix(l0), Self::Unix(r0)) => {
-                if let Some(lpath) = l0.as_pathname()
-                    && let Some(rpath) = r0.as_pathname()
-                {
-                    return lpath == rpath;
-                }
-                false // assuming all unnamed sockets are also not the same as each other
-            }
-            #[cfg(not(unix))]
-            (Self::Unix(l0), Self::Unix(r0)) => l0 == r0,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for UnifiedSocketAddr {}
-
-impl Hash for UnifiedSocketAddr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            UnifiedSocketAddr::Inet(addr) => addr.hash(state),
-            #[cfg(unix)]
-            UnifiedSocketAddr::Unix(addr) => {
-                if let Some(path) = addr.as_pathname() {
-                    path.hash(state);
-                } else {
-                    state.write(&[0, 1, 2, 3]);
-                }
-            }
-            #[cfg(not(unix))]
-            UnifiedSocketAddr::Unix(addr) => addr.hash(state),
-        }
-    }
-}
-
-impl Serialize for UnifiedSocketAddr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("UnifiedSocketAddr", 2)?;
-        match *self {
-            UnifiedSocketAddr::Inet(ref addr) => {
-                state.serialize_field("type", "Inet")?;
-                state.serialize_field("addr", &addr.to_string())?;
-            }
-            #[cfg(unix)]
-            UnifiedSocketAddr::Unix(ref addr) => {
-                state.serialize_field("type", "Unix")?;
-                state.serialize_field(
-                    "addr",
-                    addr.as_pathname()
-                        .ok_or_else(|| {
-                            serde::ser::Error::custom("Failed to serialize Unix socket address")
-                        })?
-                        .to_str()
-                        .ok_or_else(|| serde::ser::Error::custom("Non-UTF8 Unix socket path"))?,
-                )?;
-            }
-            #[cfg(not(unix))]
-            UnifiedSocketAddr::Unix(ref addr) => {
-                state.serialize_field("type", "Unix")?;
-                state.serialize_field("addr", &addr.to_string_lossy())?;
-            }
-        }
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for UnifiedSocketAddr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct UnifiedSocketAddrVisitor;
-
-        impl<'de> Visitor<'de> for UnifiedSocketAddrVisitor {
-            type Value = UnifiedSocketAddr;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a struct representing a UnifiedSocketAddr")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
-                let mut addr_type: Option<String> = None;
-                let mut addr: Option<String> = None;
-
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "type" => {
-                            addr_type = Some(map.next_value()?);
-                        }
-                        "addr" => {
-                            addr = Some(map.next_value()?);
-                        }
-                        _ => return Err(de::Error::unknown_field(&key, &["type", "addr"])),
-                    }
-                }
-                let addr_type = addr_type.ok_or_else(|| de::Error::missing_field("type"))?;
-                let addr = addr.ok_or_else(|| de::Error::missing_field("addr"))?;
-
-                match addr_type.as_str() {
-                    "Inet" => {
-                        let inet_addr = addr.parse().map_err(de::Error::custom)?;
-                        Ok(UnifiedSocketAddr::Inet(inet_addr))
-                    }
-                    "Unix" => {
-                        #[cfg(unix)]
-                        {
-                            let unix_addr =
-                                std::os::unix::net::SocketAddr::from_pathname(PathBuf::from(addr))
-                                    .map_err(|_| de::Error::custom("Invalid Unix socket path"))?;
-                            Ok(UnifiedSocketAddr::Unix(unix_addr))
-                        }
-                        #[cfg(not(unix))]
-                        {
-                            let unix_addr = PathBuf::from(addr);
-                            Ok(UnifiedSocketAddr::Unix(unix_addr))
-                        }
-                    }
-                    _ => Err(de::Error::custom("unknown addr type")),
-                }
-            }
-        }
-
-        deserializer.deserialize_struct(
-            "UnifiedSocketAddr",
-            &["type", "addr"],
-            UnifiedSocketAddrVisitor,
-        )
-    }
 }
 
 pub struct Trace {
