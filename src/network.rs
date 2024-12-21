@@ -5,7 +5,7 @@
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
-    ops::Range,
+    ops::RangeInclusive,
     path::{Path, PathBuf},
 };
 
@@ -47,7 +47,7 @@ enum PolicyMatch {
     /// Matches network access on a specific port, regardless of the IP address used.
     Port(u16),
     /// Matches network access on a range of ports (eg. 1000-2000), inclusive, regardless of the IP address used.
-    PortRange(#[serde(deserialize_with = "inline_range")] Range<u16>),
+    PortRange(#[serde(deserialize_with = "inline_range")] RangeInclusive<u16>),
     /// Matches network access on subnet (eg. 127.0.0.1/32, 10.0.0.0/8), regardless of the port used.
     Address(IpNet),
     /// Matches network access on subnet (eg. 127.0.0.1/32, 10.0.0.0/8) and specific network port.
@@ -55,7 +55,7 @@ enum PolicyMatch {
     /// Matches network access on subnet (eg. 127.0.0.1/32, 10.0.0.0/8) and range of ports (eg. 1000-2000), inclusive.
     AddressPortRange(
         IpNet,
-        #[serde(deserialize_with = "inline_range")] Range<u16>,
+        #[serde(deserialize_with = "inline_range")] RangeInclusive<u16>,
     ),
 }
 
@@ -168,10 +168,24 @@ fn check_policy_match(network_dependency: &NetworkDependency, policy: &PolicyMat
             PolicyMatch::AddressPortRange(IpNet::V6(ref v6_subnet), ref port_range) => {
                 v6_subnet.contains(v6.ip()) && port_range.contains(&v6.port())
             }
-            PolicyMatch::Address(IpNet::V4(_))
-            | PolicyMatch::AddressPort(IpNet::V4(_), _)
-            | PolicyMatch::AddressPortRange(IpNet::V4(_), _)
-            | PolicyMatch::UnixSocket(_) => false,
+            // v6 could be an IPv4 Mapped address, and if so we match it to IPv4 policies as well:
+            PolicyMatch::Address(IpNet::V4(ref v4_subnet)) => v6
+                .ip()
+                .to_ipv4_mapped()
+                .is_some_and(|v4| v4_subnet.contains(&v4)),
+            PolicyMatch::AddressPort(IpNet::V4(ref v4_subnet), ref port) => {
+                v6.ip()
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| v4_subnet.contains(&v4))
+                    && v6.port() == *port
+            }
+            PolicyMatch::AddressPortRange(IpNet::V4(ref v4_subnet), ref port_range) => {
+                v6.ip()
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| v4_subnet.contains(&v4))
+                    && port_range.contains(&v6.port())
+            }
+            PolicyMatch::UnixSocket(_) => false,
         },
     }
 }
@@ -254,7 +268,6 @@ mod tests {
     use std::{
         collections::HashSet,
         net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-        ops::Range,
         path::{Path, PathBuf},
         str::FromStr as _,
     };
@@ -309,6 +322,8 @@ mod tests {
                 address-port = ["127.0.0.1/32", 8080]
                 [[network-policy.match]]
                 address-port-range = ["127.0.0.1/32", "8085-8086"]
+                [[network-policy.match]]
+                port-range = "1024-65535"
 
                 [[network-policy]]
                 name = "PostgreSQL server"
@@ -342,8 +357,8 @@ mod tests {
         let PolicyMatch::PortRange(ref port_range) = &policy.match_rules[0] else {
             panic!("expected match_rules[0] to be PortRange");
         };
-        assert_eq!(port_range.start, 16384);
-        assert_eq!(port_range.end, 32769);
+        assert_eq!(*port_range.start(), 16384);
+        assert_eq!(*port_range.end(), 32768);
 
         let PolicyMatch::Address(ref address) = &policy.match_rules[1] else {
             panic!("expected match_rules[1] to be Address");
@@ -355,6 +370,7 @@ mod tests {
             address_ip4,
             &Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap()
         );
+
         let PolicyMatch::Address(ref address) = &policy.match_rules[2] else {
             panic!("expected match_rules[2] to be Address");
         };
@@ -365,6 +381,7 @@ mod tests {
             address_ip6,
             &Ipv6Net::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 128).unwrap()
         );
+
         let PolicyMatch::AddressPort(ref address, ref port) = &policy.match_rules[3] else {
             panic!("expected match_rules[3] to be AddressPort");
         };
@@ -376,6 +393,7 @@ mod tests {
             &Ipv4Net::new(Ipv4Addr::new(127, 0, 0, 1), 32).unwrap()
         );
         assert_eq!(port, &8080);
+
         let PolicyMatch::AddressPortRange(ref address, ref port_range) = &policy.match_rules[4]
         else {
             panic!("expected match_rules[4] to be AddressPortRange");
@@ -387,8 +405,14 @@ mod tests {
             address_ip4,
             &Ipv4Net::new(Ipv4Addr::new(127, 0, 0, 1), 32).unwrap()
         );
-        assert_eq!(port_range.start, 8085);
-        assert_eq!(port_range.end, 8087);
+        assert_eq!(*port_range.start(), 8085);
+        assert_eq!(*port_range.end(), 8086);
+
+        let PolicyMatch::PortRange(ref port_range) = &policy.match_rules[5] else {
+            panic!("expected match_rules[5] to be PortRange");
+        };
+        assert_eq!(*port_range.start(), 1024);
+        assert_eq!(*port_range.end(), 65535);
 
         let policy = &config.network_policy[2];
         assert_eq!(policy.name, "PostgreSQL server");
@@ -427,51 +451,27 @@ mod tests {
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Inet(create_socket_addr("127.0.0.1", 1500)),
         };
-        let pm = PolicyMatch::PortRange(Range {
-            start: 1000,
-            end: 2000,
-        });
+        let pm = PolicyMatch::PortRange(1000..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::PortRange(Range {
-            start: 1500,
-            end: 2000,
-        });
+        let pm = PolicyMatch::PortRange(1500..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::PortRange(Range {
-            start: 1000,
-            end: 1501,
-        });
+        let pm = PolicyMatch::PortRange(1000..=1501);
         assert!(check_policy_match(&nd, &pm));
 
-        let pm = PolicyMatch::PortRange(Range {
-            start: 0,
-            end: 1024,
-        });
+        let pm = PolicyMatch::PortRange(0..=1024);
         assert!(!check_policy_match(&nd, &pm));
 
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Inet(create_socket_addr("::1", 1500)),
         };
-        let pm = PolicyMatch::PortRange(Range {
-            start: 1000,
-            end: 2000,
-        });
+        let pm = PolicyMatch::PortRange(1000..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::PortRange(Range {
-            start: 1500,
-            end: 2000,
-        });
+        let pm = PolicyMatch::PortRange(1500..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::PortRange(Range {
-            start: 1000,
-            end: 1501,
-        });
+        let pm = PolicyMatch::PortRange(1000..=1501);
         assert!(check_policy_match(&nd, &pm));
 
-        let pm = PolicyMatch::PortRange(Range {
-            start: 0,
-            end: 1024,
-        });
+        let pm = PolicyMatch::PortRange(0..=1024);
         assert!(!check_policy_match(&nd, &pm));
     }
 
@@ -518,6 +518,13 @@ mod tests {
         let pm = PolicyMatch::Address(IpNet::from_str("::/0").unwrap());
         assert!(!check_policy_match(&nd, &pm));
 
+        // If policy is an ipv4 addr, but tracing shows an IPv4 Mapped address, we should still match:
+        let nd = NetworkDependency {
+            socket: UnifiedSocketAddr::Inet(create_socket_addr("::ffff:10.0.0.1", 8080)),
+        };
+        let pm = PolicyMatch::Address(IpNet::from_str("10.0.0.0/8").unwrap());
+        assert!(check_policy_match(&nd, &pm));
+
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Inet(create_socket_addr("2400:4000::1234", 8080)),
         };
@@ -525,6 +532,12 @@ mod tests {
         assert!(check_policy_match(&nd, &pm));
         let pm = PolicyMatch::Address(IpNet::from_str("0000:4000::/21").unwrap());
         assert!(!check_policy_match(&nd, &pm));
+        let pm = PolicyMatch::Address(IpNet::from_str("0.0.0.0/0").unwrap());
+        assert!(!check_policy_match(&nd, &pm));
+
+        let nd = NetworkDependency {
+            socket: UnifiedSocketAddr::Inet(create_socket_addr("::1", 8080)),
+        };
         let pm = PolicyMatch::Address(IpNet::from_str("0.0.0.0/0").unwrap());
         assert!(!check_policy_match(&nd, &pm));
     }
@@ -542,6 +555,13 @@ mod tests {
         assert!(!check_policy_match(&nd, &pm));
         let pm = PolicyMatch::AddressPort(IpNet::from_str("::/0").unwrap(), 8080);
         assert!(!check_policy_match(&nd, &pm));
+
+        // If policy is an ipv4 addr, but tracing shows an IPv4 Mapped address, we should still match:
+        let nd = NetworkDependency {
+            socket: UnifiedSocketAddr::Inet(create_socket_addr("::ffff:10.0.0.1", 8080)),
+        };
+        let pm = PolicyMatch::AddressPort(IpNet::from_str("10.0.0.0/8").unwrap(), 8080);
+        assert!(check_policy_match(&nd, &pm));
 
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Inet(create_socket_addr("::1", 8080)),
@@ -561,107 +581,44 @@ mod tests {
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Inet(create_socket_addr("10.0.0.1", 1500)),
         };
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("10.0.0.0/8").unwrap(),
-            Range {
-                start: 1000,
-                end: 2000,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("10.0.0.0/8").unwrap(), 1000..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("10.0.0.0/8").unwrap(),
-            Range {
-                start: 1500,
-                end: 2000,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("10.0.0.0/8").unwrap(), 1500..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("10.0.0.0/8").unwrap(),
-            Range {
-                start: 1000,
-                end: 1501,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("10.0.0.0/8").unwrap(), 1000..=1501);
         assert!(check_policy_match(&nd, &pm));
 
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("127.0.0.1/32").unwrap(),
-            Range {
-                start: 1000,
-                end: 2000,
-            },
-        );
+        let pm =
+            PolicyMatch::AddressPortRange(IpNet::from_str("127.0.0.1/32").unwrap(), 1000..=2000);
         assert!(!check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("10.0.0.0/8").unwrap(),
-            Range {
-                start: 1501,
-                end: 1500,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("10.0.0.0/8").unwrap(), 1501..=1502);
         assert!(!check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("::/0").unwrap(),
-            Range {
-                start: 1000,
-                end: 2000,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("::/0").unwrap(), 1000..=2000);
         assert!(!check_policy_match(&nd, &pm));
+
+        // If policy is an ipv4 addr, but tracing shows an IPv4 Mapped address, we should still match:
+        let nd = NetworkDependency {
+            socket: UnifiedSocketAddr::Inet(create_socket_addr("::ffff:10.0.0.1", 8080)),
+        };
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("10.0.0.0/8").unwrap(), 8000..=9000);
+        assert!(check_policy_match(&nd, &pm));
 
         let nd = NetworkDependency {
             socket: UnifiedSocketAddr::Inet(create_socket_addr("::1", 1500)),
         };
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("::/0").unwrap(),
-            Range {
-                start: 1000,
-                end: 2000,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("::/0").unwrap(), 1000..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("::/0").unwrap(),
-            Range {
-                start: 1500,
-                end: 2000,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("::/0").unwrap(), 1500..=2000);
         assert!(check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("::/0").unwrap(),
-            Range {
-                start: 1000,
-                end: 1501,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("::/0").unwrap(), 1000..=1501);
         assert!(check_policy_match(&nd, &pm));
 
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("2400:4000::/21").unwrap(),
-            Range {
-                start: 1000,
-                end: 2000,
-            },
-        );
+        let pm =
+            PolicyMatch::AddressPortRange(IpNet::from_str("2400:4000::/21").unwrap(), 1000..=2000);
         assert!(!check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("10.0.0.0/8").unwrap(),
-            Range {
-                start: 1501,
-                end: 1500,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("10.0.0.0/8").unwrap(), 1501..=1502);
         assert!(!check_policy_match(&nd, &pm));
-        let pm = PolicyMatch::AddressPortRange(
-            IpNet::from_str("0.0.0.0/0").unwrap(),
-            Range {
-                start: 1000,
-                end: 2000,
-            },
-        );
+        let pm = PolicyMatch::AddressPortRange(IpNet::from_str("0.0.0.0/0").unwrap(), 1000..=2000);
         assert!(!check_policy_match(&nd, &pm));
     }
 
