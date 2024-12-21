@@ -334,37 +334,49 @@ impl STraceSysTraceCommand {
     }
 
     fn parse_connect(trace: &str) -> Option<ConnectParse> {
-        connect.captures(trace).map(|cap| {
+        connect.captures(trace).and_then(|cap| {
             #[allow(clippy::manual_map)] // more extensible with current pattern
             let socket_addr = if let Some(unix_path) = cap.name("unix_path") {
                 Some(UnifiedSocketAddr::Unix(
                     std::os::unix::net::SocketAddr::from_pathname(unix_path.as_str()).unwrap(),
                 ))
             } else if let Some(sin6_addr) = cap.name("sin6_addr") {
-                Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
-                    std::net::SocketAddrV6::new(
-                        std::net::Ipv6Addr::from_str(sin6_addr.as_str()).unwrap(),
-                        u16::from_str(&cap["sin6_port"]).unwrap(),
-                        u32::from_str(&cap["sin6_flowinfo"]).unwrap(),
-                        u32::from_str(&cap["sin6_scope_id"]).unwrap(),
-                    ),
-                )))
+                let port = u16::from_str(&cap["sin6_port"]).unwrap();
+                if port == 0 {
+                    // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different
+                    // remote endpoints.  As they don't really communicate externally, it makes sense to filter them
+                    // out.
+                    None
+                } else {
+                    Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
+                        std::net::SocketAddrV6::new(
+                            std::net::Ipv6Addr::from_str(sin6_addr.as_str()).unwrap(),
+                            port,
+                            u32::from_str(&cap["sin6_flowinfo"]).unwrap(),
+                            u32::from_str(&cap["sin6_scope_id"]).unwrap(),
+                        ),
+                    )))
+                }
             } else if let Some(sin_addr) = cap.name("sin_addr") {
-                Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
-                    std::net::SocketAddrV4::new(
-                        std::net::Ipv4Addr::from_str(sin_addr.as_str()).unwrap(),
-                        u16::from_str(&cap["sin_port"]).unwrap(),
-                    ),
-                )))
+                let port = u16::from_str(&cap["sin_port"]).unwrap();
+                if port == 0 {
+                    // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different
+                    // remote endpoints.  As they don't really communicate externally, it makes sense to filter them
+                    // out.
+                    None
+                } else {
+                    Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
+                        std::net::SocketAddrV4::new(
+                            std::net::Ipv4Addr::from_str(sin_addr.as_str()).unwrap(),
+                            port,
+                        ),
+                    )))
+                }
             } else {
-                None
+                panic!("must have parsed socket_addr or else our regex isn't matching the strace output");
             };
 
-            let socket_addr = socket_addr.expect(
-                "must have parsed socket_addr or else our regex isn't matching the strace output",
-            );
-
-            ConnectParse::IndeterminateResult { socket_addr }
+            socket_addr.map(|s| ConnectParse::IndeterminateResult { socket_addr: s })
         })
     }
 
@@ -867,6 +879,11 @@ mod tests {
         );
 
         let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(17, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#,
+        );
+        assert_eq!(res, None);
+
+        let res = STraceSysTraceCommand::parse_connect(
             r#"337651 connect(17, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16 <unfinished ...>"#,
         );
         assert_eq!(
@@ -879,7 +896,6 @@ mod tests {
             })
         );
 
-        //
         let res = STraceSysTraceCommand::parse_connect(
             r#"337651 connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINPROGRESS (Operation now in progress)"#,
         );
@@ -894,6 +910,11 @@ mod tests {
                 ))),
             })
         );
+
+        let res = STraceSysTraceCommand::parse_connect(
+            r#"337651 connect(5, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINPROGRESS (Operation now in progress)"#,
+        );
+        assert_eq!(res, None);
 
         let res = STraceSysTraceCommand::parse_connect(
             r#"337653 chdir("/home/mfenniak/Dev" <unfinished ...>"#,

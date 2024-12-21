@@ -219,11 +219,9 @@ The starting point for evaluating what network configuration rules are required 
     RustTestIdentifier { test_src_path: "src/lib.rs", test_name: "network::tests::test_tcp_connection_to_google" }
         CoverageIdentifier(NetworkDependency(Inet([2607:f8b0:400a:800::200e]:80)))
         CoverageIdentifier(NetworkDependency(Unix("/var/run/nscd/socket" (pathname))))
-        CoverageIdentifier(NetworkDependency(Inet([2607:f8b0:400a:800::200e]:0)))
-        CoverageIdentifier(NetworkDependency(Inet(142.251.215.238:0)))
     ```
 
-    This will output every test that testtrim believes needs to be run, and indented after the test **why** testtrim believes the test needs to be run.  In this example, it is indicating that the test made four network connections -- two connections to `2607:f8b0:400a:800::200e`, one to `142.251.215.238`, and one to the Unix socket `/var/run/nscd/socket`.
+    This will output every test that testtrim believes needs to be run, and indented after the test **why** testtrim believes the test needs to be run.  In this example, it is indicating that the test made two network connections -- one to `2607:f8b0:400a:800::200e` on port `80`, and one to the Unix socket `/var/run/nscd/socket`.
 
 3. Evaluate each test and determine the desired behavior.
 
