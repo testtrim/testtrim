@@ -188,7 +188,12 @@ impl Subscriber for PerformanceStoringTracingSubscriber {
 
     fn enter(&self, span: &Id) {
         if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
-            span_data.entered_at = Some(Instant::now());
+            // for futures we seem to enter and exit the span multiple times, probably each time it is polled; I guess
+            // that in the spirit of measuring the entire length of the span capturing the first enter and last exit is
+            // the right thing to do
+            if span_data.entered_at.is_none() {
+                span_data.entered_at = Some(Instant::now());
+            }
         } else {
             warn!("enter({span:?}) referenced a span that was not stored in span_storage");
         }

@@ -250,7 +250,7 @@ impl DotnetTestPlatform {
                 // "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeAssembliesWithoutSources=None",
             ])
             .output()
-            .instrument(info_span!("execute-test", perftrace = "run-test", parallel = true))
+            .instrument(info_span!("execute-test", perftrace = "run-test"))
             .await
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "dotnet test --filter ...".to_string(),
