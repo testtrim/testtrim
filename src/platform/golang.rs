@@ -32,7 +32,7 @@ use crate::errors::{
 use crate::network::NetworkDependency;
 use crate::platform::util::normalize_path;
 use crate::scm::{Scm, ScmCommit};
-use crate::sys_trace::trace::{Trace, UnifiedSocketAddr};
+use crate::sys_trace::trace::{ResolvedSocketAddr, Trace};
 use crate::sys_trace::{sys_trace_command, SysTraceCommand as _};
 
 use super::util::spawn_limited_concurrency;
@@ -65,7 +65,7 @@ pub enum GolangCoverageIdentifier {
     // Possible future: go version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
     PackageDependency(ModuleDependency),
     InferredFromTestFileChange(PathBuf),
-    NetworkDependency(UnifiedSocketAddr),
+    NetworkDependency(ResolvedSocketAddr),
 }
 
 impl CoverageIdentifier for GolangCoverageIdentifier {}

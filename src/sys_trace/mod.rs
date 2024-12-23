@@ -10,7 +10,7 @@ use std::{path::Path, process::Output};
 #[cfg(target_os = "linux")]
 use strace::STraceSysTraceCommand;
 use tokio::process::Command;
-use trace::Trace;
+use trace::{DraftTrace, Trace};
 
 use crate::errors::SubcommandErrors;
 
@@ -40,7 +40,9 @@ impl SysTraceCommand for SysTraceCommandUnsupported {
                     command: format!("{:?} ...", cmd.as_std().get_program()).to_string(),
                     error: e,
                 })?,
-            Trace::new(),
+            DraftTrace::new()
+                .try_into()
+                .expect("empty DraftTrace->Trace should be infallible"),
         ))
     }
 }

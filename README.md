@@ -308,6 +308,11 @@ One or more network-policy tables can exist in the file, which must contain:
     - `port-range` -- an inclusive range of network ports, eg. `"8000-8100"`; all addresses will match.  Note that this range must be quoted otherwise the TOML parser will believe it is a number and fail.
     - `address-port` -- an array of an address and a port, eg. `["127.0.0.1/32", 8080]`
     - `address-port-range` -- an address of an address and port range, eg. `["127.0.0.1/32", "8085-8086"]`
+    - `host` -- a hostname, eg. `"localhost"`, on any network port.
+        - **Note**: hostname matching internally functions by monitoring hostname resolution while the process is running, which has a limited implementation of monitoring traffic to `/var/run/nscd/socket` and decoding it.
+        - **Note**: hostname matching can have unexpected outcomes; if a two hostnames resolve to the same IP address, then any network traffic to that IP address will match network policies from either hostname as testtrim cannot identify which hostname was used for that network traffic.
+    - `host-port` -- an array of a hostname and a port, eg. `["127.0.0.1/32", 8080]`; notes for `host` still apply
+    - `host-port-range` -- an address of a hostname and port range, eg. `["127.0.0.1/32", "8085-8086"]`; notes for `host` still apply
 
 Here is a complete config file showing all available options (although having little logical meaning; see [Network Configuration](#network-configuration) for an explanation of plausible real-world configurations:
 

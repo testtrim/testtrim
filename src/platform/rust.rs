@@ -35,7 +35,7 @@ use crate::errors::{
 };
 use crate::network::NetworkDependency;
 use crate::scm::{Scm, ScmCommit};
-use crate::sys_trace::trace::UnifiedSocketAddr;
+use crate::sys_trace::trace::ResolvedSocketAddr;
 use crate::sys_trace::SysTraceCommand as _;
 use crate::sys_trace::{sys_trace_command, trace::Trace};
 
@@ -73,7 +73,7 @@ impl fmt::Display for RustTestIdentifier {
 pub enum RustCoverageIdentifier {
     // Possible future: rustc version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
     PackageDependency(RustPackageDependency),
-    NetworkDependency(UnifiedSocketAddr),
+    NetworkDependency(ResolvedSocketAddr),
 }
 
 impl CoverageIdentifier for RustCoverageIdentifier {}

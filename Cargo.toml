@@ -29,7 +29,10 @@ ipnet = { version = "2.10.1", features = ["serde"] }
 lazy_static = "1.5.0"
 llvm_profparser = "0.7.0"
 log = "0.4.22"
+nix = { version = "^0.28", features = ["socket", "user"]}
 num_cpus = "1.16.0"
+num-derive = "0.4.2"
+num-traits = "^0.2"
 quick-xml = { version = "0.37.1", features = ["serialize"] }
 rand = "0.8.5"
 regex = "1.11.1"

@@ -176,7 +176,13 @@ impl DotnetTestPlatform {
         let mut result: HashSet<DotnetConcreteTestIdentifier> = HashSet::new();
 
         let output = SyncCommand::new("dotnet")
-            .args(["test", "--list-tests", "--", "NUnit.DisplayName=FullName"])
+            .args([
+                "test",
+                "--list-tests",
+                "--disable-build-servers",
+                "--",
+                "NUnit.DisplayName=FullName",
+            ])
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "dotnet test --list-tests".to_string(),
@@ -228,6 +234,7 @@ impl DotnetTestPlatform {
                 "test",
                 // Saves a bit of time during the test command as the test discovery would've already built.
                 "--no-build",
+                "--disable-build-servers",
                 "--collect:\"XPlat Code Coverage;Format=cobertura",
                 "--filter",
                 &format!(

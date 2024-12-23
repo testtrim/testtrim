@@ -16,6 +16,7 @@ pub mod cmd;
 pub mod coverage;
 pub mod errors;
 mod network;
+mod nsncd;
 pub mod platform;
 mod repo_config;
 mod schema;
