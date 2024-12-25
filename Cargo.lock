@@ -3656,7 +3656,7 @@ dependencies = [
 
 [[package]]
 name = "testtrim"
-version = "0.5.0"
+version = "null"
 dependencies = [
  "actix-test",
  "actix-web",
