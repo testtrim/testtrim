@@ -51,6 +51,10 @@ jobs:
       - run: |
           set -eux -o pipefail
           export NEW_VERSION=$(nix develop .# --command git cliff --bump --unreleased --context | nix develop .# --command jq -r .[0].version)
+          if [[ "$NEW_VERSION" == "null" ]]; then
+            # No changes since last release.
+            exit 0
+          fi
           echo NEW_VERSION = $NEW_VERSION
           nix develop .# --command git cliff --tag $NEW_VERSION -o ./CHANGELOG.md
           echo "$NEW_VERSION" >> ./this-release-notes.md # the first line will appear as a "title" on the tag
