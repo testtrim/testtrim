@@ -3680,6 +3680,7 @@ dependencies = [
  "log",
  "named-lock",
  "nix",
+ "nom",
  "num-derive",
  "num-traits",
  "num_cpus",
