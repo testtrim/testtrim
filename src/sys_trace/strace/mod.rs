@@ -209,7 +209,7 @@ impl SysTraceCommand for STraceSysTraceCommand {
         new_cmd
             .arg("--follow-forks")
             .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom")
-            .arg("--string-limit=256") // should be sufficient for DNS
+            .arg("--string-limit=512") // should be sufficient for DNS; was tested at 256 and ran into partial :53 msgs but seemed just borderline
             .arg("--strings-in-hex=non-ascii-chars")
             .arg("--output")
             .arg(tmp);
