@@ -69,6 +69,11 @@ pub enum Function {
         fd: String,
         data: StringArgument,
     },
+    Recv {
+        pid: String,
+        socket_fd: String,
+        data: StringArgument,
+    },
 }
 
 lazy_static! {
@@ -152,6 +157,7 @@ impl FunctionExtractor<'_> {
             "sendto" => return Self::extract_sendto(syscall), // may have None
             "read" => Self::extract_read(syscall)?,
             "connect" => return Self::extract_connect(syscall), // may have None
+            "recvfrom" => Self::extract_recvfrom(syscall)?,
             other => {
                 return Err(anyhow!("unexpected syscall: {other:?}"));
             }
@@ -332,6 +338,22 @@ impl FunctionExtractor<'_> {
             None
         } else {
             unreachable!()
+        })
+    }
+
+    fn extract_recvfrom(mut syscall: Syscall<'_>) -> Result<Function> {
+        ensure!(
+            syscall.arguments.len() == 6,
+            "expected 6 argument to {}, but was: {}",
+            syscall.function,
+            syscall.arguments.len()
+        );
+        let data = syscall.remove_data_arg(1)?;
+        let socket_fd = syscall.remove_numeric_arg(0)?;
+        Ok(Function::Recv {
+            pid: syscall.pid.into_owned(),
+            socket_fd,
+            data,
         })
     }
 }
@@ -606,6 +628,7 @@ mod tests {
                 ))),
             })
         );
+
         let t = fe.extract(
             r#"337651 connect(17, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#,
         )?;
@@ -635,6 +658,25 @@ mod tests {
             r#"1343642 connect(7, {sa_family=AF_UNSPEC, sa_data="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"}, 16) = 0"#,
         )?;
         assert_eq!(t, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn recvfrom() -> Result<()> {
+        let mut fe = FunctionExtractor::new();
+
+        let t = fe.extract(
+            r#"103155 recvfrom(7, "\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 2048, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 57"#
+        )?;
+        assert_eq!(
+            t,
+            Some(Function::Recv {
+                pid: String::from("103155"),
+                socket_fd: String::from("7"),
+                data: StringArgument::Complete(Vec::from(b"\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00")),
+            })
+        );
 
         Ok(())
     }

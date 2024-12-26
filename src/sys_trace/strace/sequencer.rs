@@ -99,6 +99,18 @@ impl<'cache> Sequencer<'cache> {
                 retval,
             }),
             TokenizerOutput::Syscall(SyscallSegment {
+                arguments,
+                outcome: CallOutcome::ResumedUnfinished,
+                ..
+            }) => {
+                // Trace interrupted, resumed, and then interrupted again -- no new data here to consolidate
+                ensure!(
+                    arguments.is_empty(),
+                    "not expecting arguments in Calloutcome::ResumedUnfinished"
+                );
+                None
+            }
+            TokenizerOutput::Syscall(SyscallSegment {
                 pid,
                 function,
                 arguments,

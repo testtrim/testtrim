@@ -145,6 +145,11 @@ impl STraceSysTraceCommand {
                     pid,
                     fd,
                     data: StringArgument::Complete(data),
+                }
+                | Function::Recv {
+                    pid,
+                    socket_fd: fd,
+                    data: StringArgument::Complete(data),
                 } => {
                     let socket_capture = pid_socket_fd_captures.get_mut(&(pid.clone(), fd.clone()));
                     if let Some(socket_capture) = socket_capture {
@@ -167,6 +172,11 @@ impl STraceSysTraceCommand {
                 | Function::Read {
                     pid,
                     fd,
+                    data: StringArgument::Partial,
+                }
+                | Function::Recv {
+                    pid,
+                    socket_fd: fd,
                     data: StringArgument::Partial,
                 } => {
                     // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
@@ -198,7 +208,7 @@ impl SysTraceCommand for STraceSysTraceCommand {
         let mut new_cmd = Command::new("strace");
         new_cmd
             .arg("--follow-forks")
-            .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read")
+            .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom")
             .arg("--string-limit=256") // should be sufficient for DNS
             .arg("--strings-in-hex=non-ascii-chars")
             .arg("--output")
@@ -418,5 +428,65 @@ mod tests {
             ))),
         );
         assert_eq!(capture.state, SocketCaptureState::Incomplete);
+    }
+
+    #[test]
+    fn recvfrom_trace_read() {
+        // strace --follow-forks --string-limit=256 --strings-in-hex=non-ascii-chars
+        // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom --output curl-no-nscd.txt curl
+        // https://codeberg.org/
+
+        let trace_raw = include_bytes!("../../../tests/test_data/strace-curl-no-nscd.txt");
+
+        let mut trace = DraftTrace::new();
+
+        let res = STraceSysTraceCommand::read_trace(&mut trace, &trace_raw[..]);
+        assert!(res.is_ok(), "expected ok, was: {res:?}");
+
+        let socket_captures = trace.get_socket_captures();
+
+        let capture = &socket_captures[4];
+        assert_eq!(
+            capture.socket_addr,
+            UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(100, 100, 100, 100),
+                53
+            )))
+        );
+        match &capture.state {
+            SocketCaptureState::Complete(complete) => {
+                assert_eq!(complete.len(), 2);
+                assert_eq!(
+                    &complete[0],
+                    &SocketOperation::Read(Vec::from(b"\x07a\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x0b\x1b\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00"))
+                );
+                assert_eq!(
+                    &complete[1],
+                    &SocketOperation::Read(Vec::from(b"\xccd\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\xc0\x0c\x00\x1c\x00\x01\x00\x00\x0b\x1b\x00\x10 \x01\x06|\x14\x01 \xf0\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00"))
+                );
+            }
+            SocketCaptureState::Incomplete => {
+                panic!("required state Complete, but was {:?}", capture.state);
+            }
+        }
+
+        // r#"103155 connect(7, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#
+        // r#"103155 poll([{fd=7, events=POLLOUT}], 1, 0) = 1 ([{fd=7, revents=POLLOUT}])"#
+        // r#"103155 sendmmsg(7, [{msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\xd6\xef\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\x00\x00)\x04\xb0\x00\x00\x00\x00\x00\x00", iov_len=41}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=41}, {msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\xf4\xec\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\x00\x00)\x04\xb0\x00\x00\x00\x00\x00\x00", iov_len=41}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=41}], 2, MSG_NOSIGNAL) = 2"#
+        // r#"103155 poll([{fd=7, events=POLLIN}], 1, 5000 <unfinished ...>"#
+        // r#"103154 <... poll resumed>)              = 0 (Timeout)"#
+        // r#"103154 rt_sigaction(SIGPIPE, NULL, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, 8) = 0"#
+        // r#"103154 rt_sigaction(SIGPIPE, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, NULL, 8) = 0"#
+        // r#"103154 rt_sigaction(SIGPIPE, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, NULL, 8) = 0"#
+        // r#"103154 poll([{fd=5, events=POLLIN}, {fd=3, events=POLLIN}], 2, 8 <unfinished ...>"#
+        // r#"103155 <... poll resumed>)              = 1 ([{fd=7, revents=POLLIN}])"#
+        // r#"103155 ioctl(7, FIONREAD, [57])         = 0"#
+        // r#"103155 recvfrom(7, "\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 2048, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 57"#
+        // r#"103155 poll([{fd=7, events=POLLIN}], 1, 4993) = 1 ([{fd=7, revents=POLLIN}])"#
+        // r#"103155 ioctl(7, FIONREAD, [69])         = 0"#
+        // r#"103154 <... poll resumed>)              = 0 (Timeout)"#
+        // r#"103155 recvfrom(7, "\xf4\xec\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\xc0\f\x00\x1c\x00\x01\x00\x00\x01%\x00\x10 \x01\x06|\x14\x01 \xf0\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 65536, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 69"#
+        // r#"103154 rt_sigaction(SIGPIPE, NULL, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, 8) = 0"#
+        // r#"103155 close(7 <unfinished ...>"#
     }
 }

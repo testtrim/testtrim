@@ -4,7 +4,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::RangeInclusive,
     path::PathBuf,
 };
@@ -305,20 +305,13 @@ pub fn analyze_socket_captures(
 
     for capture in socket_captures {
         let result = analyze_nscd(capture, &mut retval)?;
-        if let NscdCaptureResult::IncompleteCapture = result {
+        if let DnsCaptureAnalysisResult::IncompleteCapture = result {
             warn!("network stream to {:?} was not fully captured, preventing nscd protocol decode for DNS analysis", capture.socket_addr);
         }
 
-        // FIXME: Future, add support for DNS protocol analysis.
-        if let UnifiedSocketAddr::Inet(SocketAddr::V4(v4)) = capture.socket_addr
-            && v4.port() == 53
-        {
-            warn!("network traffic to DNS server {v4} is not yet analyzed and decoded for hostname matching");
-        }
-        if let UnifiedSocketAddr::Inet(SocketAddr::V6(v6)) = capture.socket_addr
-            && v6.port() == 53
-        {
-            warn!("network traffic to DNS server {v6} is not yet analyzed and decoded for hostname matching");
+        let result = analyze_dns(capture, &mut retval)?;
+        if let DnsCaptureAnalysisResult::IncompleteCapture = result {
+            warn!("network stream to {:?} was not fully captured, preventing DNS protocol decode for DNS analysis", capture.socket_addr);
         }
     }
 
@@ -326,7 +319,7 @@ pub fn analyze_socket_captures(
 }
 
 #[derive(Debug, PartialEq)]
-enum NscdCaptureResult {
+enum DnsCaptureAnalysisResult {
     NotApplicable,
     IncompleteCapture,
     Data,
@@ -387,17 +380,17 @@ fn consolidate_chunks(operations: &[SocketOperation]) -> Vec<SocketOperation> {
 fn analyze_nscd(
     socket_capture: &SocketCapture,
     dns_resolutions: &mut HashMap<IpAddr, HashSet<String>>,
-) -> Result<NscdCaptureResult> {
+) -> Result<DnsCaptureAnalysisResult> {
     if let UnifiedSocketAddr::Unix(ref path) = socket_capture.socket_addr {
         if path != &PathBuf::from("/var/run/nscd/socket") {
-            return Ok(NscdCaptureResult::NotApplicable);
+            return Ok(DnsCaptureAnalysisResult::NotApplicable);
         }
     } else {
-        return Ok(NscdCaptureResult::NotApplicable);
+        return Ok(DnsCaptureAnalysisResult::NotApplicable);
     }
 
     let SocketCaptureState::Complete(ref operations) = socket_capture.state else {
-        return Ok(NscdCaptureResult::IncompleteCapture);
+        return Ok(DnsCaptureAnalysisResult::IncompleteCapture);
     };
 
     let operations = consolidate_chunks(operations);
@@ -424,14 +417,82 @@ fn analyze_nscd(
         }
     }
 
-    Ok(NscdCaptureResult::Data)
+    Ok(DnsCaptureAnalysisResult::Data)
+}
+
+fn analyze_dns(
+    socket_capture: &SocketCapture,
+    dns_resolutions: &mut HashMap<IpAddr, HashSet<String>>,
+) -> Result<DnsCaptureAnalysisResult> {
+    if let UnifiedSocketAddr::Inet(ref socket_addr) = socket_capture.socket_addr {
+        let dns = match socket_addr {
+            SocketAddr::V4(v4) => v4.port() == 53,
+            SocketAddr::V6(v6) => v6.port() == 53,
+        };
+        if !dns {
+            return Ok(DnsCaptureAnalysisResult::NotApplicable);
+        }
+    } else {
+        return Ok(DnsCaptureAnalysisResult::NotApplicable);
+    }
+
+    let SocketCaptureState::Complete(ref operations) = socket_capture.state else {
+        return Ok(DnsCaptureAnalysisResult::IncompleteCapture);
+    };
+
+    for msg in operations {
+        let SocketOperation::Read(buffer) = msg else {
+            continue;
+        };
+
+        let mut questions = vec![dns_protocol::Question::default()];
+        let mut answers = vec![dns_protocol::ResourceRecord::default()];
+        let mut authorities = vec![dns_protocol::ResourceRecord::default()];
+        let mut additional = vec![dns_protocol::ResourceRecord::default()];
+        match dns_protocol::Message::read(
+            buffer,
+            &mut questions,
+            &mut answers,
+            &mut authorities,
+            &mut additional,
+        ) {
+            Ok(message) => {
+                for answer in message.answers() {
+                    match answer.ty() {
+                        dns_protocol::ResourceType::A => {
+                            let addr = answer.data().try_into().map(u32::from_be_bytes)?;
+                            dns_resolutions
+                                .entry(IpAddr::V4(Ipv4Addr::from_bits(addr)))
+                                .or_default()
+                                .insert(format!("{}", answer.name()));
+                        }
+                        dns_protocol::ResourceType::AAAA => {
+                            let addr = answer.data().try_into().map(u128::from_be_bytes)?;
+                            dns_resolutions
+                                .entry(IpAddr::V6(Ipv6Addr::from_bits(addr)))
+                                .or_default()
+                                .insert(format!("{}", answer.name()));
+                        }
+                        other => {
+                            debug!("DNS response type {other:?} is not understood by analyze_dns");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Error occurred parsing network response on port 53 as DNS protocol; some DNS resolutions may be lost.  Error was: {e:?}");
+            }
+        }
+    }
+
+    Ok(DnsCaptureAnalysisResult::Data)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         collections::{BTreeSet, HashMap, HashSet},
-        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
         path::PathBuf,
         str::FromStr as _,
     };
@@ -444,8 +505,8 @@ mod tests {
     use crate::{
         coverage::full_coverage_data::FullCoverageData,
         network::{
-            check_policy_match, evaluate_glob, evaluate_policy, NetworkDependency,
-            NscdCaptureResult, Outcome, PolicyApply, PolicyMatch,
+            check_policy_match, evaluate_glob, evaluate_policy, DnsCaptureAnalysisResult,
+            NetworkDependency, Outcome, PolicyApply, PolicyMatch,
         },
         platform::{
             rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
@@ -457,7 +518,7 @@ mod tests {
         },
     };
 
-    use super::{analyze_nscd, compute_tests_from_network_accesses, Policy};
+    use super::{analyze_dns, analyze_nscd, compute_tests_from_network_accesses, Policy};
 
     #[derive(Deserialize, Debug)]
     #[serde(rename_all = "kebab-case")]
@@ -1175,10 +1236,10 @@ mod tests {
         };
         let mut hashmap = HashMap::new();
         let result = analyze_nscd(&cap, &mut hashmap)?;
-        if let NscdCaptureResult::NotApplicable = result {
+        if let DnsCaptureAnalysisResult::NotApplicable = result {
             assert_eq!(hashmap.len(), 0);
         } else {
-            panic!("expected NscdCaptureResult::NotApplicable, but was {result:?}");
+            panic!("expected DnsCaptureAnalysisResult::NotApplicable, but was {result:?}");
         }
         let cap = SocketCapture {
             socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/.pgsql.5432")),
@@ -1188,10 +1249,10 @@ mod tests {
         let result = analyze_nscd(&cap, &mut hashmap)?;
         // It's important that Incomplete & wrong-socket gives us the NotApplicable result -- because InComplete will
         // cause a warning/error/something when it is on an applicable socket.
-        if let NscdCaptureResult::NotApplicable = result {
+        if let DnsCaptureAnalysisResult::NotApplicable = result {
             assert_eq!(hashmap.len(), 0);
         } else {
-            panic!("expected NscdCaptureResult::NotApplicable, but was {result:?}");
+            panic!("expected DnsCaptureAnalysisResult::NotApplicable, but was {result:?}");
         }
 
         let cap = SocketCapture {
@@ -1200,10 +1261,10 @@ mod tests {
         };
         let mut hashmap = HashMap::new();
         let result = analyze_nscd(&cap, &mut hashmap)?;
-        if let NscdCaptureResult::IncompleteCapture = result {
+        if let DnsCaptureAnalysisResult::IncompleteCapture = result {
             assert_eq!(hashmap.len(), 0);
         } else {
-            panic!("expected NscdCaptureResult::IncompleteCapture, but was {result:?}");
+            panic!("expected DnsCaptureAnalysisResult::IncompleteCapture, but was {result:?}");
         }
 
         let cap = SocketCapture {
@@ -1224,7 +1285,7 @@ mod tests {
         };
         let mut hashmap = HashMap::new();
         let result = analyze_nscd(&cap, &mut hashmap)?;
-        if let NscdCaptureResult::Data = result {
+        if let DnsCaptureAnalysisResult::Data = result {
             let ip6 = IpAddr::from_str("2607:f8b0:400a:801::2003")?;
             assert_eq!(
                 hashmap.get(&ip6),
@@ -1237,17 +1298,90 @@ mod tests {
                 Some(&HashSet::from([String::from("google.ca")]))
             );
         } else {
-            panic!("expected NscdCaptureResult::Data, but was {result:?}");
+            panic!("expected DnsCaptureAnalysisResult::Data, but was {result:?}");
         }
 
         Ok(())
-        // // `/var/run/nscd/socket`
-        // let test_data = vec![
-        //     SocketCapture {
-        //         socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
-        //         state: SocketCaptureState::Complete(vec![
-        //         ])
-        //     }
-        // ];
+    }
+
+    #[test]
+    fn test_analyze_dns() -> Result<()> {
+        let cap = SocketCapture {
+            socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(100, 100, 100, 100),
+                443,
+            ))),
+            state: SocketCaptureState::Complete(vec![]),
+        };
+        let mut hashmap = HashMap::new();
+        let result = analyze_dns(&cap, &mut hashmap)?;
+        if let DnsCaptureAnalysisResult::NotApplicable = result {
+            assert_eq!(hashmap.len(), 0);
+        } else {
+            panic!("expected DnsCaptureAnalysisResult::NotApplicable, but was {result:?}");
+        }
+        let cap = SocketCapture {
+            socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(100, 100, 100, 100),
+                443,
+            ))),
+            state: SocketCaptureState::Incomplete,
+        };
+        let mut hashmap = HashMap::new();
+        let result = analyze_dns(&cap, &mut hashmap)?;
+        // It's important that Incomplete & wrong-socket gives us the NotApplicable result -- because InComplete will
+        // cause a warning/error/something when it is on an applicable socket.
+        if let DnsCaptureAnalysisResult::NotApplicable = result {
+            assert_eq!(hashmap.len(), 0);
+        } else {
+            panic!("expected DnsCaptureAnalysisResult::NotApplicable, but was {result:?}");
+        }
+
+        let cap = SocketCapture {
+            socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(100, 100, 100, 100),
+                53,
+            ))),
+            state: SocketCaptureState::Incomplete,
+        };
+        let mut hashmap = HashMap::new();
+        let result = analyze_dns(&cap, &mut hashmap)?;
+        if let DnsCaptureAnalysisResult::IncompleteCapture = result {
+            assert_eq!(hashmap.len(), 0);
+        } else {
+            panic!("expected DnsCaptureAnalysisResult::IncompleteCapture, but was {result:?}");
+        }
+
+        let cap = SocketCapture {
+            socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(100, 100, 100, 100),
+                53
+            ))),
+            state: SocketCaptureState::Complete(vec![
+                // Note: analyze_dns doesn't currently use the sent data, so we don't reproduce it here for this test.
+                SocketOperation::Read(Vec::from(b"\x07a\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x0b\x1b\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00")),
+                SocketOperation::Read(Vec::from(b"\xccd\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\xc0\x0c\x00\x1c\x00\x01\x00\x00\x0b\x1b\x00\x10 \x01\x06|\x14\x01 \xf0\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00")),
+            ]),
+        };
+        let mut hashmap = HashMap::new();
+        let result = analyze_dns(&cap, &mut hashmap)?;
+        println!("hashmap: {hashmap:?}");
+        if let DnsCaptureAnalysisResult::Data = result {
+            let ip6 = IpAddr::from_str("2001:67c:1401:20f0::1")?;
+            assert_eq!(
+                hashmap.get(&ip6),
+                Some(&HashSet::from([String::from("codeberg.org")]))
+            );
+
+            let ip4 = IpAddr::from_str("217.197.91.145")?;
+            assert_eq!(
+                hashmap.get(&ip4),
+                Some(&HashSet::from([String::from("codeberg.org")]))
+            );
+        } else {
+            panic!("expected DnsCaptureAnalysisResult::Data, but was {result:?}");
+        }
+
+        Ok(())
     }
 }

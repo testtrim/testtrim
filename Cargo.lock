@@ -1264,6 +1264,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-protocol"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96e95919581371ae96cbf05b0aeec65cdc20bd3a2dca282ab6af808fbddaddb4"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3671,6 +3680,7 @@ dependencies = [
  "dashmap",
  "diesel",
  "diesel_migrations",
+ "dns-protocol",
  "enum_dispatch",
  "glob",
  "gomod-rs",

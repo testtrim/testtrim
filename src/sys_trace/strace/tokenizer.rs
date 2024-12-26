@@ -54,9 +54,17 @@ pub enum Retval<'a> {
 
 #[derive(Debug, PartialEq)]
 pub enum CallOutcome<'a> {
+    /// syscall that was completed while traced.
     Complete { retval: Retval<'a> },
+    /// While a syscall occurred on one pid, another started on a different pid; strace dumps the original to the log as
+    /// an "unfinished" call.
     Unfinished,
+    /// After an "unfinished" call, tracing the call was resumed and finished.  The complete arguments and return value
+    /// for this call require combining data from the Unfinished and Resumed trace.
     Resumed { retval: Retval<'a> },
+    /// After an "unfinished" call, tracing the call was resumed, and then tracing was interrupted by another pid's
+    /// syscall again.  This trace message doesn't have any additional data to combine.
+    ResumedUnfinished,
 }
 
 #[derive(Debug, PartialEq)]
@@ -168,6 +176,15 @@ fn parse_syscall(input: &str) -> IResult<&str, SyscallSegment<'_>> {
                 outcome,
             },
         )),
+        InternalLineType::ResumedUnfinished { function_name } => Ok((
+            input,
+            SyscallSegment {
+                pid,
+                function: function_name,
+                arguments: Vec::new(),
+                outcome: CallOutcome::ResumedUnfinished,
+            },
+        )),
     }
 }
 
@@ -182,10 +199,17 @@ enum InternalLineType<'a> {
         arguments: Vec<Argument<'a>>,
         outcome: CallOutcome<'a>,
     },
+    ResumedUnfinished {
+        function_name: &'a str,
+    },
 }
 
 fn parse_line_type(input: &str) -> IResult<&str, InternalLineType> {
-    alt((parse_started_call, parse_resumed_call))(input)
+    alt((
+        parse_started_call,
+        parse_resumed_call,
+        parse_resumed_unfinished_call,
+    ))(input)
 }
 
 fn parse_started_call(input: &str) -> IResult<&str, InternalLineType> {
@@ -227,6 +251,34 @@ fn parse_resumed_call(input: &str) -> IResult<&str, InternalLineType> {
             function_name,
             arguments,
             outcome,
+        },
+    ))
+}
+
+fn parse_resumed_unfinished_call(input: &str) -> IResult<&str, InternalLineType> {
+    alt((
+        parse_terminating_process_case1,
+        parse_terminating_process_case2,
+    ))(input)
+}
+
+fn parse_terminating_process_case1(input: &str) -> IResult<&str, InternalLineType> {
+    let (input, _) = tag("<... ")(input)?;
+    let (input, function_name) = parse_function_name(input)?;
+    let (input, _) = tag(" resumed>")(input)?;
+    let (input, _) = alt((
+        recognize(tuple((consume_whitespace, tag("<unfinished ...>) = ?")))),
+        recognize(tuple((tag(")"), consume_whitespace, tag("= ?")))),
+    ))(input)?;
+    Ok((input, InternalLineType::ResumedUnfinished { function_name }))
+}
+
+fn parse_terminating_process_case2(input: &str) -> IResult<&str, InternalLineType> {
+    let (input, _) = tag("???( <unfinished ...>")(input)?;
+    Ok((
+        input,
+        InternalLineType::ResumedUnfinished {
+            function_name: "???",
         },
     ))
 }
@@ -524,6 +576,43 @@ mod tests {
                 outcome: CallOutcome::Complete {
                     retval: Retval::Restart("ERESTARTSYS (To be restarted)"),
                 }
+            }
+        );
+
+        // The cases where I've seen this behavior -- "resumed> <unfinished...>" AND "resumed>) = ?" have both occurred
+        // right before the process exited.  I'm combining both of these into one "ResumedUnfinished" state because, at
+        // least for now, it doesn't seem like I need to do anything differently with them.
+        let tokenized = tokenize_syscall(r"3101180 <... read resumed> <unfinished ...>) = ?")?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "3101180",
+                function: "read",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
+        let tokenized = tokenize_syscall(r"3139449 <... openat resumed>)           = ?")?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "3139449",
+                function: "openat",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
+        // Another unrecognizable mess right before a process exit.  Again since ResumedUnfinished is just suppressed at
+        // the sequencer layer, I'll output it like that... but maybe "ResumedUnfinished" is just becoming "terminated
+        // during process exit"?
+        let tokenized = tokenize_syscall(r"3165682 ???( <unfinished ...>")?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "3165682",
+                function: "???",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
             }
         );
 
