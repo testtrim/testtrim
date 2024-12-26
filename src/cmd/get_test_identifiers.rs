@@ -426,7 +426,6 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
             // Even if this test covered this file in the past, if the test doesn't exist in the current eval target
             // then we can't run it anymore; typically happens when a test case is removed.
             if eval_target_test_cases.contains(test) {
-                debug!("marked!");
                 retval
                     .entry(test.clone())
                     .or_default()

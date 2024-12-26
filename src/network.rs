@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use ipnet::IpNet;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use regex::Regex;
 use serde::Deserialize;
 
@@ -448,7 +448,7 @@ fn analyze_dns(
         // Experimentally the largest attempted write I've seen is for 5 Answer responses (NotEnoughWriteSpace {
         // tried_to_write: 5, available: 1, buffer_type: "Answer" }) -- this impl current allocates 10 of each response
         // type to write into to see whether that's enough.
-        let mut questions = [dns_protocol::Question::default(); 10];
+        let mut questions = [dns_protocol::Question::default(); 1];
         let mut answers = [dns_protocol::ResourceRecord::default(); 10];
         let mut authorities = [dns_protocol::ResourceRecord::default(); 10];
         let mut additional = [dns_protocol::ResourceRecord::default(); 10];
@@ -460,21 +460,73 @@ fn analyze_dns(
             &mut additional,
         ) {
             Ok(message) => {
+                // It will be common when looking at DNS responses to get a few different pieces of information back;
+                // for example when fetching a record with a CNAME response:
+                //
+                // ```
+                // ;; QUESTION SECTION:
+                // ;api.nuget.org.                 IN      A
+                //
+                // ;; ANSWER SECTION:
+                // api.nuget.org.          300     IN      CNAME   nugetapiprod.trafficmanager.net.
+                // nugetapiprod.trafficmanager.net. 180 IN CNAME   az320820.vo.msecnd.net.
+                // az320820.vo.msecnd.net. 3600    IN      CNAME   cs2.wpc.gammacdn.net.
+                // cs2.wpc.gammacdn.net.   3600    IN      A       152.199.4.184
+                // ```
+                //
+                // So we really want to say that "api.nuget.org" is "152.199.4.184" in a response like this, because the
+                // program that was traced is coded against "api.nuget.org", and that's what we'd want people to write
+                // network rules against.
+                //
+                // FIXME: There's likely an unfinished gap here -- if the question is "A", the response is "CNAME", and
+                // the response doesn't also include the supplementary data to follow that CNAME to the "A", then I
+                // think a proper DNS client would make a follow-up request for the CNAME address.  With the current
+                // logic here, we'd end up mapping the CNAME to the A, rather than the original DNS request.  But I
+                // think that as long as the host is using a recursive DNS resolver, it will follow the CNAMEs all the
+                // way to a response, so maybe this isn't a big deal.
+                let question = message.questions()[0];
+                let hostname = match question.ty() {
+                    dns_protocol::ResourceType::A | dns_protocol::ResourceType::AAAA => {
+                        format!("{}", question.name())
+                    }
+                    other => {
+                        // "warn" is probably higher level logging than needed, but I want to see if anything else
+                        // interesting happens here that needs attention.
+                        warn!("DNS response had skipped question {other:?} that is not understood by analyze_dns; {question:?}");
+                        continue;
+                    }
+                };
+
                 for answer in message.answers() {
                     match answer.ty() {
                         dns_protocol::ResourceType::A => {
                             let addr = answer.data().try_into().map(u32::from_be_bytes)?;
+                            debug!(
+                                "DNS {} (via label {}) -> {}",
+                                hostname,
+                                answer.name(),
+                                IpAddr::V4(Ipv4Addr::from_bits(addr))
+                            );
                             dns_resolutions
                                 .entry(IpAddr::V4(Ipv4Addr::from_bits(addr)))
                                 .or_default()
-                                .insert(format!("{}", answer.name()));
+                                .insert(hostname.clone());
                         }
                         dns_protocol::ResourceType::AAAA => {
                             let addr = answer.data().try_into().map(u128::from_be_bytes)?;
+                            debug!(
+                                "DNS {} (via label {}) -> {}",
+                                hostname,
+                                answer.name(),
+                                IpAddr::V6(Ipv6Addr::from_bits(addr))
+                            );
                             dns_resolutions
                                 .entry(IpAddr::V6(Ipv6Addr::from_bits(addr)))
                                 .or_default()
-                                .insert(format!("{}", answer.name()));
+                                .insert(hostname.clone());
+                        }
+                        dns_protocol::ResourceType::CName => {
+                            trace!("DNS response CNAME {} skipped", answer.name());
                         }
                         other => {
                             debug!("DNS response type {other:?} is not understood by analyze_dns");
@@ -1380,6 +1432,30 @@ mod tests {
             assert_eq!(
                 hashmap.get(&ip4),
                 Some(&HashSet::from([String::from("codeberg.org")]))
+            );
+        } else {
+            panic!("expected DnsCaptureAnalysisResult::Data, but was {result:?}");
+        }
+
+        let cap = SocketCapture {
+            socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(100, 100, 100, 100),
+                53
+            ))),
+            state: SocketCaptureState::Complete(vec![
+                // Note: analyze_dns doesn't currently use the sent data, so we don't reproduce it here for this test.
+                SocketOperation::Read(Vec::from(b"\xfc\x1f\x81\x80\x00\x01\x00\x04\x00\x00\x00\x01\x03api\x05nuget\x03org\x00\x00\x01\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x01,\x00!\x0cnugetapiprod\x0etrafficmanager\x03net\x00\xc0+\x00\x05\x00\x01\x00\x00\x00\xb4\x00\x15\x08az320820\x02vo\x06msecnd\xc0G\xc0X\x00\x05\x00\x01\x00\x00\x0e\x10\x00\x13\x03cs2\x03wpc\x08gammacdn\xc0G\xc0y\x00\x01\x00\x01\x00\x00\x0e\x10\x00\x04\x98\xc7\x04\xb8\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00")),
+                SocketOperation::Read(Vec::from(b"\xd5\x1e\x81\x80\x00\x01\x00\x03\x00\x01\x00\x01\x03api\x05nuget\x03org\x00\x00\x1c\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x01,\x00!\x0cnugetapiprod\x0etrafficmanager\x03net\x00\xc0+\x00\x05\x00\x01\x00\x00\x00\xb4\x00\x15\x08az320820\x02vo\x06msecnd\xc0G\xc0X\x00\x05\x00\x01\x00\x00\x0e\x10\x00\x13\x03cs2\x03wpc\x08gammacdn\xc0G\xc0}\x00\x06\x00\x01\x00\x00\x02X\x00,\x03ns1\xc0\x81\x03noc\x08edgecast\x03com\x00ga}\xaa\x00\x00\x0e\x10\x00\x00\x02X\x00\t:\x80\x00\x00\x02X\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00")),
+            ]),
+        };
+        let mut hashmap = HashMap::new();
+        let result = analyze_dns(&cap, &mut hashmap)?;
+        println!("hashmap: {hashmap:?}");
+        if let DnsCaptureAnalysisResult::Data = result {
+            let ip4 = IpAddr::from_str("152.199.4.184")?;
+            assert_eq!(
+                hashmap.get(&ip4),
+                Some(&HashSet::from([String::from("api.nuget.org")]))
             );
         } else {
             panic!("expected DnsCaptureAnalysisResult::Data, but was {result:?}");
