@@ -129,7 +129,9 @@ fn parse_proc_exit(input: &str) -> IResult<&str, ProcessExit<'_>> {
 
 fn parse_signal(input: &str) -> IResult<&str, SignalRecv<'_>> {
     let (input, pid) = parse_pid(input)?;
-    let (input, _) = tag(" --- ")(input)?;
+    let (input, _) = consume_whitespace(input)?;
+    let (input, _) = tag("---")(input)?;
+    let (input, _) = consume_whitespace(input)?;
     let (input, signal) = take_while1(|c: char| c.is_ascii_uppercase())(input)?;
     // pretty lazy here but we don't do anything with signals yet, and may never
     let (input, _) = take_while(|_| true)(input)?;
@@ -985,6 +987,14 @@ mod tests {
             res,
             TokenizerOutput::Signal(SignalRecv {
                 pid: "337651",
+                signal: "SIGCHLD"
+            })
+        );
+        let res = tokenize("9563  --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=9564, si_uid=0, si_status=0, si_utime=2 /* 0.02 s */, si_stime=4 /* 0.04 s */} ---")?;
+        assert_eq!(
+            res,
+            TokenizerOutput::Signal(SignalRecv {
+                pid: "9563",
                 signal: "SIGCHLD"
             })
         );
