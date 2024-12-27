@@ -21,3 +21,13 @@ path = [
 ]
 SPDX-FileCopyrightText = "2024 Mathieu Fenniak <mathieu@fenniak.net>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Generated test files which occasionally get renamed if syscall tracing changes; it's a bit odd to even imagine these
+# have a copyright considering they're generated, but they are relevant parts of this software test suite and until I
+# have another good reason I'll mark them as GPL.
+[[annotations]]
+path = [
+    "tests/test_data/*.strace.*",
+]
+SPDX-FileCopyrightText = "2024 Mathieu Fenniak <mathieu@fenniak.net>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

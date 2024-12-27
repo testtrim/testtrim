@@ -86,24 +86,6 @@ impl DraftTrace {
     pub fn add_socket_capture(&mut self, socket_capture: SocketCapture) {
         self.socket_captures.push(socket_capture);
     }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn get_open_paths(&self) -> &HashSet<PathBuf> {
-        &self.open_paths
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn get_connect_sockets(&self) -> &HashSet<UnifiedSocketAddr> {
-        &self.connect_sockets
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn get_socket_captures(&self) -> &Vec<SocketCapture> {
-        &self.socket_captures
-    }
 }
 
 pub struct Trace {

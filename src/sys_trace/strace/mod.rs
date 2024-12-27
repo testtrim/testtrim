@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{Context as _, Result};
-use funcs::{Function, FunctionExtractor, OpenPath, StringArgument};
-use log::warn;
+use anyhow::{anyhow, Context as _, Result};
+use funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument};
+use log::{info, warn};
 use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufRead, BufReader, Read},
+    collections::{HashMap, HashSet},
+    env,
+    fs::{read_dir, File},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command as SyncCommand, Output},
+    process::{Command as SyncCommand, Output, Stdio},
+    str::FromStr as _,
 };
 use tokio::process::Command;
 
@@ -41,17 +43,112 @@ impl STraceSysTraceCommand {
         }
     }
 
-    fn read_trace_file(trace: &mut DraftTrace, trace_file: &Path) -> Result<()> {
-        let file = File::open(trace_file)?;
-        Self::read_trace(trace, BufReader::new(file))
+    // Reading a trace has two modes, and one common function.
+    //
+    // Common: read_trace_file -- reads a specific trace file, updates a Trace object, returns child pids that were
+    // spawned from that.
+    //
+    // Mode 1: read_all_pid_trace_files: For when testtrim started `strace --follow-forks
+    // --output-separately=.../abc.strace`, the goal will be to read all the trace files that match `.../abc.strace.*`
+    // (eg. all the subprocesses from the strace).  However it is necessary that they be read from the first process in
+    // order to track the inherited current workdir for each child process.  In order to accomplish this, the process
+    // files are read in PID order, and the first line is checked for execve -- the earliest process with an arg0 that
+    // matches the command executed under strace will be identified as the root process, and then the rest will proceed
+    // the same as mode 2.
+    //
+    // Mode 2: read_child_pid_trace_files: For when testtrim itself is running under strace already and we're trying to
+    // spawn a child process for tracing.  It will be given a root and a specific process id, read
+    // `.../abc.strace.{pid}` and update a Trace.  But then for all child processes that were spawned by that pid, it
+    // will also read their trace.
+    //
+    // Mode 1 and Mode 2 seems like they could be the same codebase, but we don't know the pid of the first child when
+    // we launch strace ourselves (just the pid of strace).
+
+    fn read_all_pid_trace_files(
+        trace: &mut DraftTrace,
+        trace_file_root: &Path,
+        cmdpath: &Path,
+    ) -> Result<()> {
+        let parent = trace_file_root.parent().unwrap();
+        let trace_file_name = trace_file_root.file_name().unwrap();
+        let trace_file_name = &*trace_file_name.to_string_lossy();
+
+        let mut pid_and_file = vec![];
+
+        for entry in read_dir(parent)? {
+            let entry = entry?;
+            let orig_filename = entry.file_name();
+            let filename = orig_filename.to_string_lossy();
+            if let Some(suffix) = filename.strip_prefix(trace_file_name) {
+                // suffix will be "." followed by the pid.
+                let pid = u32::from_str(&suffix[1..])?;
+                pid_and_file.push((pid, entry.path()));
+            }
+        }
+
+        pid_and_file.sort_by_key(|t| t.0);
+
+        for (pid, filename) in pid_and_file {
+            let mut extractor = FunctionExtractor::new();
+            let file = File::open(&filename)
+                .context(format!("failed to open strace output file {filename:?}"))?;
+            let mut lines = BufReader::new(file).lines();
+            let first_line = lines.next();
+            let Some(first_line) = first_line else {
+                continue;
+            };
+            let first_line = first_line?;
+            let Some(first_line) = extractor.extract(&first_line).context(format!(
+                "error parsing strace output first line: {first_line}"
+            ))?
+            else {
+                continue;
+            };
+            let FunctionTrace::Function(function) = first_line else {
+                continue;
+            };
+            let Function::Execve { arg0 } = function else {
+                continue;
+            };
+
+            // Alright, this file has an execve on the first line...
+            if arg0 == cmdpath {
+                // And it's the program we ran.  Let's do the trace here.
+                Self::read_child_pid_trace_files(trace, trace_file_root, &pid.to_string(), None)?;
+                return Ok(());
+            }
+        }
+
+        Err(anyhow!(
+            "read_all_pid_trace_files: no strace output files were found"
+        ))
     }
 
-    fn read_trace<T: Read>(trace: &mut DraftTrace, read: T) -> Result<()> {
-        // FIXME: this assumes that the contents of the trace are UTF-8; this probably isn't right
-        let lines = BufReader::new(read).lines();
+    fn read_child_pid_trace_files(
+        trace: &mut DraftTrace,
+        trace_file_root: &Path,
+        trace_pid: &str,
+        cwd: Option<PathBuf>,
+    ) -> Result<()> {
+        let file_path = trace_file_root.with_added_extension(trace_pid);
+        for (child, inherited_cwd) in Self::read_trace_file(trace, &file_path, cwd)? {
+            Self::read_child_pid_trace_files(trace, trace_file_root, &child, inherited_cwd)?;
+        }
+        Ok(())
+    }
 
-        let mut pid_cwd: HashMap<String, PathBuf> = HashMap::new();
-        let mut pid_socket_fd_captures: HashMap<(String, String), SocketCapture> = HashMap::new();
+    fn read_trace_file(
+        trace: &mut DraftTrace,
+        trace_file: &Path,
+        mut cwd: Option<PathBuf>,
+    ) -> Result<HashSet<(String, Option<PathBuf>)>> {
+        let file = File::open(trace_file)
+            .context(format!("failed to open strace output file {trace_file:?}"))?;
+        // FIXME: this assumes that the contents of the trace are UTF-8; this probably isn't right
+        let lines = BufReader::new(file).lines();
+
+        let mut child_pids: HashSet<(String, Option<PathBuf>)> = HashSet::new();
+        let mut pid_socket_fd_captures: HashMap<String, SocketCapture> = HashMap::new();
 
         let mut extractor = FunctionExtractor::new();
 
@@ -60,25 +157,25 @@ impl STraceSysTraceCommand {
             let line = line?;
             line_count += 1;
 
-            // Hack for test data files which contain some copyright headers (arguably stupid)
-            if line.is_empty() || line.starts_with("//") {
-                continue;
-            }
-
-            let Some(function) = extractor.extract(&line).context(format!(
+            let Some(function_trace) = extractor.extract(&line).context(format!(
                 "error parsing strace output line {line_count}: {line}"
             ))?
             else {
                 continue;
             };
 
+            if let FunctionTrace::Exit = function_trace {
+                continue;
+            }
+            let FunctionTrace::Function(function) = function_trace else {
+                // basically a match but keeping `function` in scope for remainder...
+                unreachable!()
+            };
+
             match function {
-                Function::Openat {
-                    pid,
-                    path: open_path,
-                } => {
+                Function::Openat { path: open_path } => {
                     if let OpenPath::RelativeToCwd(mut path) = open_path {
-                        if let Some(cwd) = pid_cwd.get(&pid) {
+                        if let Some(ref cwd) = cwd {
                             path = cwd.join(path);
                         }
                         trace.add_open(path);
@@ -86,22 +183,16 @@ impl STraceSysTraceCommand {
                         warn!("open path {:?} not yet supported for strace", open_path);
                     }
                 }
-                Function::Chdir { pid, path } => {
-                    let previous_path = pid_cwd.remove(&pid).unwrap_or(PathBuf::from(""));
+                Function::Chdir { path } => {
+                    let previous_path = cwd.unwrap_or(PathBuf::from(""));
                     let new_path = previous_path.join(path);
-                    pid_cwd.insert(pid, new_path);
+                    cwd = Some(new_path);
                 }
-                Function::Clone {
-                    parent_pid,
-                    child_pid,
-                } => {
+                Function::Clone { child_pid } => {
                     // Inherit working directory
-                    if let Some(cwd) = pid_cwd.get(&parent_pid) {
-                        pid_cwd.insert(child_pid, cwd.clone());
-                    }
+                    child_pids.insert((child_pid.clone(), cwd.clone()));
                 }
                 Function::Connect {
-                    pid,
                     socket_fd,
                     socket_addr,
                 } => {
@@ -111,7 +202,7 @@ impl STraceSysTraceCommand {
                     // be a reinitialization which should be fine; the expected case is we're just finished an
                     // incomplete or non-blocking connect.
                     pid_socket_fd_captures.insert(
-                        (pid, socket_fd),
+                        socket_fd,
                         SocketCapture {
                             socket_addr: socket_addr.clone(),
                             state: SocketCaptureState::Complete(Vec::new()),
@@ -123,12 +214,10 @@ impl STraceSysTraceCommand {
                     trace.add_connect(socket_addr);
                 }
                 Function::Sendto {
-                    pid,
                     socket_fd,
                     data: StringArgument::Complete(data),
                 } => {
-                    let socket_capture =
-                        pid_socket_fd_captures.get_mut(&(pid.clone(), socket_fd.clone()));
+                    let socket_capture = pid_socket_fd_captures.get_mut(&socket_fd.clone());
                     if let Some(socket_capture) = socket_capture {
                         if let SocketCaptureState::Complete(ref mut socket_operations) =
                             socket_capture.state
@@ -142,16 +231,14 @@ impl STraceSysTraceCommand {
                     // trace those, so we'll ignore any unrecognized sockets.
                 }
                 Function::Read {
-                    pid,
                     fd,
                     data: StringArgument::Complete(data),
                 }
                 | Function::Recv {
-                    pid,
                     socket_fd: fd,
                     data: StringArgument::Complete(data),
                 } => {
-                    let socket_capture = pid_socket_fd_captures.get_mut(&(pid.clone(), fd.clone()));
+                    let socket_capture = pid_socket_fd_captures.get_mut(&fd.clone());
                     if let Some(socket_capture) = socket_capture {
                         if let SocketCaptureState::Complete(ref mut socket_operations) =
                             socket_capture.state
@@ -165,22 +252,19 @@ impl STraceSysTraceCommand {
                     // trace those, so we'll ignore any unrecognized sockets.
                 }
                 Function::Sendto {
-                    pid,
                     socket_fd: fd,
                     data: StringArgument::Partial,
                 }
                 | Function::Read {
-                    pid,
                     fd,
                     data: StringArgument::Partial,
                 }
                 | Function::Recv {
-                    pid,
                     socket_fd: fd,
                     data: StringArgument::Partial,
                 } => {
                     // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
-                    let in_progress = pid_socket_fd_captures.get_mut(&(pid.clone(), fd.clone()));
+                    let in_progress = pid_socket_fd_captures.get_mut(&fd.clone());
                     if let Some(in_progress) = in_progress {
                         in_progress.state = SocketCaptureState::Incomplete;
                     }
@@ -188,31 +272,39 @@ impl STraceSysTraceCommand {
                     // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
                     // trace those, so we'll ignore any unrecognized sockets.
                 }
-                Function::Close { pid, fd } => {
-                    let socket_capture = pid_socket_fd_captures.remove(&(pid, fd));
+                Function::Close { fd } => {
+                    let socket_capture = pid_socket_fd_captures.remove(&fd);
                     if let Some(socket_capture) = socket_capture {
                         trace.add_socket_capture(socket_capture);
                     }
                     // No else case for warning if no socket present -- close(n) is used for file FDs which we're not
                     // capturing, so it will be common and normal for (pid, fd) to not be present.
                 }
+                // Nothing to do with execve.
+                Function::Execve { .. } => {}
             }
         }
 
-        Ok(())
+        Ok(child_pids)
     }
-}
 
-impl SysTraceCommand for STraceSysTraceCommand {
-    async fn trace_command(&self, orig_cmd: Command, tmp: &Path) -> Result<(Output, Trace)> {
+    async fn trace_command_w_strace(
+        &self,
+        orig_cmd: Command,
+        trace_path: &Path,
+    ) -> Result<(Output, Trace)> {
         let mut new_cmd = Command::new("strace");
         new_cmd
+            .env("__TESTTRIM_STRACE", trace_path)
             .arg("--follow-forks")
-            .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom")
+            .arg("--output-separately")
+            // %process will guarantee that we get all process lifecycle syscalls, which helps guarentee that the
+            // pid-filtering capability for sub-strace doesn't miss any subprocesses
+            .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process")
             .arg("--string-limit=512") // should be sufficient for DNS; was tested at 256 and ran into partial :53 msgs but seemed just borderline
             .arg("--strings-in-hex=non-ascii-chars")
             .arg("--output")
-            .arg(tmp);
+            .arg(trace_path);
 
         new_cmd.arg(orig_cmd.as_std().get_program());
         for arg in orig_cmd.as_std().get_args() {
@@ -235,11 +327,15 @@ impl SysTraceCommand for STraceSysTraceCommand {
                 command: "strace ...".to_string(),
                 error: e,
             })?;
-        let mut trace = DraftTrace::new();
 
+        let mut trace = DraftTrace::new();
         if output.status.success() {
             #[allow(clippy::question_mark)]
-            if let Err(e) = Self::read_trace_file(&mut trace, tmp) {
+            if let Err(e) = Self::read_all_pid_trace_files(
+                &mut trace,
+                trace_path,
+                orig_cmd.as_std().get_program().as_ref(),
+            ) {
                 // Occasionally useful for debugging to keep a copy of all the strace output...
                 // std::fs::copy(
                 //     tmp,
@@ -258,18 +354,71 @@ impl SysTraceCommand for STraceSysTraceCommand {
 
         Ok((output, trace.try_into()?))
     }
+
+    async fn trace_command_w_existing_file(
+        &self,
+        mut orig_cmd: Command,
+        parent_strace_path: &Path,
+    ) -> Result<(Output, Trace)> {
+        let child = orig_cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: format!("{:?} ...", orig_cmd.as_std().get_program()).to_string(),
+                error: e,
+            })?;
+
+        let Some(subprocess_id) = child.id() else {
+            return Err(anyhow!("subprocess had no process id after spawn()"));
+        };
+        info!(
+            "trace_command_w_existing_file: subprocess: {:?}",
+            child.id()
+        );
+
+        let output = child.wait_with_output().await?;
+
+        let mut trace = DraftTrace::new();
+        if output.status.success() {
+            Self::read_child_pid_trace_files(
+                &mut trace,
+                parent_strace_path,
+                &subprocess_id.to_string(),
+                None,
+            )?;
+        }
+
+        Ok((output, trace.try_into()?))
+    }
+}
+
+impl SysTraceCommand for STraceSysTraceCommand {
+    async fn trace_command(&self, orig_cmd: Command, tmp: &Path) -> Result<(Output, Trace)> {
+        match env::var("__TESTTRIM_STRACE") {
+            Ok(ref trace_path) => {
+                self.trace_command_w_existing_file(orig_cmd, Path::new(trace_path))
+                    .await
+            }
+            Err(_) => self.trace_command_w_strace(orig_cmd, tmp).await,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeSet,
         net::{Ipv4Addr, SocketAddrV4},
-        str::FromStr as _,
+        path::{Path, PathBuf},
     };
 
-    use crate::sys_trace::trace::UnifiedSocketAddr;
-
-    use super::*;
+    use crate::sys_trace::{
+        strace::STraceSysTraceCommand,
+        trace::{DraftTrace, ResolvedSocketAddr, Trace, UnifiedSocketAddr},
+    };
 
     #[test]
     fn multiprocess_cwd() {
@@ -288,16 +437,24 @@ mod tests {
         // the paths.
         //
         // Regenerating this file (if needed?) is done by...
-        // - run: strace --follow-forks --trace=chdir,openat,clone,clone3,connect --output
-        //   tests/test_data/strace-multiproc-chdir.txt python scripts/generate-strace-multiproc-chdir.py
-        // - verify: check to ensure that <...unfinished> cases exist in the newly generated file; this may randomly
-        //   *not* happen, and if that's the case then we'd be missing some testing scope.
-        let trace_raw = include_bytes!("../../../tests/test_data/strace-multiproc-chdir.txt");
+        // ```
+        // rm tests/test_data/strace-multiproc-chdir.strace.*
+        // strace --follow-forks --output-separately \
+        // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process \
+        // --string-limit=512 --strings-in-hex=non-ascii-chars \
+        // --output tests/test_data/strace-multiproc-chdir.strace python scripts/generate-strace-multiproc-chdir.py
+        // ```
 
         let mut trace = DraftTrace::new();
 
-        let res = STraceSysTraceCommand::read_trace(&mut trace, &trace_raw[..]);
+        let res = STraceSysTraceCommand::read_all_pid_trace_files(
+            &mut trace,
+            Path::new("tests/test_data/strace-multiproc-chdir.strace"),
+            Path::new("/nix/store/zv1kaq7f1q20x62kbjv6pfjygw5jmwl6-python3-3.12.7/bin/python"),
+        );
         assert!(res.is_ok(), "expected ok, was: {res:?}");
+
+        let trace: Trace = trace.try_into().expect("DraftTrace -> Trace");
 
         let paths = trace.get_open_paths();
         assert!(paths.contains(&PathBuf::from("flake.nix")));
@@ -318,175 +475,42 @@ mod tests {
 
     #[test]
     fn connect_trace_read() {
-        // trace_raw contains an strace that was generated by running `curl https://www.google.com/` under an strace.
+        // trace_raw contains an strace that was generated by running `curl https://www.google.ca/` under an strace.
         //
         // Regenerating this file (if needed?) is done by...
-        // - run: strace --follow-forks --trace=chdir,openat,clone,clone3,connect --output
-        //   tests/test_data/strace-connect.txt curl https://www.google.com/
-        let trace_raw = include_bytes!("../../../tests/test_data/strace-connect.txt");
+        // ```
+        // rm tests/test_data/tests/test_data/strace-curl-google-without-nscd.strace.*
+        // strace --follow-forks --output-separately \
+        // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process \
+        // --string-limit=512 --strings-in-hex=non-ascii-chars \
+        // --output tests/test_data/strace-curl-google-without-nscd.strace curl https://www.google.ca/
+        // ```
 
         let mut trace = DraftTrace::new();
 
-        let res = STraceSysTraceCommand::read_trace(&mut trace, &trace_raw[..]);
+        let res = STraceSysTraceCommand::read_all_pid_trace_files(
+            &mut trace,
+            Path::new("tests/test_data/strace-curl-google-without-nscd.strace"),
+            Path::new("/run/current-system/sw/bin/curl"),
+        );
         assert!(res.is_ok(), "expected OK, was {res:?}");
+
+        let trace: Trace = trace.try_into().expect("DraftTrace -> Trace");
 
         let sockets = trace.get_connect_sockets();
 
-        assert!(sockets.contains(&UnifiedSocketAddr::Unix(PathBuf::from(
-            "/var/run/nscd/socket"
-        ))));
+        assert!(sockets.contains(&ResolvedSocketAddr {
+            address: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
+            hostnames: BTreeSet::from([]),
+        }));
 
-        assert!(
-            sockets.contains(&UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
-                SocketAddrV4::new(Ipv4Addr::new(142, 250, 217, 100), 443)
-            )))
-        );
-    }
-
-    #[test]
-    fn sendto_read_trace_read() {
-        // trace_raw contains an strace that was generated by running `curl https://www.google.com/` under an strace.
-        //
-        // Regenerating this file (if needed?) is done by...
-        // - run: strace --follow-forks --trace=chdir,openat,clone,clone3,connect,sendto,close,read --string-limit=256
-        //   --strings-in-hex=non-ascii-chars --output tests/test_data/strace-curl-nscd.txt curl https://www.google.com/
-        let trace_raw = include_bytes!("../../../tests/test_data/strace-curl-nscd.txt");
-
-        let mut trace = DraftTrace::new();
-
-        let res = STraceSysTraceCommand::read_trace(&mut trace, &trace_raw[..]);
-        assert!(res.is_ok(), "expected ok, was: {res:?}");
-
-        let socket_captures = trace.get_socket_captures();
-
-        let capture = &socket_captures[0];
-        assert_eq!(
-            capture.socket_addr,
-            UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket"))
-        );
-        match &capture.state {
-            SocketCaptureState::Complete(complete) => {
-                assert_eq!(complete.len(), 1);
-                assert_eq!(
-                    &complete[0],
-                    &SocketOperation::Sent(vec![
-                        2, 0, 0, 0, 11, 0, 0, 0, 7, 0, 0, 0, 112, 97, 115, 115, 119, 100, 0
-                    ])
-                );
-            }
-            SocketCaptureState::Incomplete => {
-                panic!("required state Complete, but was {:?}", capture.state);
-            }
-        }
-
-        let capture = &socket_captures[1];
-        assert_eq!(
-            capture.socket_addr,
-            UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket"))
-        );
-        match &capture.state {
-            SocketCaptureState::Complete(complete) => {
-                // FIXME: two read() operations are expected here once read support is added
-                assert_eq!(complete.len(), 3);
-                assert_eq!(
-                    &complete[0],
-                    &SocketOperation::Sent(vec![
-                        2, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 49, 48, 48, 48, 0
-                    ])
-                );
-                assert_eq!(
-                    &complete[1],
-                    &SocketOperation::Read(vec![
-                        2, 0, 0, 0, 1, 0, 0, 0, 9, 0, 0, 0, 2, 0, 0, 0, 232, 3, 0, 0, 100, 0, 0, 0,
-                        16, 0, 0, 0, 15, 0, 0, 0, 31, 0, 0, 0
-                    ])
-                );
-                assert_eq!(
-                    &complete[2],
-                    &SocketOperation::Read(vec![
-                        109, 102, 101, 110, 110, 105, 97, 107, 0, 120, 0, 77, 97, 116, 104, 105,
-                        101, 117, 32, 70, 101, 110, 110, 105, 97, 107, 0, 47, 104, 111, 109, 101,
-                        47, 109, 102, 101, 110, 110, 105, 97, 107, 0, 47, 114, 117, 110, 47, 99,
-                        117, 114, 114, 101, 110, 116, 45, 115, 121, 115, 116, 101, 109, 47, 115,
-                        119, 47, 98, 105, 110, 47, 122, 115, 104, 0
-                    ])
-                );
-            }
-            SocketCaptureState::Incomplete => {
-                panic!("required state Complete, but was {:?}", capture.state);
-            }
-        }
-
-        let capture = &socket_captures[5];
-        assert_eq!(
-            capture.socket_addr,
-            UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
-                std::net::Ipv6Addr::from_str("2607:f8b0:400a:801::2003").unwrap(),
-                443,
-                0,
-                0,
+        println!("sockets: {sockets:?}");
+        assert!(sockets.contains(&ResolvedSocketAddr {
+            address: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(142, 250, 217, 67),
+                443
             ))),
-        );
-        assert_eq!(capture.state, SocketCaptureState::Incomplete);
-    }
-
-    #[test]
-    fn recvfrom_trace_read() {
-        // strace --follow-forks --string-limit=256 --strings-in-hex=non-ascii-chars
-        // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom --output curl-no-nscd.txt curl
-        // https://codeberg.org/
-
-        let trace_raw = include_bytes!("../../../tests/test_data/strace-curl-no-nscd.txt");
-
-        let mut trace = DraftTrace::new();
-
-        let res = STraceSysTraceCommand::read_trace(&mut trace, &trace_raw[..]);
-        assert!(res.is_ok(), "expected ok, was: {res:?}");
-
-        let socket_captures = trace.get_socket_captures();
-
-        let capture = &socket_captures[4];
-        assert_eq!(
-            capture.socket_addr,
-            UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
-                Ipv4Addr::new(100, 100, 100, 100),
-                53
-            )))
-        );
-        match &capture.state {
-            SocketCaptureState::Complete(complete) => {
-                assert_eq!(complete.len(), 2);
-                assert_eq!(
-                    &complete[0],
-                    &SocketOperation::Read(Vec::from(b"\x07a\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x0b\x1b\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00"))
-                );
-                assert_eq!(
-                    &complete[1],
-                    &SocketOperation::Read(Vec::from(b"\xccd\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\xc0\x0c\x00\x1c\x00\x01\x00\x00\x0b\x1b\x00\x10 \x01\x06|\x14\x01 \xf0\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00"))
-                );
-            }
-            SocketCaptureState::Incomplete => {
-                panic!("required state Complete, but was {:?}", capture.state);
-            }
-        }
-
-        // r#"103155 connect(7, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#
-        // r#"103155 poll([{fd=7, events=POLLOUT}], 1, 0) = 1 ([{fd=7, revents=POLLOUT}])"#
-        // r#"103155 sendmmsg(7, [{msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\xd6\xef\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\x00\x00)\x04\xb0\x00\x00\x00\x00\x00\x00", iov_len=41}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=41}, {msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\xf4\xec\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\x00\x00)\x04\xb0\x00\x00\x00\x00\x00\x00", iov_len=41}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=41}], 2, MSG_NOSIGNAL) = 2"#
-        // r#"103155 poll([{fd=7, events=POLLIN}], 1, 5000 <unfinished ...>"#
-        // r#"103154 <... poll resumed>)              = 0 (Timeout)"#
-        // r#"103154 rt_sigaction(SIGPIPE, NULL, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, 8) = 0"#
-        // r#"103154 rt_sigaction(SIGPIPE, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, NULL, 8) = 0"#
-        // r#"103154 rt_sigaction(SIGPIPE, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, NULL, 8) = 0"#
-        // r#"103154 poll([{fd=5, events=POLLIN}, {fd=3, events=POLLIN}], 2, 8 <unfinished ...>"#
-        // r#"103155 <... poll resumed>)              = 1 ([{fd=7, revents=POLLIN}])"#
-        // r#"103155 ioctl(7, FIONREAD, [57])         = 0"#
-        // r#"103155 recvfrom(7, "\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 2048, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 57"#
-        // r#"103155 poll([{fd=7, events=POLLIN}], 1, 4993) = 1 ([{fd=7, revents=POLLIN}])"#
-        // r#"103155 ioctl(7, FIONREAD, [69])         = 0"#
-        // r#"103154 <... poll resumed>)              = 0 (Timeout)"#
-        // r#"103155 recvfrom(7, "\xf4\xec\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x1c\x00\x01\xc0\f\x00\x1c\x00\x01\x00\x00\x01%\x00\x10 \x01\x06|\x14\x01 \xf0\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 65536, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 69"#
-        // r#"103154 rt_sigaction(SIGPIPE, NULL, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7f084bc47620}, 8) = 0"#
-        // r#"103155 close(7 <unfinished ...>"#
+            hostnames: BTreeSet::from([String::from("www.google.ca")]),
+        }));
     }
 }

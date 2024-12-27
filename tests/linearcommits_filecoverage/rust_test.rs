@@ -22,7 +22,7 @@ use crate::{assert_performance_tracing, git_checkout, git_clone, CWD_MUTEX};
 
 #[tokio::test]
 async fn rust_linearcommits_filecoverage() -> Result<()> {
-    // simplelog::SimpleLogger::init(simplelog::LevelFilter::Info, simplelog::Config::default())?;
+    simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())?;
 
     let _cwd_mutex = CWD_MUTEX.lock();
 

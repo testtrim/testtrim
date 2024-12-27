@@ -1,0 +1,20 @@
+wait4(4086640, 0x7f560d6ef6e4, WNOHANG, NULL) = 0
+wait4(4086639, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086640, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086639, 0x7f560d6ef984, WNOHANG, NULL) = 0
+read(7, "\x00\x00\x00\x04", 4)          = 4
+read(7, "\x80\x04N.", 4)                = 4
+wait4(4086640, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086639, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086640, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086639, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086640, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086639, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086640, 0x7f560d6ef984, WNOHANG, NULL) = 0
+wait4(4086639, 0x7f560d6ef984, WNOHANG, NULL) = 0
+read(7, "\x00\x00\x00\x04", 4)          = 4
+read(7, "\x80\x04N.", 4)                = 4
+read(7, "\x00\x00\x00\x04", 4)          = 4
+read(7, "\x80\x04N.", 4)                = 4
+exit(0)                                 = ?
++++ exited with 0 +++
