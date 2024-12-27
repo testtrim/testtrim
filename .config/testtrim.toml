@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# PostgreSQL network access should cause test reruns only if schema or test environments change
+[[network-policy]]
+name = "PostgreSQL"
+apply.run-if-files-changed = [
+    ".forgejo/workflows/rust-check.yaml",
+    "db/postgres/*.sql",
+]
+[[network-policy.match]]
+port = 5432
+
+# Ignore any DNS access
+[[network-policy]]
+name = "DNS"
+apply = "ignore"
+[[network-policy.match]]
+unix-socket = "/var/run/nscd/socket"
+[[network-policy.match]]
+port = 53
+
+# coverage::testtrim_api::tests uses an ephemeral port on localhost; this network access can be ignored as
+# coverage-based test targeting should capture these tests perfectly
+[[network-policy]]
+name = "localhost ephemeral port"
+apply = "ignore"
+[[network-policy.match]]
+host-port-range = ["localhost", "32768-60999"]
+
+# dotnet_linearcommits_filecoverage accesses a bunch of local unix sockets for IPC during build, not test relevant
+[[network-policy]]
+name = "dotnet build sockets"
+apply = "ignore"
+[[network-policy.match]]
+# "/tmp/MSBuild19954"
+# "/tmp/MsxfyLA5L74PtxCjeNY7iSDazG05qOY6YXjTYUKuZbo"
+unix-socket = "/tmp/*"
+[[network-policy.match]]
+# "/var/run/lttng/lttng-ust-sock-8"
+unix-socket = "**/lttng/**"
+[[network-policy.match]]
+# "/root/.lttng/lttng-ust-sock-8"
+unix-socket = "**/.lttng/**"
+
+# Integration tests access codeberg.org in order to perform checkouts of specimen repos.  In an ideal world we would
+# rerun these tests when the upstream repos change -- but we don't currently have a capability to do that easily.  It's
+# most likely that a change to the specimen repos will be paired with a change to the related tests, and these tests are
+# long, so we ignore this network access.
+[[network-policy]]
+name = "codeberg"
+apply = "ignore"
+[[network-policy.match]]
+host-port = ["codeberg.org", 443]
+
+# The dotnet `nuget install` step during check-8 tests will reach out to nuget.org to download a repo.  These network
+# accesses occur during that outreach, and can be ignored for rerunning tests.
+[[network-policy]]
+name = "nuget access"
+apply = "ignore"
+[[network-policy.match]]
+host-port = ["api.nuget.org", 443]
+[[network-policy.match]]
+host-port = ["www.microsoft.com", 80]
+[[network-policy.match]]
+host-port = ["s.symcb.com", 80]
+[[network-policy.match]]
+host-port = ["ts-crl.ws.symantec.com", 80]
+[[network-policy.match]]
+host-port = ["crl3.digicert.com", 80]
+[[network-policy.match]]
+host-port = ["crl4.digicert.com", 80]
+
+# The Rust integration tests reach out to crates.io for 3rd party dependencies; these network accesses occur during that
+# outreach, and can be ignored for rerunning tests.
+[[network-policy]]
+name = "crates.io"
+apply = "ignore"
+[[network-policy.match]]
+host-port = ["index.crates.io", 443]
+[[network-policy.match]]
+host-port = ["static.crates.io", 443]
+
+# Rust & Go integration tests validate that network access rerun their specimen tests by accessing google.com -- we
+# don't need to rerun the actual integration tests because of that.
+[[network-policy]]
+name = "test-internal network access"
+apply = "ignore"
+[[network-policy.match]]
+host-port = ["google.com", 80]

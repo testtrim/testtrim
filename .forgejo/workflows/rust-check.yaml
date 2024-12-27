@@ -24,8 +24,17 @@ jobs:
           POSTGRES_USER: testtrim
           POSTGRES_PASSWORD: testtrim
 
+    env:
+      TESTTRIM_DATABASE_URL: https://experimental.testtrim.org/
+      RUST_BACKTRACE: "1"
+
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          # testtrim needs ancestor commits in order to identify changes relevant to running tests; `fetch-depth: 0`
+          # would be the safest in order to ensure the "last commit we have coverage data" is available, but if it slows
+          # the repo checkout down too much it could probably be changed to a handful of commits instead.
+          fetch-depth: 0
       - run: apt-get update && apt-get install -y sudo postgresql-client # install-nix-actions requires `sudo`...
       - name: verify pgsql service is available
         env:
@@ -36,6 +45,7 @@ jobs:
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
       - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
+
       - name: .sqlx verify clean & correct
         env:
           DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
@@ -49,13 +59,35 @@ jobs:
             git status
             exit 1
           fi
-      - name: cargo build
-        run: nix develop .# --command cargo build
-      - name: run tests
+
+      - run: |
+          VERSION=$(nix develop .# --command dasel -f ./Cargo.toml -r toml .package.version -w -)
+          echo "Will use testtrim $VERSION:"
+          FLAKE="git+https://codeberg.org/testtrim/testtrim.git?ref=refs/tags/v${VERSION}"
+          nix run $FLAKE#testtrim -- --version
+          echo "TESTTRIM=$FLAKE#testtrim" >> $GITHUB_ENV
+      - name: get-test-identifiers -- output tests that will be run, and why
+        run: nix develop .# --command nix run $TESTTRIM -- get-test-identifiers -vv
+      - name: run-tests
+        run: nix develop .# --command nix run $TESTTRIM -- run-tests -vv --source-mode=clean-commit
+        env:
+          TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
+          RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
+
+      # There's always the risk that testtrim is broken and doesn't run all the necessary tests, especially when we're
+      # using testtrim to test testtrim.  So as a backup, on the main branch only, also run all tests.  This will
+      # minimize the blocking effect for time, but give a chance to identify any cases where tests fail but don't get
+      # detected by testtrim.
+      #
+      # This isn't general advice to do for all users of testtrim -- there's an elevated risk here when considering
+      # self-testing.
+      - name: run all tests
+        if: ${{ github.ref == 'refs/heads/main' }}
         env:
           TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
         run: nix develop .# --command cargo nextest run
+
       - name: verify clippy warning-free
         run: nix develop .# --command cargo clippy -- -D warnings
       - name: verify clippy on tests warning-free

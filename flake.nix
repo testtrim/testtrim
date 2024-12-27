@@ -50,7 +50,9 @@
             myNativeBuildInputs ++
             [
               cargo-binutils # allows access to llvm-profdata # FIXME: maybe not needed anymore; pretty dated from early development days
+              cargo-expand # useful for understanding macros, run `cargo expand --lib > tmp.rs` to view intermediate output
               cargo-nextest
+              dasel # needed for rust-check.yaml
               diesel-cli
               git-cliff # needed for release.yaml workflow
               jq # needed for release.yaml workflow
@@ -59,7 +61,6 @@
               rustfilt # LLVM rust demangler
               sqlx-cli
               strace
-              cargo-expand
 
               # Can locally run the Forgejo action for quicker dev cycles:
               # act --container-daemon-socket unix:///run/podman/podman.sock -W ./.forgejo/workflows -P docker=node:20-bullseye

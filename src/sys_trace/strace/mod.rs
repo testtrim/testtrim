@@ -301,7 +301,11 @@ impl STraceSysTraceCommand {
             // %process will guarantee that we get all process lifecycle syscalls, which helps guarentee that the
             // pid-filtering capability for sub-strace doesn't miss any subprocesses
             .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process")
-            .arg("--string-limit=512") // should be sufficient for DNS; was tested at 256 and ran into partial :53 msgs but seemed just borderline
+            // 512 bytes should be sufficient for most DNS.  testtrim's integration tests are showing we're exceeding
+            // this buffer at times, but until https://codeberg.org/testtrim/testtrim/issues/217 is fixed I'm not
+            // confident that's really true -- a FD could be opened to a DNS server, closed on another thread, and then
+            // reopened to another socket causing a false-positive.
+            .arg("--string-limit=512")
             .arg("--strings-in-hex=non-ascii-chars")
             .arg("--output")
             .arg(trace_path);
