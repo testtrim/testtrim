@@ -134,9 +134,9 @@ Significant problems that are known to exist within the scope described above, a
     - Go does not instrument test files (`*_test.go`) when tests are executed, preventing testtrim from identifying what codepaths are executed in those files for each test.  As a substitute, testtrim makes the assumption that changing such a file requires rerunning all the tests defined in this file.  This is a reasonable approximation, but tests may reference each other or common utility functions defined in other `*_test.go` files and such dependencies cannot be identified at this time.
     - testrim can be fooled when [`const` and package-level `var` values are changed](https://codeberg.org/testtrim/testtrim/issues/136).  The codepaths to initialize these values are always invoked regardless of whether they're accessed or not, and so testtrim can't tell the difference between initialization and access.
     - The current Go implementation requires building test binaries into temp storage space and then executing them, which will likely be incompatible with `noexec` tmp spaces.
-
 - testtrim isn't published as a released tool and must be checked out and built from source.
     - exception: testtrim has an OCI/Docker container published intended as a Remote API server, the container is `codeberg.org/testtrim/server:latest`
+- Using the [Network Configuration](#network-configuration) feature is often necessary to reduce superfluous test re-execution; however it's capabilities in matching hostnames for connections is limited by current DNS interpretation limitations such as [inaccurate multithreading support](https://codeberg.org/testtrim/testtrim/issues/217).
 
 ## Known Unknown Issues
 
@@ -309,7 +309,7 @@ One or more network-policy tables can exist in the file, which must contain:
     - `address-port` -- an array of an address and a port, eg. `["127.0.0.1/32", 8080]`
     - `address-port-range` -- an address of an address and port range, eg. `["127.0.0.1/32", "8085-8086"]`
     - `host` -- a hostname, eg. `"localhost"`, on any network port.
-        - **Note**: hostname matching internally functions by monitoring hostname resolution while the process is running, which has a limited implementation of monitoring traffic to `/var/run/nscd/socket` and decoding it.
+        - **Note**: hostname matching internally functions by monitoring hostname resolution while the process is running.  This functions by monitoring traffic to `/var/run/nscd/socket` and DNS servers (on port `:53`) and decoding it.  This capability is therefore only available when syscall tracing is supported, which is currenty limited to Linux systems with `strace` available.
         - **Note**: hostname matching can have unexpected outcomes; if a two hostnames resolve to the same IP address, then any network traffic to that IP address will match network policies from either hostname as testtrim cannot identify which hostname was used for that network traffic.
     - `host-port` -- an array of a hostname and a port, eg. `["127.0.0.1/32", 8080]`; notes for `host` still apply
     - `host-port-range` -- an address of a hostname and port range, eg. `["127.0.0.1/32", "8085-8086"]`; notes for `host` still apply
