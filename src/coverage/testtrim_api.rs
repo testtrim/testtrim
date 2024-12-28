@@ -4,8 +4,9 @@
 
 use async_compression::tokio::bufread::ZstdEncoder;
 use log::debug;
+use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{marker::PhantomData, time::Instant};
+use std::{marker::PhantomData, sync::OnceLock, time::Instant};
 use tokio::io::AsyncReadExt;
 use url::Url;
 
@@ -26,10 +27,11 @@ pub struct TesttrimApiCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifie
     project_name: String,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
+    client: OnceLock<Client>,
 }
 
-impl From<surf::Error> for CoverageDatabaseError {
-    fn from(value: surf::Error) -> Self {
+impl From<reqwest::Error> for CoverageDatabaseError {
+    fn from(value: reqwest::Error) -> Self {
         CoverageDatabaseError::DatabaseError(value.to_string())
     }
 }
@@ -73,6 +75,19 @@ where
             project_name,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
+            client: OnceLock::new(),
+        })
+    }
+
+    fn client(&self) -> Result<&Client, CoverageDatabaseDetailedError> {
+        self.client.get_or_try_init(|| {
+            reqwest::ClientBuilder::new()
+                .zstd(true)
+                .gzip(true)
+                .user_agent(format!("testtrim ({})", env!("CARGO_PKG_VERSION")))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .context("creating reqwest client for TesttrimApiCoverageDatabase")
         })
     }
 }
@@ -89,8 +104,6 @@ where
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
     ) -> Result<(), CoverageDatabaseDetailedError> {
-        // FIXME: use zstd request body compression
-
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -129,11 +142,16 @@ where
             duration.as_millis()
         );
 
-        debug!("HTTP request POST {url}");
-        let mut response = surf::post(url)
-            .body_bytes(&buf)
+        let client = self.client()?;
+        let request = client
+            .post(url)
             .header("Content-Type", "application/json")
             .header("Content-Encoding", "zstd")
+            .body(buf)
+            .build()
+            .context("building request for coverage data POST")?;
+        let response = client
+            .execute(request)
             .await
             .context("sending request for coverage data POST")?;
 
@@ -147,7 +165,7 @@ where
         }
 
         response
-            .body_json::<Option<String>>()
+            .json::<Option<String>>()
             .await
             .context("parsing response body for coverage data POST")?;
 
@@ -159,8 +177,6 @@ where
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
-        // FIXME: use zstd response body compression
-
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -179,11 +195,13 @@ where
             }
         }
         debug!("HTTP request GET {url}");
-        let mut response = surf::get(url)
-            // FIXME: can't use this because surf->isahc->libcurl will read the `Content-Encoding: zstd`` response and
-            // provide an error without giving us any chance to handle the content.  In order to support this we'll have
-            // to go to a different http client library.
-            // .header("Accept-Encoding", "zstd")
+        let client = self.client()?;
+        let request = client
+            .get(url)
+            .build()
+            .context("building request for coverage data GET")?;
+        let response = client
+            .execute(request)
             .await
             .context("sending request for coverage data GET")?;
 
@@ -197,7 +215,7 @@ where
         }
 
         let body = response
-            .body_json::<Option<FullCoverageData<TI, CI>>>()
+            .json::<Option<FullCoverageData<TI, CI>>>()
             .await
             .context("parsing response body for coverage data GET")?;
 
@@ -216,7 +234,13 @@ where
             .context("parse configured API URL")?
             .push(&self.project_name);
         debug!("HTTP request GET {url}");
-        let mut response = surf::get(url)
+        let client = self.client()?;
+        let request = client
+            .get(url)
+            .build()
+            .context("building request for coverage data GET")?;
+        let response = client
+            .execute(request)
             .await
             .context("sending request for coverage data GET")?;
 
@@ -230,7 +254,7 @@ where
         }
 
         let body = response
-            .body_json::<bool>()
+            .json::<bool>()
             .await
             .context("parsing response body for coverage data GET")?;
 
@@ -250,7 +274,13 @@ where
             .context("parse configured API URL")?
             .push(&self.project_name);
         debug!("HTTP request DELETE {url}");
-        let mut response = surf::delete(url)
+        let client = self.client()?;
+        let request = client
+            .delete(url)
+            .build()
+            .context("building request for coverage data DELETE")?;
+        let response = client
+            .execute(request)
             .await
             .context("sending request for coverage data DELETE")?;
 
@@ -264,7 +294,7 @@ where
         }
 
         response
-            .body_json::<Option<String>>()
+            .json::<Option<String>>()
             .await
             .context("parsing response body for coverage data DELETE")?;
 
@@ -515,10 +545,10 @@ mod tests {
         assert!(result.is_ok(), "result = {result:?}");
 
         // Check what HTTP headers were sent:
-        let http_headers = surf::get(srv.url("/last-request-headers"))
+        let http_headers = reqwest::get(srv.url("/last-request-headers"))
             .await
             .context("GET /last-request-headers")?
-            .body_json::<Option<HashMap<String, String>>>()
+            .json::<Option<HashMap<String, String>>>()
             .await
             .context("parsing response body for GET /last-request-headers")?;
         assert!(
@@ -547,10 +577,10 @@ mod tests {
         assert!(result.is_ok(), "result = {result:?}");
 
         // Check what HTTP headers were sent:
-        let request_headers = surf::get(srv.url("/last-request-headers"))
+        let request_headers = reqwest::get(srv.url("/last-request-headers"))
             .await
             .context("GET /last-request-headers")?
-            .body_json::<Option<HashMap<String, String>>>()
+            .json::<Option<HashMap<String, String>>>()
             .await
             .context("parsing response body for GET /last-request-headers")?;
         assert!(
@@ -560,10 +590,10 @@ mod tests {
         let request_headers = request_headers.unwrap();
         println!("request_headers: {request_headers:?}");
 
-        let response_headers = surf::get(srv.url("/last-response-headers"))
+        let response_headers = reqwest::get(srv.url("/last-response-headers"))
             .await
             .context("GET /last-response-headers")?
-            .body_json::<Option<HashMap<String, String>>>()
+            .json::<Option<HashMap<String, String>>>()
             .await
             .context("parsing response body for GET /last-response-headers")?;
         assert!(
@@ -578,18 +608,17 @@ mod tests {
         // compression/decompression would cause other assertion failures.
         //
         // Ideally we'd use zstd based upon the testing we did in https://codeberg.org/testtrim/testtrim/issues/112, but
-        // current client (surf->isahc->libcurl) doesn't support zstd (even though curl does, for some reason?).  Well,
-        // this is OK anyway -- in the future if it changes, the key point of this test is to make sure that *some
-        // useful* compression is being requested, and when responded with, it works, *AND then if it changes* due to
-        // any library upgrades, it really should be cross-checked with the run-server impl to make sure it's supported
-        // but that's basically the same implementation we'll be using to test here.
+        // the key point of this test is to make sure that *some useful* compression is being requested, and when
+        // responded with, it works, *AND then if it changes* due to any library upgrades, it really should be
+        // cross-checked with the run-server impl to make sure it's supported but that's basically the same
+        // implementation we'll be using to test here.
         assert_eq!(
             request_headers.get("accept-encoding"),
-            Some(&String::from("deflate, gzip"))
+            Some(&String::from("gzip, zstd"))
         );
         assert_eq!(
             response_headers.get("content-encoding"),
-            Some(&String::from("gzip"))
+            Some(&String::from("zstd"))
         );
 
         Ok(())
