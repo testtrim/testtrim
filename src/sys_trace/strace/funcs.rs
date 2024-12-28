@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{borrow::Cow, os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
+use std::{os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
 
 use anyhow::{anyhow, ensure, Result};
 use lazy_static::lazy_static;
@@ -10,9 +10,8 @@ use regex::Regex;
 
 use crate::sys_trace::trace::UnifiedSocketAddr;
 
-use super::{
-    sequencer::{OwnedArgument, Sequencer, Syscall, TraceOutput},
-    tokenizer::Retval,
+use super::tokenizer::{
+    tokenize, Argument, CallOutcome, EncodedString, Retval, SyscallSegment, TokenizerOutput,
 };
 
 #[derive(Debug, PartialEq)]
@@ -22,19 +21,19 @@ pub enum OpenPath {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum StringArgument {
-    Complete(Vec<u8>),
+pub enum StringArgument<'a> {
+    Complete(EncodedString<'a>),
     Partial,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum FunctionTrace {
-    Function(Function),
+pub enum FunctionTrace<'a> {
+    Function(Function<'a>),
     Exit,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Function {
+pub enum Function<'a> {
     Openat {
         path: OpenPath,
     },
@@ -42,7 +41,7 @@ pub enum Function {
         path: PathBuf,
     },
     Clone {
-        child_pid: String,
+        child_pid: u32,
     },
     Connect {
         // connect is a trickier syscall than the others we've handled because it is typically used with non-blocking
@@ -54,23 +53,23 @@ pub enum Function {
         //
         // So the sum of that is that Connect is currently the only syscall which will be emitted here even if it has an
         // error.
-        socket_fd: String,
+        socket_fd: &'a str,
         socket_addr: UnifiedSocketAddr,
     },
     Sendto {
-        socket_fd: String,
-        data: StringArgument,
+        socket_fd: &'a str,
+        data: StringArgument<'a>,
     },
     Close {
-        fd: String,
+        fd: &'a str,
     },
     Read {
-        fd: String,
-        data: StringArgument,
+        fd: &'a str,
+        data: StringArgument<'a>,
     },
     Recv {
-        socket_fd: String,
-        data: StringArgument,
+        socket_fd: &'a str,
+        data: StringArgument<'a>,
     },
     Execve {
         arg0: PathBuf,
@@ -123,26 +122,29 @@ lazy_static! {
     .unwrap();
 }
 
-pub struct FunctionExtractor<'a> {
-    sequencer: Sequencer<'a>,
+pub struct FunctionExtractor {
+    // sequencer: Sequencer<'a>,
 }
 
-impl FunctionExtractor<'_> {
+impl FunctionExtractor {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            sequencer: Sequencer::new(),
+            // sequencer: Sequencer::new(),
         }
     }
 
-    pub fn extract(&mut self, input: &str) -> Result<Option<FunctionTrace>> {
-        let trace_output = self.sequencer.tokenize(input)?;
-        let Some(trace_output) = trace_output else {
-            return Ok(None);
-        };
+    pub fn extract<'a>(&mut self, input: &'a str) -> Result<Option<FunctionTrace<'a>>> {
+        let trace_output = tokenize(input)?;
+        // let Some(trace_output) = trace_output else {
+        //     return Ok(None);
+        // };
         match trace_output {
-            TraceOutput::Syscall(syscall) => {
-                let retval = match syscall.retval {
+            TokenizerOutput::Syscall(syscall) => {
+                let CallOutcome::Complete { ref retval } = syscall.outcome else {
+                    return Ok(None);
+                };
+                let retval = match retval {
                     Retval::Success(retval) => retval,
                     // Permit "connect" failures to be emitted.
                     Retval::Failure(retval, _msg) if syscall.function == "connect" => retval,
@@ -151,56 +153,56 @@ impl FunctionExtractor<'_> {
                         return Ok(None);
                     }
                 };
-                Ok(Some(FunctionTrace::Function(match &*syscall.function {
-                    "close" => Self::extract_close(syscall)?,
-                    "openat" => Self::extract_openat(syscall)?,
-                    "chdir" => Self::extract_chdir(syscall)?,
-                    "clone" => Self::extract_clone(syscall, retval)?,
-                    "clone3" => Self::extract_clone(syscall, retval)?,
-                    "vfork" => Self::extract_clone(syscall, retval)?,
-                    "sendto" => return Self::extract_sendto(syscall), // may have None
-                    "read" => Self::extract_read(syscall)?,
-                    "connect" => return Self::extract_connect(syscall), // may have None
-                    "recvfrom" => Self::extract_recvfrom(syscall)?,
-                    "execve" => Self::extract_execve(syscall)?,
+                let function = match syscall.function {
+                    "close" => Some(Self::extract_close(&syscall.arguments)?),
+                    "openat" => Some(Self::extract_openat(&syscall.arguments)?),
+                    "chdir" => Some(Self::extract_chdir(&syscall.arguments)?),
+                    "clone" => Some(Self::extract_clone((*retval).try_into()?)),
+                    "clone3" => Some(Self::extract_clone((*retval).try_into()?)),
+                    "vfork" => Some(Self::extract_clone((*retval).try_into()?)),
+                    "sendto" => Self::extract_sendto(syscall)?, // may have None
+                    "read" => Some(Self::extract_read(syscall)?),
+                    "connect" => Self::extract_connect(&syscall.arguments)?, // may have None
+                    "recvfrom" => Some(Self::extract_recvfrom(syscall)?),
+                    "execve" => Some(Self::extract_execve(&syscall.arguments)?),
 
                     // some syscalls we receive because we trace "%process" (for completeness if anything comes along to
                     // create new processes), but can be dropped because they aren't relevant to our current needs:
-                    "wait4" | "kill" | "tgkill" | "waitid" | "pidfd_send_signal" => {
-                        return Ok(None);
-                    }
+                    "wait4" | "kill" | "tgkill" | "waitid" | "pidfd_send_signal" => None,
 
                     other => {
                         return Err(anyhow!("unexpected syscall: {other:?}"));
                     }
-                })))
+                };
+
+                Ok(function.map(FunctionTrace::Function))
             }
-            TraceOutput::Exit(_) => Ok(Some(FunctionTrace::Exit)),
+            TokenizerOutput::Exit(_) => Ok(Some(FunctionTrace::Exit)),
+            TokenizerOutput::Signal(_) => Ok(None),
         }
     }
 
-    fn extract_close(mut syscall: Syscall<'_>) -> Result<Function> {
+    fn extract_close<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
-            syscall.arguments.len() == 1,
+            arguments.len() == 1,
             "expected 1 argument to close, but was: {}",
-            syscall.arguments.len()
+            arguments.len()
         );
-        let fd = syscall.remove_numeric_arg(0)?;
+        let fd = Self::numeric(arguments, 0)?;
         Ok(Function::Close { fd })
     }
 
-    fn extract_openat(mut syscall: Syscall<'_>) -> Result<Function> {
+    fn extract_openat<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             // mode_t mode optional 4th
-            (3..=4).contains(&syscall.arguments.len()),
+            (3..=4).contains(&arguments.len()),
             "expected 3-4 argument to openat, but arguments were: {:?}",
-            syscall.arguments,
+            arguments,
         );
-        let path = syscall.remove_path_arg(1)?;
-
-        let path = match &syscall.arguments[0] {
-            OwnedArgument::Enum(val) if val == "AT_FDCWD" => OpenPath::RelativeToCwd(path),
-            OwnedArgument::Numeric(num) => OpenPath::RelativeToOpenDirFD(path, num.parse::<i32>()?),
+        let path = Self::path(arguments, 1)?;
+        let path = match &arguments[0] {
+            Argument::Enum(val) if *val == "AT_FDCWD" => OpenPath::RelativeToCwd(path),
+            Argument::Numeric(num) => OpenPath::RelativeToOpenDirFD(path, num.parse::<i32>()?),
             other => {
                 return Err(anyhow!(
                     "argument 0 was unexpected in syscall openat: {other:?}",
@@ -210,85 +212,65 @@ impl FunctionExtractor<'_> {
         Ok(Function::Openat { path })
     }
 
-    fn extract_chdir(mut syscall: Syscall<'_>) -> Result<Function> {
+    fn extract_chdir<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
-            syscall.arguments.len() == 1,
-            "expected 1 argument to chdir, but was: {}",
-            syscall.arguments.len()
+            arguments.len() == 1,
+            "expected 1 argument to chdir, but arguments were: {:?}",
+            arguments
         );
-        let path = syscall.remove_path_arg(0)?;
+        let path = Self::path(arguments, 0)?;
         Ok(Function::Chdir { path })
     }
 
-    #[allow(clippy::needless_pass_by_value)] // keeps same pattern as other extract functions
-    fn extract_clone(syscall: Syscall<'_>, retval: i32) -> Result<Function> {
-        let arg_count = match syscall.function {
-            Cow::Borrowed("clone") => 3,
-            Cow::Borrowed("clone3") => 2,
-            Cow::Borrowed("vfork") => 0,
-            _ => unreachable!(),
-        };
-        ensure!(
-            syscall.arguments.len() == arg_count,
-            "expected {arg_count} argument to clone, but was: {}",
-            syscall.arguments.len()
-        );
-        Ok(Function::Clone {
-            child_pid: retval.to_string(),
-        })
+    fn extract_clone<'a>(retval: u32) -> Function<'a> {
+        Function::Clone { child_pid: retval }
     }
 
-    fn extract_sendto(mut syscall: Syscall<'_>) -> Result<Option<FunctionTrace>> {
+    fn extract_sendto(mut syscall: SyscallSegment) -> Result<Option<Function<'_>>> {
         ensure!(
             syscall.arguments.len() == 6,
-            "expected 6 argument to {}, but was: {}",
-            syscall.function,
-            syscall.arguments.len()
+            "expected 6 argument to sendto, but arguments were: {:?}",
+            syscall.arguments,
         );
-        if let OwnedArgument::Structure(_) = syscall.arguments[1] {
+        if let Argument::Structure(_) = syscall.arguments[1] {
+            // unreachable!()
             return Ok(None);
         }
-        let data = syscall.remove_data_arg(1)?;
-        let socket_fd = syscall.remove_numeric_arg(0)?;
-        Ok(Some(FunctionTrace::Function(Function::Sendto {
-            socket_fd,
-            data,
-        })))
+        let data = Self::remove_data_argument(&mut syscall.arguments, 1)?;
+        let socket_fd = Self::numeric(&syscall.arguments, 0)?;
+        Ok(Some(Function::Sendto { socket_fd, data }))
     }
 
-    fn extract_read(mut syscall: Syscall<'_>) -> Result<Function> {
+    fn extract_read(mut syscall: SyscallSegment) -> Result<Function<'_>> {
         ensure!(
             syscall.arguments.len() == 3,
-            "expected 3 argument to {}, but was: {}",
-            syscall.function,
-            syscall.arguments.len()
+            "expected 3 argument to read, but arguments were: {:?}",
+            syscall.arguments
         );
-        let data = syscall.remove_data_arg(1)?;
-        let fd = syscall.remove_numeric_arg(0)?;
+        let _ = syscall.arguments.pop();
+        let data = Self::pop_data_argument(&mut syscall.arguments)?;
+        let fd = Self::pop_numeric_argument(&mut syscall.arguments)?;
         Ok(Function::Read { fd, data })
     }
 
-    fn extract_connect(mut syscall: Syscall<'_>) -> Result<Option<FunctionTrace>> {
+    fn extract_connect<'a>(arguments: &[Argument<'a>]) -> Result<Option<Function<'a>>> {
         ensure!(
-            syscall.arguments.len() == 3,
-            "expected 3 argument to {}, but was: {}",
-            syscall.function,
-            syscall.arguments.len()
+            arguments.len() == 3,
+            "expected 3 argument to connect, but arguments were: {:?}",
+            arguments
         );
-        let socket_addr = match syscall.arguments.remove(1) {
-            OwnedArgument::Structure(v) => Self::parse_socket_structure(&v)?,
+        let socket_addr = match &arguments[1] {
+            Argument::Structure(v) => Self::parse_socket_structure(v)?,
             v => {
                 return Err(anyhow!(
                     "argument 1 was not structure on syscall connect; it was {v:?}",
                 ));
             }
         };
-        let socket_fd = syscall.remove_numeric_arg(0)?;
-        Ok(socket_addr.map(|s| {
-            FunctionTrace::Function(Function::Connect {
-                socket_addr: s,
-                socket_fd,
-            })
+        let socket_fd = Self::numeric(arguments, 0)?;
+        Ok(socket_addr.map(|s| Function::Connect {
+            socket_addr: s,
+            socket_fd,
         }))
     }
 
@@ -303,9 +285,8 @@ impl FunctionExtractor<'_> {
         } else if let Some(sin6_addr) = cap.name("sin6_addr") {
             let port = u16::from_str(&cap["sin6_port"]).unwrap();
             if port == 0 {
-                // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different
-                // remote endpoints.  As they don't really communicate externally, it makes sense to filter them
-                // out.
+                // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different remote
+                // endpoints.  As they don't really communicate externally, it makes sense to filter them out.
                 None
             } else {
                 Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
@@ -320,9 +301,8 @@ impl FunctionExtractor<'_> {
         } else if let Some(sin_addr) = cap.name("sin_addr") {
             let port = u16::from_str(&cap["sin_port"]).unwrap();
             if port == 0 {
-                // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different
-                // remote endpoints.  As they don't really communicate externally, it makes sense to filter them
-                // out.
+                // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different remote
+                // endpoints.  As they don't really communicate externally, it makes sense to filter them out.
                 None
             } else {
                 Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
@@ -339,61 +319,68 @@ impl FunctionExtractor<'_> {
         })
     }
 
-    fn extract_recvfrom(mut syscall: Syscall<'_>) -> Result<Function> {
+    fn extract_recvfrom(mut syscall: SyscallSegment) -> Result<Function<'_>> {
         ensure!(
             syscall.arguments.len() == 6,
-            "expected 6 argument to {}, but was: {}",
-            syscall.function,
-            syscall.arguments.len()
+            "expected 6 argument to recvfrom, but arguments were: {:?}",
+            syscall.arguments
         );
-        let data = syscall.remove_data_arg(1)?;
-        let socket_fd = syscall.remove_numeric_arg(0)?;
+        let data = Self::remove_data_argument(&mut syscall.arguments, 1)?;
+        let socket_fd = Self::numeric(&syscall.arguments, 0)?;
         Ok(Function::Recv { socket_fd, data })
     }
 
-    fn extract_execve(mut syscall: Syscall<'_>) -> Result<Function> {
+    fn extract_execve<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
-            syscall.arguments.len() == 3,
-            "expected 3 argument to {}, but was: {}",
-            syscall.function,
-            syscall.arguments.len()
+            arguments.len() == 3,
+            "expected 3 argument to execve, but arguments were: {:?}",
+            arguments
         );
-        let path = syscall.remove_path_arg(0)?;
+        let path = Self::path(arguments, 0)?;
         Ok(Function::Execve { arg0: path })
     }
-}
 
-impl Syscall<'_> {
-    fn remove_numeric_arg(&mut self, index: usize) -> Result<String> {
-        match self.arguments.remove(index) {
-            OwnedArgument::Numeric(v) => Ok(v),
-            v => Err(anyhow!(
-                "argument {index} was not numeric on syscall {}; it was {v:?}",
-                self.function
-            )),
+    fn numeric<'a>(args: &[Argument<'a>], index: usize) -> Result<&'a str> {
+        match &args[index] {
+            Argument::Numeric(v) => Ok(v),
+            v => Err(anyhow!("argument {index} was not numeric; it was {v:?}",)),
         }
     }
 
-    fn remove_path_arg(&mut self, index: usize) -> Result<PathBuf> {
-        match self.arguments.remove(index) {
-            OwnedArgument::String(v) => {
-                Ok(PathBuf::from(<std::ffi::OsStr as OsStrExt>::from_bytes(&v)))
-            }
-            v => Err(anyhow!(
-                "argument {index} was not string on syscall {}; it was {v:?}",
-                self.function
-            )),
+    fn pop_numeric_argument<'a>(arguments: &mut Vec<Argument<'a>>) -> Result<&'a str> {
+        match arguments.pop() {
+            Some(Argument::Numeric(v)) => Ok(v),
+            Some(v) => Err(anyhow!("argument was not numeric; it was {v:?}",)),
+            None => Err(anyhow!("argument was not present in pop_numeric_argument")),
         }
     }
 
-    fn remove_data_arg(&mut self, index: usize) -> Result<StringArgument> {
-        match self.arguments.remove(index) {
-            OwnedArgument::String(v) => Ok(StringArgument::Complete(v)),
-            OwnedArgument::PartialString(_) => Ok(StringArgument::Partial),
-            v => Err(anyhow!(
-                "argument {index} was not string on syscall {}; it was {v:?}",
-                self.function
-            )),
+    fn path(args: &[Argument<'_>], index: usize) -> Result<PathBuf> {
+        match &args[index] {
+            Argument::String(v) => Ok(PathBuf::from(<std::ffi::OsStr as OsStrExt>::from_bytes(
+                v.decoded(),
+            ))),
+            v => Err(anyhow!("argument {index} was not string; it was {v:?}",)),
+        }
+    }
+
+    fn pop_data_argument<'a>(arguments: &mut Vec<Argument<'a>>) -> Result<StringArgument<'a>> {
+        match arguments.pop() {
+            Some(Argument::String(data)) => Ok(StringArgument::Complete(data)),
+            Some(Argument::PartialString(_)) => Ok(StringArgument::Partial),
+            Some(v) => Err(anyhow!("argument was not string; it was {v:?}")),
+            None => Err(anyhow!("argument was not present in pop_data_argument")),
+        }
+    }
+
+    fn remove_data_argument<'a>(
+        arguments: &mut Vec<Argument<'a>>,
+        index: usize,
+    ) -> Result<StringArgument<'a>> {
+        match arguments.remove(index) {
+            Argument::String(data) => Ok(StringArgument::Complete(data)),
+            Argument::PartialString(_) => Ok(StringArgument::Partial),
+            v => Err(anyhow!("argument was not string; it was {v:?}")),
         }
     }
 }
@@ -408,7 +395,10 @@ mod tests {
     use anyhow::Result;
 
     use crate::sys_trace::{
-        strace::funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument},
+        strace::{
+            funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument},
+            tokenizer::EncodedString,
+        },
         trace::UnifiedSocketAddr,
     };
 
@@ -419,9 +409,7 @@ mod tests {
         let t = fe.extract(r"close(3)                        = 0")?;
         assert_eq!(
             t,
-            Some(FunctionTrace::Function(Function::Close {
-                fd: "3".to_string(),
-            }))
+            Some(FunctionTrace::Function(Function::Close { fd: "3" }))
         );
 
         Ok(())
@@ -488,7 +476,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Clone {
-                child_pid: String::from("337653")
+                child_pid: 337_653
             }))
         );
 
@@ -503,7 +491,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Clone {
-                child_pid: String::from("416676")
+                child_pid: 416_676
             }))
         );
 
@@ -518,7 +506,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Clone {
-                child_pid: String::from("38724")
+                child_pid: 38724
             }))
         );
 
@@ -539,9 +527,9 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Sendto {
-                socket_fd: String::from("3"),
-                data: StringArgument::Complete(Vec::from(
-                    b"\x02\x00\x00\x00\x0b\x00\x00\x00\x07\x00\x00\x00passwd\x00\\"
+                socket_fd: "3",
+                data: StringArgument::Complete(EncodedString::new(
+                    "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
                 )),
             }))
         );
@@ -552,7 +540,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Sendto {
-                socket_fd: String::from("5"),
+                socket_fd: "5",
                 data: StringArgument::Partial,
             }))
         );
@@ -570,8 +558,8 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Read {
-                fd: String::from("3"),
-                data: StringArgument::Complete(Vec::from(b"\x02\x00\x00\x00\x01\x00\x00\x00\t\x00\x00\x00\x02\x00\x00\x00\xe8\x03\x00\x00d\x00\x00\x00\x10\x00\x00\x00\x0f\x00\x00\x00\x1f\x00\x00\x00")),
+                fd: "3",
+                data: StringArgument::Complete(EncodedString::new("\\x02\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\t\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\xe8\\x03\\x00\\x00d\\x00\\x00\\x00\\x10\\x00\\x00\\x00\\x0f\\x00\\x00\\x00\\x1f\\x00\\x00\\x00")),
             }))
         );
 
@@ -581,7 +569,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Read {
-                fd: String::from("3"),
+                fd: "3",
                 data: StringArgument::Partial,
             }))
         );
@@ -599,7 +587,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: String::from("3"),
+                socket_fd: "3",
                 socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
             }))
         );
@@ -610,7 +598,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: String::from("5"),
+                socket_fd: "5",
                 socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(SocketAddrV6::new(
                     Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
                     443,
@@ -632,7 +620,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: String::from("17"),
+                socket_fd: "17",
                 socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
                     Ipv4Addr::new(100, 100, 100, 100),
                     53
@@ -653,7 +641,7 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: String::from("5"),
+                socket_fd: "5",
                 socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(SocketAddrV6::new(
                     Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
                     443,
@@ -682,8 +670,8 @@ mod tests {
         assert_eq!(
             t,
             Some(FunctionTrace::Function(Function::Recv {
-                socket_fd: String::from("7"),
-                data: StringArgument::Complete(Vec::from(b"\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00")),
+                socket_fd: "7",
+                data: StringArgument::Complete(EncodedString::new("\\xd6\\xef\\x81\\x80\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\x01\\x08codeberg\\x03org\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\\"\\x00\\x04\\xd9\\xc5[\\x91\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00")),
             }))
         );
 

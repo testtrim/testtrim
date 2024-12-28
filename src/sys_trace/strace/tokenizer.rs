@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::cell::OnceCell;
+
 use anyhow::{anyhow, Result};
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, take_until1, take_while, take_while1, take_while_m_n};
@@ -11,15 +13,48 @@ use nom::multi::{fold_many0, many0, separated_list0};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::{IResult, Parser as _};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
+pub struct EncodedString<'a> {
+    pub encoded: &'a str,
+    decoded: OnceCell<Vec<u8>>,
+}
+
+impl<'a> EncodedString<'a> {
+    pub(crate) fn new(encoded: &'a str) -> Self {
+        EncodedString {
+            encoded,
+            decoded: OnceCell::new(),
+        }
+    }
+
+    fn do_decode(&self) -> Vec<u8> {
+        match parse_encoded_string(self.encoded) {
+            Ok((_rem, vec)) => vec,
+            Err(_) => unreachable!("parse_encoded_string must not be able to fail for a string in EncodedString; encoded was: {:?}", self.encoded),
+        }
+    }
+
+    #[must_use]
+    pub fn decoded(&self) -> &Vec<u8> {
+        self.decoded.get_or_init(|| self.do_decode())
+    }
+
+    #[must_use]
+    pub fn take(&mut self) -> Vec<u8> {
+        self.decoded.get_or_init(|| self.do_decode());
+        self.decoded.take().unwrap()
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Argument<'a> {
     /// Argument in the form of double-quote delimited string, eg. "contents".  The value is the interior of the string
     /// decoded into a u8 vector.  This is likely usable as a `CStr`, but could also be a data buffer that can contain
     /// null bytes.
-    String(Vec<u8>),
+    String(EncodedString<'a>),
     /// String(_) which has been truncated due to limited "--string-limit"; ref is to the interior of the partial string
     /// same as String(_).
-    PartialString(Vec<u8>),
+    PartialString(EncodedString<'a>),
     /// Numeric value, eg. "3"
     Numeric(&'a str),
     /// Pointer: 0x...
@@ -344,7 +379,8 @@ fn parse_numeric_argument(input: &str) -> IResult<&str, Argument<'_>> {
 }
 
 fn parse_string_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, contents) = parse_string(input)?;
+    // let (input, contents) = parse_string(input)?;
+    let (input, contents) = extract_encoded_string(input)?;
     Ok((input, Argument::String(contents)))
 }
 
@@ -473,11 +509,35 @@ fn parse_unfinished_outcome(input: &str) -> IResult<&str, CallOutcome<'_>> {
     }
 }
 
-fn parse_hex_byte(input: &str) -> IResult<&str, u8> {
-    let parse_hex = take_while_m_n(2, 2, |c: char| c.is_ascii_hexdigit());
-    let parse_delimited_hex = preceded(complete::char('x'), parse_hex);
-    let mut parse_u8 = map_res(parse_delimited_hex, move |hex| u8::from_str_radix(hex, 16));
-    parse_u8.parse(input)
+fn extract_encoded_string(input: &str) -> IResult<&str, EncodedString<'_>> {
+    // FIXME: not supporting backslash-escaped double-quotes here yet
+    let (input, matched) = delimited(
+        complete::char('"'),
+        recognize(many0(alt((extract_str_literal, extract_str_escape)))),
+        complete::char('"'),
+    )
+    .parse(input)?;
+    Ok((input, EncodedString::new(matched)))
+}
+
+// Two string escape methods; "extract" will just return the range of the string for fast parsing, and "parse" will
+// convert to u8 when the actual data is needed.  The separation is because often the data isn't really needed.
+fn extract_str_escape(input: &str) -> IResult<&str, &str> {
+    recognize(preceded(
+        complete::char('\\'),
+        alt((
+            // hex: \x00
+            extract_hex_byte,
+            // `man strace` -> \t, \n, \v, \f, \r are all possible
+            complete::char('t'),  // Tab
+            complete::char('n'),  // Newline
+            complete::char('v'),  // Vertical tab
+            complete::char('f'),  // form feed page break
+            complete::char('r'),  // Carriage return
+            complete::char('"'),  // Escaped double-quote
+            complete::char('\\'), // Backslash escaped
+        )),
+    ))(input)
 }
 
 /// Parse an escaped character: \n, \t, \r, \u{00AC}, etc.
@@ -500,7 +560,21 @@ fn parse_escaped_char(input: &str) -> IResult<&str, u8> {
     .parse(input)
 }
 
-fn parse_str_literal(input: &str) -> IResult<&str, &str> {
+fn extract_hex_byte(input: &str) -> IResult<&str, char> {
+    let parse_hex = take_while_m_n(2, 2, |c: char| c.is_ascii_hexdigit());
+    preceded(complete::char('x'), parse_hex)
+        .map(|_| ' ')
+        .parse(input)
+}
+
+fn parse_hex_byte(input: &str) -> IResult<&str, u8> {
+    let parse_hex = take_while_m_n(2, 2, |c: char| c.is_ascii_hexdigit());
+    let parse_delimited_hex = preceded(complete::char('x'), parse_hex);
+    let mut parse_u8 = map_res(parse_delimited_hex, move |hex| u8::from_str_radix(hex, 16));
+    parse_u8.parse(input)
+}
+
+fn extract_str_literal(input: &str) -> IResult<&str, &str> {
     let not_quote_slash = is_not("\"\\");
     verify(not_quote_slash, |s: &str| !s.is_empty()).parse(input)
 }
@@ -513,14 +587,14 @@ enum StringFragment<'a> {
 
 fn parse_str_fragment(input: &str) -> IResult<&str, StringFragment<'_>> {
     alt((
-        map(parse_str_literal, StringFragment::Literal),
+        map(extract_str_literal, StringFragment::Literal),
         map(parse_escaped_char, StringFragment::EscapedChar),
     ))
     .parse(input)
 }
 
-fn parse_string(input: &str) -> IResult<&str, Vec<u8>> {
-    let build_string = fold_many0(
+fn parse_encoded_string(input: &str) -> IResult<&str, Vec<u8>> {
+    fold_many0(
         parse_str_fragment,
         || Vec::<u8>::with_capacity(input.len()), // capacity guess
         |mut bytes, fragment| {
@@ -530,8 +604,7 @@ fn parse_string(input: &str) -> IResult<&str, Vec<u8>> {
             }
             bytes
         },
-    );
-    delimited(complete::char('"'), build_string, complete::char('"')).parse(input)
+    )(input)
 }
 
 #[cfg(test)]
@@ -539,8 +612,9 @@ mod tests {
     use anyhow::Result;
 
     use crate::sys_trace::strace::tokenizer::{
-        parse_signal, parse_string, tokenize, tokenize_syscall, Argument, CallOutcome, ProcessExit,
-        Retval, SignalRecv, SyscallSegment, TokenizerOutput,
+        extract_encoded_string, nested_braces, parse_encoded_string, parse_signal, tokenize,
+        tokenize_syscall, Argument, CallOutcome, EncodedString, ProcessExit, Retval, SignalRecv,
+        SyscallSegment, TokenizerOutput,
     };
 
     use super::{
@@ -668,7 +742,7 @@ mod tests {
                 function: "openat",
                 arguments: vec![
                     Argument::Enum("AT_FDCWD"),
-                    Argument::String(Vec::from(b"/proc/sys/vm/overcommit_memory")),
+                    Argument::String(EncodedString::new("/proc/sys/vm/overcommit_memory")),
                     Argument::Enum("O_RDONLY|O_CLOEXEC"),
                 ],
                 outcome: CallOutcome::ResumedUnfinished
@@ -728,7 +802,7 @@ mod tests {
                 function: "read",
                 arguments: vec![
                     Argument::Numeric("3"),
-                    Argument::String(vec![]),
+                    Argument::String(EncodedString::new("")),
                     Argument::Numeric("4096"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -763,7 +837,7 @@ mod tests {
                 function: "read",
                 arguments: vec![
                     Argument::Numeric("3"),
-                    Argument::PartialString(vec![]),
+                    Argument::PartialString(EncodedString::new("")),
                     Argument::Numeric("4096"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -781,8 +855,8 @@ mod tests {
                 function: "sendto",
                 arguments: vec![
                     Argument::Numeric("3"),
-                    Argument::String(Vec::from(
-                        b"\x02\x00\x00\x00\x0b\x00\x00\x00\x07\x00\x00\x00passwd\x00\\"
+                    Argument::String(EncodedString::new(
+                        "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
                     )),
                     Argument::Numeric("20"),
                     Argument::Enum("MSG_NOSIGNAL"),
@@ -820,9 +894,9 @@ mod tests {
                 function: "openat",
                 arguments: vec![
                     Argument::Enum("AT_FDCWD"),
-                    Argument::String(Vec::from(
-                        b"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"
-                    )),
+                    Argument::String(
+                        EncodedString::new("/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"),
+                    ),
                     Argument::Enum("O_RDONLY|O_CLOEXEC"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -921,7 +995,9 @@ mod tests {
             SyscallSegment {
                 function: "execve",
                 arguments: vec![
-                    Argument::String(Vec::from(b"/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7")),
+                    Argument::String(
+                        EncodedString::new("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"),
+                    ),
                     Argument::Structure(r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#),
                     Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */"),
                 ],
@@ -951,6 +1027,23 @@ mod tests {
             }
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_encoded_string() -> Result<()> {
+        let (rem, v) = extract_encoded_string("\"abc\"")?;
+        assert_eq!(v, EncodedString::new("abc"));
+        assert_eq!(rem, "");
+        let (rem, v) = extract_encoded_string("\"\"")?;
+        assert_eq!(v, EncodedString::new(""));
+        assert_eq!(rem, "");
+        let (rem, v) = extract_encoded_string("\"abc\\\"def\"")?;
+        assert_eq!(v, EncodedString::new("abc\\\"def"));
+        assert_eq!(rem, "");
+        let (rem, v) = extract_encoded_string("\"abc\\x00def\"")?;
+        assert_eq!(v, EncodedString::new("abc\\x00def"));
+        assert_eq!(rem, "");
         Ok(())
     }
 
@@ -1000,12 +1093,37 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_string() -> Result<()> {
-        let (_, v) = parse_string("\"Hello!\"")?;
+    fn test_nested_braces() -> Result<()> {
+        let (_, v) = nested_braces("{input}")?;
+        assert_eq!(v, "{input}");
+        let (_, v) = nested_braces("{inp{ {abc} u}t}")?;
+        assert_eq!(v, "{inp{ {abc} u}t}");
+        let (_, v) = nested_braces("{inp}ut")?;
+        assert_eq!(v, "{inp}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_encoded_string() -> Result<()> {
+        let (rem, v) = parse_encoded_string("abc")?;
+        assert_eq!(v, Vec::from(b"abc"));
+        assert_eq!(rem, "");
+        let (rem, v) = parse_encoded_string("")?;
+        assert_eq!(v, Vec::from(b""));
+        assert_eq!(rem, "");
+        let (rem, v) = parse_encoded_string("abc\\\"def")?;
+        assert_eq!(v, Vec::from(b"abc\"def"));
+        assert_eq!(rem, "");
+        let (rem, v) = parse_encoded_string("abc\\x00def")?;
+        assert_eq!(v, Vec::from(b"abc\x00def"));
+        assert_eq!(rem, "");
+        let (rem, v) = parse_encoded_string("Hello!")?;
         assert_eq!(v, vec![72, 101, 108, 108, 111, 33]);
-        let (_, v) = parse_string("\"\\x00\\x01\\xFF\"")?;
+        assert_eq!(rem, "");
+        let (rem, v) = parse_encoded_string("\\x00\\x01\\xFF")?;
         assert_eq!(v, vec![0, 1, 255]);
-        let (_, v) = parse_string("\" dquote: \\\"  more text\"")?;
+        assert_eq!(rem, "");
+        let (rem, v) = parse_encoded_string(" dquote: \\\"  more text")?;
         assert_eq!(
             v,
             vec![
@@ -1013,7 +1131,19 @@ mod tests {
                 101, 120, 116
             ]
         );
+        assert_eq!(rem, "");
         Ok(())
+    }
+
+    #[test]
+    fn test_encoded_string() {
+        let s = EncodedString::new("abc\\x00def");
+        assert_eq!(s.encoded, "abc\\x00def");
+        assert_eq!(s.decoded(), &Vec::from(b"abc\x00def"));
+        assert_ne!(s, EncodedString::new("abc\\x00def")); // no longer eq as OnceCell now has value
+        let other = EncodedString::new("abc\\x00def");
+        let _ = other.decoded();
+        assert_eq!(s, other); // sanity check for last test that eq will be eq when OnceCell has value
     }
 
     #[test]
@@ -1024,7 +1154,7 @@ mod tests {
             SyscallSegment {
                 function: "read",
                 arguments: vec![
-                    Argument::PartialString(Vec::from(b"abc")),
+                    Argument::PartialString(EncodedString::new("abc")),
                     Argument::Numeric("1140")
                 ],
                 outcome: CallOutcome::Resumed {

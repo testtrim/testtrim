@@ -24,7 +24,6 @@ use super::{
 };
 
 mod funcs;
-mod sequencer;
 mod tokenizer;
 
 /// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
@@ -114,7 +113,7 @@ impl STraceSysTraceCommand {
             // Alright, this file has an execve on the first line...
             if arg0 == cmdpath {
                 // And it's the program we ran.  Let's do the trace here.
-                Self::read_child_pid_trace_files(trace, trace_file_root, &pid.to_string(), None)?;
+                Self::read_child_pid_trace_files(trace, trace_file_root, pid, None)?;
                 return Ok(());
             }
         }
@@ -127,12 +126,12 @@ impl STraceSysTraceCommand {
     fn read_child_pid_trace_files(
         trace: &mut DraftTrace,
         trace_file_root: &Path,
-        trace_pid: &str,
+        trace_pid: u32,
         cwd: Option<PathBuf>,
     ) -> Result<()> {
-        let file_path = trace_file_root.with_added_extension(trace_pid);
+        let file_path = trace_file_root.with_added_extension(trace_pid.to_string());
         for (child, inherited_cwd) in Self::read_trace_file(trace, &file_path, cwd)? {
-            Self::read_child_pid_trace_files(trace, trace_file_root, &child, inherited_cwd)?;
+            Self::read_child_pid_trace_files(trace, trace_file_root, child, inherited_cwd)?;
         }
         Ok(())
     }
@@ -141,13 +140,13 @@ impl STraceSysTraceCommand {
         trace: &mut DraftTrace,
         trace_file: &Path,
         mut cwd: Option<PathBuf>,
-    ) -> Result<HashSet<(String, Option<PathBuf>)>> {
+    ) -> Result<HashSet<(u32, Option<PathBuf>)>> {
         let file = File::open(trace_file)
             .context(format!("failed to open strace output file {trace_file:?}"))?;
         // FIXME: this assumes that the contents of the trace are UTF-8; this probably isn't right
         let lines = BufReader::new(file).lines();
 
-        let mut child_pids: HashSet<(String, Option<PathBuf>)> = HashSet::new();
+        let mut child_pids: HashSet<(u32, Option<PathBuf>)> = HashSet::new();
         let mut pid_socket_fd_captures: HashMap<String, SocketCapture> = HashMap::new();
 
         let mut extractor = FunctionExtractor::new();
@@ -190,7 +189,7 @@ impl STraceSysTraceCommand {
                 }
                 Function::Clone { child_pid } => {
                     // Inherit working directory
-                    child_pids.insert((child_pid.clone(), cwd.clone()));
+                    child_pids.insert((child_pid, cwd.clone()));
                 }
                 Function::Connect {
                     socket_fd,
@@ -202,7 +201,7 @@ impl STraceSysTraceCommand {
                     // be a reinitialization which should be fine; the expected case is we're just finished an
                     // incomplete or non-blocking connect.
                     pid_socket_fd_captures.insert(
-                        socket_fd,
+                        socket_fd.to_owned(),
                         SocketCapture {
                             socket_addr: socket_addr.clone(),
                             state: SocketCaptureState::Complete(Vec::new()),
@@ -215,14 +214,14 @@ impl STraceSysTraceCommand {
                 }
                 Function::Sendto {
                     socket_fd,
-                    data: StringArgument::Complete(data),
+                    data: StringArgument::Complete(mut data),
                 } => {
-                    let socket_capture = pid_socket_fd_captures.get_mut(&socket_fd.clone());
+                    let socket_capture = pid_socket_fd_captures.get_mut(socket_fd);
                     if let Some(socket_capture) = socket_capture {
                         if let SocketCaptureState::Complete(ref mut socket_operations) =
                             socket_capture.state
                         {
-                            socket_operations.push(SocketOperation::Sent(data));
+                            socket_operations.push(SocketOperation::Sent(data.take()));
                         }
                         // (else, socket capture is already marked as Incomplete, no need to put any data into it)
                     }
@@ -232,18 +231,18 @@ impl STraceSysTraceCommand {
                 }
                 Function::Read {
                     fd,
-                    data: StringArgument::Complete(data),
+                    data: StringArgument::Complete(mut data),
                 }
                 | Function::Recv {
                     socket_fd: fd,
-                    data: StringArgument::Complete(data),
+                    data: StringArgument::Complete(mut data),
                 } => {
-                    let socket_capture = pid_socket_fd_captures.get_mut(&fd.clone());
+                    let socket_capture = pid_socket_fd_captures.get_mut(fd);
                     if let Some(socket_capture) = socket_capture {
                         if let SocketCaptureState::Complete(ref mut socket_operations) =
                             socket_capture.state
                         {
-                            socket_operations.push(SocketOperation::Read(data));
+                            socket_operations.push(SocketOperation::Read(data.take()));
                         }
                         // (else, socket capture is already marked as Incomplete, no need to put any data into it)
                     }
@@ -264,7 +263,7 @@ impl STraceSysTraceCommand {
                     data: StringArgument::Partial,
                 } => {
                     // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
-                    let in_progress = pid_socket_fd_captures.get_mut(&fd.clone());
+                    let in_progress = pid_socket_fd_captures.get_mut(fd);
                     if let Some(in_progress) = in_progress {
                         in_progress.state = SocketCaptureState::Incomplete;
                     }
@@ -273,7 +272,7 @@ impl STraceSysTraceCommand {
                     // trace those, so we'll ignore any unrecognized sockets.
                 }
                 Function::Close { fd } => {
-                    let socket_capture = pid_socket_fd_captures.remove(&fd);
+                    let socket_capture = pid_socket_fd_captures.remove(fd);
                     if let Some(socket_capture) = socket_capture {
                         trace.add_socket_capture(socket_capture);
                     }
@@ -387,12 +386,7 @@ impl STraceSysTraceCommand {
 
         let mut trace = DraftTrace::new();
         if output.status.success() {
-            Self::read_child_pid_trace_files(
-                &mut trace,
-                parent_strace_path,
-                &subprocess_id.to_string(),
-                None,
-            )?;
+            Self::read_child_pid_trace_files(&mut trace, parent_strace_path, subprocess_id, None)?;
         }
 
         Ok((output, trace.try_into()?))
