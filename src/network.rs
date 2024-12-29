@@ -507,7 +507,7 @@ fn analyze_dns(
                     match answer.ty() {
                         dns_protocol::ResourceType::A => {
                             let addr = answer.data().try_into().map(u32::from_be_bytes)?;
-                            warn!(
+                            debug!(
                                 "DNS {} (via label {}) -> {}",
                                 hostname,
                                 answer.name(),
@@ -520,7 +520,7 @@ fn analyze_dns(
                         }
                         dns_protocol::ResourceType::AAAA => {
                             let addr = answer.data().try_into().map(u128::from_be_bytes)?;
-                            warn!(
+                            debug!(
                                 "DNS {} (via label {}) -> {}",
                                 hostname,
                                 answer.name(),
