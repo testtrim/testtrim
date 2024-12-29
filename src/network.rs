@@ -424,9 +424,13 @@ fn analyze_dns(
     socket_capture: &SocketCapture,
     dns_resolutions: &mut HashMap<IpAddr, HashSet<String>>,
 ) -> Result<DnsCaptureAnalysisResult> {
+    let mut hack_query_response = false;
     if let UnifiedSocketAddr::Inet(ref socket_addr) = socket_capture.socket_addr {
         let dns = match socket_addr {
-            SocketAddr::V4(v4) => v4.port() == 53,
+            SocketAddr::V4(v4) => {
+                hack_query_response = *v4.ip() == Ipv4Addr::new(0, 0, 0, 0);
+                v4.port() == 53
+            }
             SocketAddr::V6(v6) => v6.port() == 53,
         };
         if !dns {
@@ -439,6 +443,8 @@ fn analyze_dns(
     let SocketCaptureState::Complete(ref operations) = socket_capture.state else {
         return Ok(DnsCaptureAnalysisResult::IncompleteCapture);
     };
+
+    hack_query_response = hack_query_response && operations.len() == 1;
 
     for msg in operations {
         let SocketOperation::Read(buffer) = msg else {
@@ -501,7 +507,7 @@ fn analyze_dns(
                     match answer.ty() {
                         dns_protocol::ResourceType::A => {
                             let addr = answer.data().try_into().map(u32::from_be_bytes)?;
-                            debug!(
+                            warn!(
                                 "DNS {} (via label {}) -> {}",
                                 hostname,
                                 answer.name(),
@@ -514,7 +520,7 @@ fn analyze_dns(
                         }
                         dns_protocol::ResourceType::AAAA => {
                             let addr = answer.data().try_into().map(u128::from_be_bytes)?;
-                            debug!(
+                            warn!(
                                 "DNS {} (via label {}) -> {}",
                                 hostname,
                                 answer.name(),
@@ -535,7 +541,9 @@ fn analyze_dns(
                 }
             }
             Err(e) => {
-                warn!("Error occurred parsing network response on port 53 as DNS protocol; some DNS resolutions may be lost.  Error was: {e:?}");
+                if !hack_query_response {
+                    warn!("Error occurred parsing network response on port 53 as DNS protocol; some DNS resolutions may be lost.  Error was: {e:?}");
+                }
             }
         }
     }

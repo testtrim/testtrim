@@ -4,12 +4,13 @@
 
 use anyhow::{anyhow, Context as _, Result};
 use funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument};
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::{
     collections::{HashMap, HashSet},
     env,
     fs::{read_dir, File},
     io::{BufRead, BufReader},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::{Path, PathBuf},
     process::{Command as SyncCommand, Output, Stdio},
     str::FromStr as _,
@@ -19,7 +20,7 @@ use tokio::process::Command;
 use crate::{errors::SubcommandErrors, sys_trace::trace::SocketCaptureState};
 
 use super::{
-    trace::{DraftTrace, SocketCapture, SocketOperation, Trace},
+    trace::{DraftTrace, SocketCapture, SocketOperation, Trace, UnifiedSocketAddr},
     SysTraceCommand,
 };
 
@@ -245,6 +246,33 @@ impl STraceSysTraceCommand {
                             socket_operations.push(SocketOperation::Read(data.take()));
                         }
                         // (else, socket capture is already marked as Incomplete, no need to put any data into it)
+                    } else {
+                        // Per https://codeberg.org/testtrim/testtrim/issues/217 -- our strace doesn't work correctly
+                        // for DNS tracing if the socket is connected on one thread, and then read on another thread.
+                        // Until I can figure out a way to address that issue, this is a little hack that looks for the
+                        // DNS "flags" response (the third & fourth bytes) and see if it looks like a typical recursive
+                        // query response.
+                        //
+                        // So in this case where we've performed a read but we don't know what the file descriptor is,
+                        // but the two bytes match the response pattern for a query, then we're going to pretend that it
+                        // is a response that we received from a DNS server.  This hack will continue in two other
+                        // places; we'll be OK if we can't parse this as a query response (search: hack_query_response),
+                        // and we'll remove the 0.0.0.0:53 connection trace.
+                        if data.encoded.contains("\\x81\\x80") {
+                            let data = data.take();
+                            if data.len() > 4 && data[2] == 129 && data[3] == 128 {
+                                debug!("received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it");
+                                let fake_capture = SocketCapture {
+                                    socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(
+                                        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 53),
+                                    )),
+                                    state: SocketCaptureState::Complete(vec![
+                                        SocketOperation::Read(data),
+                                    ]),
+                                };
+                                trace.add_socket_capture(fake_capture);
+                            }
+                        }
                     }
                     // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
                     // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to

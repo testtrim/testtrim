@@ -153,6 +153,8 @@ impl TryFrom<DraftTrace> for Trace {
 
         Ok(Self {
             open_paths: value.open_paths,
+            // FIXME: if we switch to creating resolved_connect_sockets from our socket_captures, then there needs to be
+            // a tweak here to filter out 0.0.0.0:53 -- search hack_query_response for explanation.
             connect_sockets: resolved_connect_sockets,
         })
     }
