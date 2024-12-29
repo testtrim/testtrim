@@ -31,13 +31,25 @@ struct CoverageFunctionLocator {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-struct FilenamesRef(u64);
+struct FilenamesRef(u64, usize);
 
 impl Default for CoverageLibrary {
     fn default() -> Self {
         Self::new()
     }
 }
+
+// Note: We're reproducing a bunch of work that could be done by the llvm_profparser library's
+// CoverageMapping::generate_report function.  The reason is: (a) we have more profiling data files than we do binary
+// objects, so we store and optimize our data differently, (b) we don't need fine-grained region-specific coverage
+// counts at this time.
+//
+// As a downside, this implementation is nowhere close to being fine-grained -- if we wanted to get branch-level detail
+// we'd need to reimplement (or adapt) the expression-based suppoed that CoverageMapping implemetns.  But while we might
+// go function-level in the future, branch-level is quite optimistic.
+//
+// The important part of this note is that if something starts breaking in this implementation, we can likely review
+// CoverageMapping for what we're doing wrong.
 
 impl CoverageLibrary {
     /// Create a new, blank coverage library.
@@ -56,12 +68,35 @@ impl CoverageLibrary {
 
         let mut object_file_lookup_map = HashMap::new();
         for c in &object_file.cov_fun {
+            // Every function has a variety of regions associated with it.  Those regions represent the branches in the
+            // function that can have separate instrumentation profiling data.  Each region has a `file_id`, which is
+            // going to be an index into an array of filenames for a translation unit, which in short, means that it's
+            // going to point to a specific file name.
+            //
+            // For our needs in Rust language profiling, and based upon the current project experience, all the regions
+            // within a function are expected to have the same file_id.  If there are cases that violate this, we'll
+            // have to come across them experimentally.
+            let mut file_id: Option<usize> = None;
+            for region in &c.regions {
+                if let Some(existing_file_id) = file_id
+                    && existing_file_id != region.file_id
+                {
+                    panic!("llvm coverage region had multiple file_ids for a single function -- this isn't currently supported");
+                } else {
+                    file_id = Some(region.file_id);
+                }
+            }
+            let Some(file_id) = file_id else {
+                // A function with no regions?  Let's crash for now because that seems suspiciously wrong and I want to
+                // bring attention to it to understand it, if it happens.
+                panic!("llvm coverage region file_id could not be identified -- this suggests no regions in this function?");
+            };
             let key = CoverageFunctionLocator {
                 name_hash: c.header.name_hash,
                 fn_hash: c.header.fn_hash,
             };
             let previous_value =
-                object_file_lookup_map.insert(key, FilenamesRef(c.header.filenames_ref));
+                object_file_lookup_map.insert(key, FilenamesRef(c.header.filenames_ref, file_id));
             assert!(previous_value.is_none()); // must never have duplicate/conflicting hashes
         }
 
@@ -75,6 +110,7 @@ impl CoverageLibrary {
     pub fn search_metadata(
         &self,
         point: &InstrumentationPoint,
+        debug_output: bool,
     ) -> Result<Option<InstrumentationPointMetadata>> {
         let (Some(name_hash), Some(fn_hash)) = (point.rec.name_hash, point.rec.hash) else {
             // Function point didn't have a hash; this comes pretty straight from the llvm parser so I don't think
@@ -93,6 +129,9 @@ impl CoverageLibrary {
             .get(&coverage_locator)
             // coverage point found in profiling data was not found in binary's coverage map
             .ok_or(RustLlvmError::CoverageMismatch)?;
+        if debug_output {
+            println!("filenames_ref: {filenames_ref:?}");
+        }
 
         let object_file = self
             .object_files
@@ -101,11 +140,14 @@ impl CoverageLibrary {
 
         match object_file.cov_map.get(&filenames_ref.0) {
             Some(file) => {
-                // FIXME: I don't know if the multiple file paths here are right... need to create some synthetic test
-                // cases and verify that the references make sense to me, and maybe verify some of the test-project
-                // cases to understand them.
+                // file[0] is the root which relative paths should be interpreted against -- "The first entry in the
+                // filename list is the compilation directory. When the filename is relative, the compilation directory
+                // is combined with the relative path to get an absolute path. This can reduce size by omitting the
+                // duplicate prefix in filenames." (https://llvm.org/docs/CoverageMappingFormat.html#function-record)
+                // It should be safe for testtrim to assume that's the cwd since we just built the project as part of
+                // test discovery?
                 Ok(Some(InstrumentationPointMetadata {
-                    file_paths: file.clone(),
+                    file_path: file[filenames_ref.1].clone(),
                     function_name: point.rec.name.clone().unwrap(),
                 }))
             }
@@ -166,13 +208,7 @@ pub struct InstrumentationPoint<'a> {
 /// have more specific information (probably in the future) like the function name.
 #[derive(Debug)]
 pub struct InstrumentationPointMetadata {
-    // I'm not *quite* sure what this indicates in Rust, but the LLVM format allows mapping one instrumentation point to multiple files.  In C I think this would be used for something like a preprocessor expansion where the "#define" can be in a header, which can be used in a function, resulting in something that is really defined in two files.  In Rust?  I have some kind of example in
-    // that I see multiple files being referred to in one test:
-    // /home/mfenniak/Dev/alacritty/coverage-output/ref-5e9cb37821ba6702/alt_reset.profraw
-    // ->
-    // ["/home/mfenniak/Dev/alacritty", "/home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/vte-0.13.0/src/definitions.rs", "/home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/vte-0.13.0/src/lib.rs"]
-    // The root directory of the project seems to almost always be present, but also at least some codepoints in this have multiple files.
-    pub file_paths: Vec<PathBuf>,
+    pub file_path: PathBuf,
     pub function_name: String,
 }
 

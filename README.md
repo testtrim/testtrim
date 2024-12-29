@@ -129,7 +129,7 @@ Scope planned for the future:
 Significant problems that are known to exist within the scope described above, and should be known to any users:
 
 - **Rust**:
-    - testtrim can be fooled [when a `pub const` value is modified](https://codeberg.org/testtrim/testtrim/issues/52), and target fewer tests than required.
+    - testtrim can be fooled [when a `pub const` value, or a `lazy_static` value, is modified](https://codeberg.org/testtrim/testtrim/issues/52), and target fewer tests than required.  However, this would require that the const be modified in a file by itself, without any tests requiring modification, which seems to have a very low likelihood.
 - **Go**:
     - Go does not instrument test files (`*_test.go`) when tests are executed, preventing testtrim from identifying what codepaths are executed in those files for each test.  As a substitute, testtrim makes the assumption that changing such a file requires rerunning all the tests defined in this file.  This is a reasonable approximation, but tests may reference each other or common utility functions defined in other `*_test.go` files and such dependencies cannot be identified at this time.
     - testrim can be fooled when [`const` and package-level `var` values are changed](https://codeberg.org/testtrim/testtrim/issues/136).  The codepaths to initialize these values are always invoked regardless of whether they're accessed or not, and so testtrim can't tell the difference between initialization and access.

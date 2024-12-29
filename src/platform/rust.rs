@@ -400,73 +400,56 @@ impl RustTestPlatform {
                 .context("new_from_profraw_reader")?;
 
         for point in profiling_data.get_hit_instrumentation_points() {
-            let mut external_dependency = false;
-            let mut internal_dependency = false;
-
-            // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but the
-            // coverage library can't fetch data about it... for the moment we'll just ignore it until we come up with a
-            // test that hits this case and breaks
-            if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
-                for file in &metadata.file_paths {
-                    if file.is_relative() {
-                        internal_dependency = true;
-                        break;
-                    }
-                }
-
-                for file in &metadata.file_paths {
-                    // detect a path like:
-                    // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
-                    // by identifying `.cargo/registry/src` section, and then extract the package name (regex-automata)
-                    // and version (0.4.7) from the path if present.
-                    let mut itr = file.components();
-                    while let Some(comp) = itr.next() {
-                        if let Component::Normal(path) = comp
-                            && path == ".cargo"
-                        {
-                            if let Some(Component::Normal(path)) = itr.next()
-                                && path == "registry"
-                                && let Some(Component::Normal(path)) = itr.next()
-                                && path == "src"
-                                && let Some(Component::Normal(_registry_path)) = itr.next()
-                                && let Some(Component::Normal(package_path)) = itr.next()
-                                && let Some((package_name, version)) =
-                                    parse_cargo_package(package_path)
-                            {
-                                trace!("Found package reference to {} / {}", package_name, version);
-                                coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-                                    test_identifier: test_case.test_identifier.clone(),
-                                    coverage_identifier: RustCoverageIdentifier::PackageDependency(
-                                        RustPackageDependency {
-                                            package_name,
-                                            version,
-                                        },
-                                    ),
-                                });
-                                external_dependency = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                // If we touched a relative path (eg. src/lib.rs) then we're confidently an internal dependency and we
-                // should record the coverage data.  The same instrumentation point could also touch an external
-                // dependency, in which case we still want to record the coverage data.  But if it was external only and
-                // not an internal dependency, we can skip it for a performance and storage benefit.  If we don't know,
-                // err on the side of storing it?
-                if internal_dependency || !external_dependency {
-                    for file in metadata.file_paths {
-                        coverage_data.add_file_to_test(FileCoverage {
-                            file_name: file,
-                            test_identifier: test_case.test_identifier.clone(),
-                        });
-                    }
+            if let Ok(Some(metadata)) = coverage_library.search_metadata(&point, false) {
+                let file = metadata.file_path;
+                if file.is_relative() {
+                    coverage_data.add_file_to_test(FileCoverage {
+                        file_name: file,
+                        test_identifier: test_case.test_identifier.clone(),
+                    });
                     coverage_data.add_function_to_test(FunctionCoverage {
                         function_name: metadata.function_name,
                         test_identifier: test_case.test_identifier.clone(),
                     });
+                    continue;
                 }
+
+                // detect a path like:
+                // /home/mfenniak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/regex-automata-0.4.7/src/hybrid/search.rs
+                // by identifying `.cargo/registry/src` section, and then extract the package name (regex-automata) and
+                // version (0.4.7) from the path if present.
+                let mut itr = file.components();
+                while let Some(comp) = itr.next() {
+                    if let Component::Normal(path) = comp
+                        && path == ".cargo"
+                    {
+                        if let Some(Component::Normal(path)) = itr.next()
+                            && path == "registry"
+                            && let Some(Component::Normal(path)) = itr.next()
+                            && path == "src"
+                            && let Some(Component::Normal(_registry_path)) = itr.next()
+                            && let Some(Component::Normal(package_path)) = itr.next()
+                            && let Some((package_name, version)) = parse_cargo_package(package_path)
+                        {
+                            trace!("Found package reference to {} / {}", package_name, version);
+                            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                                test_identifier: test_case.test_identifier.clone(),
+                                coverage_identifier: RustCoverageIdentifier::PackageDependency(
+                                    RustPackageDependency {
+                                        package_name,
+                                        version,
+                                    },
+                                ),
+                            });
+                        }
+                        break;
+                    }
+                }
+            } else {
+                // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
+                // the coverage library can't fetch data about it (eg. the else path)... it might (should?) never
+                // happen, so let's log a warning.
+                warn!("coverage point {point:?} could not be found in the coverage library");
             }
         }
 
