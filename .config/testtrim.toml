@@ -82,6 +82,14 @@ host-port = ["index.crates.io", 443]
 [[network-policy.match]]
 host-port = ["static.crates.io", 443]
 
+# The Go integration tests install 3rd party dependencies; these network accesses occur during that outreach, and can be
+# ignored for rerunning tests.
+[[network-policy]]
+name = "Go packages"
+apply = "ignore"
+[[network-policy.match]]
+host-port = ["proxy.golang.org", 443]
+
 # Rust & Go integration tests validate that network access rerun their specimen tests by accessing google.com -- we
 # don't need to rerun the actual integration tests because of that.
 [[network-policy]]
