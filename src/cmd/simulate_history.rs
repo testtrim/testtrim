@@ -255,7 +255,7 @@ where
             scm,
             SourceMode::CleanCommit,
             jobs,
-            &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic), // default tags only
+            &get_test_identifiers::tags::<TP>(&[], PlatformTaggingMode::Automatic), // default tags only
             coverage_db,
         )
         .await

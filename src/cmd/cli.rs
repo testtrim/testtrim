@@ -171,10 +171,8 @@ pub async fn run_cli() -> ExitCode {
             get_test_identifiers::cli(
                 target_parameters.test_project_type,
                 target_parameters.test_selection_mode,
-                &get_test_identifiers::tags(
-                    &target_parameters.tags,
-                    target_parameters.platform_tagging_mode,
-                ),
+                &target_parameters.tags,
+                target_parameters.platform_tagging_mode,
             )
             .await
         }
@@ -188,10 +186,8 @@ pub async fn run_cli() -> ExitCode {
                 target_parameters.test_selection_mode,
                 *source_mode,
                 execution_parameters.jobs,
-                &get_test_identifiers::tags(
-                    &target_parameters.tags,
-                    target_parameters.platform_tagging_mode,
-                ),
+                &target_parameters.tags,
+                target_parameters.platform_tagging_mode,
             )
             .await
         }

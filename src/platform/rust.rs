@@ -30,6 +30,7 @@ use crate::coverage::commit_coverage_data::{
     HeuristicCoverage,
 };
 use crate::coverage::full_coverage_data::FullCoverageData;
+use crate::coverage::Tag;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
@@ -626,6 +627,13 @@ impl TestPlatform for RustTestPlatform {
 
     fn platform_identifier() -> &'static str {
         "rust"
+    }
+
+    fn platform_tags() -> Vec<Tag> {
+        vec![Tag {
+            key: String::from("__testtrim_rust"),
+            value: String::from("1"),
+        }]
     }
 
     fn project_name() -> Result<String> {

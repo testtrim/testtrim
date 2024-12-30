@@ -26,6 +26,7 @@ use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, HeuristicCoverage,
 };
 use crate::coverage::full_coverage_data::FullCoverageData;
+use crate::coverage::Tag;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
@@ -1102,6 +1103,13 @@ impl TestPlatform for GolangTestPlatform {
 
     fn platform_identifier() -> &'static str {
         "golang"
+    }
+
+    fn platform_tags() -> Vec<Tag> {
+        vec![Tag {
+            key: String::from("__testtrim_golang"),
+            value: String::from("1"),
+        }]
     }
 
     fn project_name() -> Result<String> {

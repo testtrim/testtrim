@@ -422,7 +422,10 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
         coverage_db: &impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
     ) -> Result<()> {
         let scm = GitScm {};
-        let tags = &get_test_identifiers::tags(&Vec::new(), PlatformTaggingMode::Automatic);
+        let tags = &get_test_identifiers::tags::<RustTestPlatform>(
+            &Vec::new(),
+            PlatformTaggingMode::Automatic,
+        );
 
         info!("checking out {}", commit_test_data.test_commit);
         git_checkout(commit_test_data.test_commit)?;

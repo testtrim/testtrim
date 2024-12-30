@@ -41,7 +41,8 @@ use super::cli::{
 pub async fn cli(
     test_project_type: TestProjectType,
     test_selection_mode: GetTestIdentifierMode,
-    tags: &[Tag],
+    user_tags: &[Tag],
+    platform_tagging_mode: PlatformTaggingMode,
 ) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
@@ -51,20 +52,36 @@ pub async fn cli(
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(test_selection_mode, tags).await
+            specific_cli::<_, _, _, _, RustTestPlatform>(
+                test_selection_mode,
+                user_tags,
+                platform_tagging_mode,
+            )
+            .await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(test_selection_mode, tags).await
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(
+                test_selection_mode,
+                user_tags,
+                platform_tagging_mode,
+            )
+            .await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(test_selection_mode, tags).await
+            specific_cli::<_, _, _, _, GolangTestPlatform>(
+                test_selection_mode,
+                user_tags,
+                platform_tagging_mode,
+            )
+            .await
         }
     }
 }
 
 async fn specific_cli<TI, CI, TD, CTI, TP>(
     test_selection_mode: GetTestIdentifierMode,
-    tags: &[Tag],
+    user_tags: &[Tag],
+    platform_tagging_mode: PlatformTaggingMode,
 ) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
@@ -76,12 +93,14 @@ where
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
+    let tags = tags::<TP>(user_tags, platform_tagging_mode);
+
     let exit_code = async {
         let test_cases = match get_target_test_cases::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
             AncestorSearchMode::AllCommits,
-            tags,
+            &tags,
             &create_db_infallible::<TP>(),
         )
         .await
@@ -112,7 +131,10 @@ where
 }
 
 #[must_use]
-pub fn tags(user_tags: &[Tag], platform_tagging_mode: PlatformTaggingMode) -> Vec<Tag> {
+pub fn tags<TP: TestPlatform>(
+    user_tags: &[Tag],
+    platform_tagging_mode: PlatformTaggingMode,
+) -> Vec<Tag> {
     let mut retval = Vec::with_capacity(user_tags.len() + 1);
     if platform_tagging_mode == PlatformTaggingMode::Automatic {
         retval.push(Tag {
@@ -121,6 +143,9 @@ pub fn tags(user_tags: &[Tag], platform_tagging_mode: PlatformTaggingMode) -> Ve
         });
     }
     for t in user_tags {
+        retval.push(t.clone());
+    }
+    for t in TP::platform_tags() {
         retval.push(t.clone());
     }
     retval

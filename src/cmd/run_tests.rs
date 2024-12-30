@@ -14,7 +14,7 @@ use serde::Serialize;
 use tracing::{info_span, instrument::WithSubscriber, Instrument as _};
 
 use crate::{
-    cmd::get_test_identifiers::{get_target_test_cases, AncestorSearchMode},
+    cmd::get_test_identifiers::{get_target_test_cases, tags, AncestorSearchMode},
     coverage::{
         commit_coverage_data::CoverageIdentifier, create_db_infallible, CoverageDatabase, Tag,
     },
@@ -28,7 +28,8 @@ use crate::{
 };
 
 use super::cli::{
-    autodetect_test_project_type, GetTestIdentifierMode, SourceMode, TestProjectType,
+    autodetect_test_project_type, GetTestIdentifierMode, PlatformTaggingMode, SourceMode,
+    TestProjectType,
 };
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
@@ -38,7 +39,8 @@ pub async fn cli(
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,
     jobs: u16,
-    tags: &[Tag],
+    user_tags: &[Tag],
+    platform_tagging_mode: PlatformTaggingMode,
 ) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
@@ -52,7 +54,8 @@ pub async fn cli(
                 test_selection_mode,
                 source_mode,
                 jobs,
-                tags,
+                user_tags,
+                platform_tagging_mode,
             )
             .await
         }
@@ -61,7 +64,8 @@ pub async fn cli(
                 test_selection_mode,
                 source_mode,
                 jobs,
-                tags,
+                user_tags,
+                platform_tagging_mode,
             )
             .await
         }
@@ -70,7 +74,8 @@ pub async fn cli(
                 test_selection_mode,
                 source_mode,
                 jobs,
-                tags,
+                user_tags,
+                platform_tagging_mode,
             )
             .await
         }
@@ -81,7 +86,8 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,
     jobs: u16,
-    tags: &[Tag],
+    user_tags: &[Tag],
+    platform_tagging_mode: PlatformTaggingMode,
 ) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
@@ -93,13 +99,15 @@ where
     let perf_storage = Arc::new(PerformanceStorage::new());
     let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
 
+    let tags = tags::<TP>(user_tags, platform_tagging_mode);
+
     let exit_code = async {
         match run_tests::<_, _, _, _, _, _, TP>(
             test_selection_mode,
             &GitScm {},
             source_mode,
             jobs,
-            tags,
+            &tags,
             &create_db_infallible::<TP>(),
         )
         .await

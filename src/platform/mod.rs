@@ -12,8 +12,11 @@ use std::{
 };
 
 use crate::{
-    coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
-    coverage::full_coverage_data::FullCoverageData,
+    coverage::{
+        commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
+        full_coverage_data::FullCoverageData,
+        Tag,
+    },
     errors::RunTestsErrors,
     scm::{Scm, ScmCommit},
 };
@@ -89,6 +92,11 @@ pub trait TestPlatform {
     fn project_name() -> Result<String>;
 
     fn discover_tests() -> Result<Self::TD>;
+
+    /// `platform_tags` give each test platform the opportunity to tag coverage data stored in the coverage database.
+    /// If the test platform changes in such a way that older coverage data cannot be used effectively anymore, the tags
+    /// can be changed to separate the old and new data and prevent them from conflicting.
+    fn platform_tags() -> Vec<Tag>;
 
     async fn run_tests<'a, I>(
         test_cases: I,
