@@ -861,7 +861,8 @@ impl GolangTestPlatform {
         //   Coverage-based testing would identify these dependencies, but this hack doesn't -- if you change a_test.go
         //   and it had a function used by b_test.go, we won't know that the tests in b_test.go need to be rerun.
         // However, it's probably "pretty good for most cases"?
-        let test_file = fs::read_to_string(file).context("reading changed test file {file:?}")?;
+        let test_file =
+            fs::read_to_string(file).context(format!("reading changed test file {file:?}"))?;
 
         for cap in test_func_definition_regex.captures_iter(&test_file) {
             let test_name = String::from(&cap["test_name"]);

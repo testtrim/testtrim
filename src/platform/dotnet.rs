@@ -314,7 +314,7 @@ impl DotnetTestPlatform {
         coverage_data: &mut CommitCoverageData<DotnetTestIdentifier, DotnetCoverageIdentifier>,
     ) -> Result<()> {
         let project_dir = current_dir().context("error getting current_dir()")?;
-        let reader = File::open(profile_file).context("error opening {profile_file:?}")?; // fs::Op::Reader::open_file(profile_file)?;
+        let reader = File::open(profile_file).context(format!("error opening {profile_file:?}"))?;
 
         let coverage: Coverage = quick_xml::de::from_reader(BufReader::new(reader))?;
 
