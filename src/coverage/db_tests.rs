@@ -51,7 +51,7 @@ lazy_static! {
 pub async fn has_any_coverage_data_false(
     db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
-    let result = db.has_any_coverage_data().await;
+    let result = db.has_any_coverage_data("testtrim-tests").await;
     assert!(result.is_ok(), "result = {result:?}");
     let has_coverage_data = result.unwrap();
     assert!(!has_coverage_data);
@@ -59,7 +59,9 @@ pub async fn has_any_coverage_data_false(
 
 pub async fn save_empty(db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
     let data1 = CommitCoverageData::new();
-    let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &data1, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 }
 
@@ -67,16 +69,18 @@ pub async fn has_any_coverage_data_true(
     db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
 ) {
     let data1 = CommitCoverageData::new();
-    let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &data1, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
-    let result = db.has_any_coverage_data().await;
+    let result = db.has_any_coverage_data("testtrim-tests").await;
     assert!(result.is_ok(), "result = {result:?}");
     let has_coverage_data = result.unwrap();
     assert!(has_coverage_data);
 }
 
 pub async fn load_empty(db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
-    let result = db.read_coverage_data("c1", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none());
@@ -142,10 +146,12 @@ pub async fn save_and_load_no_ancestor(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&saved_data, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &saved_data, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c1", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -312,7 +318,9 @@ pub async fn save_and_load_new_case_in_child(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
     let mut child_data = CommitCoverageData::new();
@@ -333,11 +341,11 @@ pub async fn save_and_load_new_case_in_child(
     });
 
     let result = db
-        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -466,7 +474,9 @@ pub async fn save_and_load_replacement_case_in_child(
         target_file: PathBuf::from("extra_data/stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
     let mut child_data = CommitCoverageData::new();
@@ -486,11 +496,11 @@ pub async fn save_and_load_replacement_case_in_child(
     });
 
     let result = db
-        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -605,7 +615,9 @@ pub async fn save_and_load_removed_case_in_child(
         target_file: PathBuf::from("extra_data/more-stuff.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
     // Also an odd case -- we'll give child_data no executed tests just to make sure that no "inner joins" turn
@@ -615,11 +627,11 @@ pub async fn save_and_load_removed_case_in_child(
     child_data.add_existing_test(test2.clone());
 
     let result = db
-        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -676,7 +688,9 @@ pub async fn remove_file_references_in_child(
         target_file: PathBuf::from("extra-data/abc-123.txt"),
     });
 
-    let result = db.save_coverage_data(&ancestor_data, "c1", None, &[]).await;
+    let result = db
+        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
 
     // Slightly weird here; the point of this test is to verify that the positive absence of data
@@ -687,11 +701,11 @@ pub async fn remove_file_references_in_child(
     child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
 
     let result = db
-        .save_coverage_data(&child_data, "c2", Some("c1"), &[])
+        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c2", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -747,6 +761,7 @@ pub async fn independent_tags(
 
     let result = db
         .save_coverage_data(
+            "testtrim-tests",
             &saved_data,
             "c1",
             None,
@@ -764,13 +779,14 @@ pub async fn independent_tags(
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("c1", &[]).await;
+    let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none()); // should not load as we provided mismatching tags
 
     let result = db
         .read_coverage_data(
+            "testtrim-tests",
             "c1",
             &[
                 Tag {
@@ -792,6 +808,7 @@ pub async fn independent_tags(
     // probably be a HashSet for clarity?)
     let result = db
         .read_coverage_data(
+            "testtrim-tests",
             "c1",
             &[
                 Tag {

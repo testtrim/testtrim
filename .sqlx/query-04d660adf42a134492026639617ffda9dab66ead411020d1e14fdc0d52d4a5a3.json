@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM coverage_map WHERE last_read_timestamp < (NOW() - $1::interval)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Interval"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "04d660adf42a134492026639617ffda9dab66ead411020d1e14fdc0d52d4a5a3"
+}

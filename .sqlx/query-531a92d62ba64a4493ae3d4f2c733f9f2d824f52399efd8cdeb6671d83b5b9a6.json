@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coverage_map.* FROM coverage_map INNER JOIN scm_commit ON (scm_commit.id = coverage_map.scm_commit_id) WHERE scm_commit.scm_identifier IN ('\"d1\"', '\"d2\"')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "scm_commit_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_read_timestamp",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "531a92d62ba64a4493ae3d4f2c733f9f2d824f52399efd8cdeb6671d83b5b9a6"
+}

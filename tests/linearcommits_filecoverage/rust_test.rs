@@ -32,8 +32,10 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
     git_clone("rust-coverage-specimen")?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("rust-coverage-specimen")); // FIXME: hack assumes folder name
 
-    let coverage_db = create_test_db::<RustTestPlatform>(String::from("rust-coverage-specimen"))?;
-    coverage_db.clear_project_data().await?;
+    let coverage_db = create_test_db::<RustTestPlatform>()?;
+    coverage_db
+        .clear_project_data("rust-coverage-specimen")
+        .await?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a

@@ -2,17 +2,22 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::net::ToSocketAddrs;
+use std::{net::ToSocketAddrs, time::Duration};
 
 use actix_web::{
     dev::{ServiceFactory, ServiceRequest},
     get, middleware, web, App, HttpRequest, HttpServer, Scope,
 };
-use coverage_data::{CoverageDatabaseFactoryHolder, InstallCoverageDataHandlers as _};
-use log::debug;
+use anyhow::Result;
+use coverage_data::InstallCoverageDataHandlers as _;
+use log::{debug, info, warn};
 
-use crate::platform::{
-    dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform, TestPlatform,
+use crate::{
+    coverage::{create_db, CoverageDatabase as _, CoverageDatabaseDispatch},
+    platform::{
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
+        TestPlatform,
+    },
 };
 
 pub mod coverage_data;
@@ -24,11 +29,13 @@ async fn index(req: HttpRequest) -> &'static str {
 }
 
 pub trait InstallTestPlatform {
-    fn platform<TP: TestPlatform + 'static>(self) -> Self;
+    fn platform<TP: TestPlatform + 'static>(self) -> Result<Self>
+    where
+        Self: Sized;
     #[allow(dead_code)] // used in tests only
     fn platform_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
     ) -> Self;
 }
 
@@ -36,12 +43,15 @@ impl<T> InstallTestPlatform for Scope<T>
 where
     T: ServiceFactory<ServiceRequest, Config = (), Error = actix_web::Error, InitError = ()>,
 {
-    fn platform<TP: TestPlatform + 'static>(self) -> Self {
-        self.service(web::scope("/coverage-data").coverage_data_handlers::<TP>())
+    fn platform<TP: TestPlatform + 'static>(self) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(self.service(web::scope("/coverage-data").coverage_data_handlers::<TP>()?))
     }
     fn platform_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
     ) -> Self {
         self.service(
             web::scope("/coverage-data").coverage_data_handlers_with_db_factory::<TP>(factory),
@@ -54,6 +64,7 @@ pub async fn cli(socket_addrs: impl ToSocketAddrs) {
 }
 
 async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
+    tokio::spawn(intermittent_cleanup());
     HttpServer::new(|| {
         App::new()
             // WARN: Do not change without adjusting test_zstd_compression; see FIXME comment there
@@ -63,21 +74,55 @@ async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
                 web::scope("/api/v0")
                     .service(
                         web::scope(RustTestPlatform::platform_identifier())
-                            .platform::<RustTestPlatform>(),
+                            .platform::<RustTestPlatform>()
+                            .unwrap(),
                     )
                     .service(
                         web::scope(DotnetTestPlatform::platform_identifier())
-                            .platform::<DotnetTestPlatform>(),
+                            .platform::<DotnetTestPlatform>()
+                            .unwrap(),
                     )
                     .service(
                         web::scope(GolangTestPlatform::platform_identifier())
-                            .platform::<GolangTestPlatform>(),
+                            .platform::<GolangTestPlatform>()
+                            .unwrap(),
                     ),
             )
     })
     .bind(socket_addrs)?
     .run()
     .await
+}
+
+async fn intermittent_cleanup() {
+    let remove_older_than = Duration::from_secs(14 * 24 * 60 * 60);
+    let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+
+    loop {
+        interval.tick().await;
+
+        // FIXME: intermittent_clean doesn't do any platform-specific logic, even though CoverageDatabase is generic
+        // over the test platform's TI & CI.  So we just do this once because it will cleanup everything.  Probably the
+        // CoverageDatabase trait should be tweaked -- none of the state of the databases is tied to the types, so it
+        // would make more sense for the functions to be generic and the trait & struct to not be.
+        intermittent_cleanup_for_platform::<RustTestPlatform>(&remove_older_than).await;
+        // intermittent_cleanup_for_platform::<DotnetTestPlatform>().await;
+        // intermittent_cleanup_for_platform::<GolangTestPlatform>().await;
+    }
+}
+
+async fn intermittent_cleanup_for_platform<TP: TestPlatform>(remove_older_than: &Duration) {
+    match create_db::<TP>() {
+        Ok(db) => {
+            info!("Performing intermittent cleanup");
+            if let Err(e) = db.intermittent_clean(remove_older_than).await {
+                warn!("Error during intermittent cleanup: {e:?}");
+            }
+        }
+        Err(e) => {
+            warn!("Unable to create database for intermittent cleanup: {e:?}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -210,6 +210,7 @@ where
 
     let (ancestor_commit, coverage_data) = if let Some((ancestor_commit, coverage_data)) =
         find_ancestor_commit_with_coverage_data::<Commit, MyScm, TI, CI>(
+            &TP::project_name()?,
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,
@@ -296,6 +297,7 @@ where
 /// both parents of the merge commit, and continues from there.
 #[instrument(skip_all, fields(perftrace = "read-coverage-data"))]
 async fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
+    project_name: &str,
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
@@ -308,7 +310,7 @@ where
     TI: TestIdentifier,
     CI: CoverageIdentifier,
 {
-    if !coverage_db.has_any_coverage_data().await? {
+    if !coverage_db.has_any_coverage_data(project_name).await? {
         return Ok(None);
     }
 
@@ -317,7 +319,7 @@ where
     let mut coverage_data = match ancestor_search_mode {
         AncestorSearchMode::AllCommits => {
             let coverage_data = coverage_db
-                .read_coverage_data(&commit_identifier, tags)
+                .read_coverage_data(project_name, &commit_identifier, tags)
                 .await?;
             trace!(
                 "commit (HEAD) id {} had coverage data? {:}",
@@ -353,7 +355,7 @@ where
         }
         let commit_identifier = scm.get_commit_identifier(&commit);
         coverage_data = coverage_db
-            .read_coverage_data(&commit_identifier, tags)
+            .read_coverage_data(project_name, &commit_identifier, tags)
             .await?;
         trace!(
             "commit id {} had coverage data? {:}",
@@ -506,6 +508,7 @@ mod tests {
     use std::{
         collections::{HashMap, HashSet},
         path::PathBuf,
+        time::Duration,
     };
 
     lazy_static! {
@@ -650,6 +653,7 @@ mod tests {
     impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> for MockCoverageDatabase {
         async fn save_coverage_data(
             &self,
+            _project_name: &str,
             _coverage_data: &CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
             _commit_identifier: &str,
             _ancestor_commit_identifier: Option<&str>,
@@ -661,6 +665,7 @@ mod tests {
 
         async fn read_coverage_data(
             &self,
+            _project_name: &str,
             commit_identifier: &str,
             _tags: &[Tag],
         ) -> Result<
@@ -673,12 +678,26 @@ mod tests {
             }
         }
 
-        async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
+        async fn has_any_coverage_data(
+            &self,
+            _project_name: &str,
+        ) -> Result<bool, CoverageDatabaseDetailedError> {
             // has_any_coverage_data not currently used
             Ok(!self.commit_data.is_empty())
         }
 
-        async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
+        async fn clear_project_data(
+            &self,
+            _project_name: &str,
+        ) -> Result<(), CoverageDatabaseDetailedError> {
+            // Not used in testing
+            unreachable!()
+        }
+
+        async fn intermittent_clean(
+            &self,
+            _older_than: &Duration,
+        ) -> Result<(), CoverageDatabaseDetailedError> {
             // Not used in testing
             unreachable!()
         }
@@ -695,6 +714,7 @@ mod tests {
             }],
         };
         let result = find_ancestor_commit_with_coverage_data(
+            "testtrim-tests",
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
@@ -730,6 +750,7 @@ mod tests {
         let mut previous_coverage_data = FullCoverageData::new();
         previous_coverage_data.add_existing_test(test1.clone());
         let result = find_ancestor_commit_with_coverage_data(
+            "testtrim-tests",
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
@@ -791,6 +812,7 @@ mod tests {
         ancestor_coverage_data.add_existing_test(test3.clone());
 
         let result = find_ancestor_commit_with_coverage_data(
+            "testtrim-tests",
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,

@@ -35,8 +35,10 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
     git_clone("go-coverage-specimen")?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("go-coverage-specimen")); // FIXME: hack assumes folder name
 
-    let coverage_db = create_test_db::<GolangTestPlatform>(String::from("go-coverage-specimen"))?;
-    coverage_db.clear_project_data().await?;
+    let coverage_db = create_test_db::<GolangTestPlatform>()?;
+    coverage_db
+        .clear_project_data("go-coverage-specimen")
+        .await?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
     // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a

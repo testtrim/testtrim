@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{env, fmt};
+use std::{env, fmt, time::Duration};
 
 use anyhow::Result;
 use commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
@@ -33,6 +33,7 @@ pub use tag::Tag;
 pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     async fn save_coverage_data(
         &self,
+        project_name: &str,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -40,11 +41,22 @@ pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     ) -> Result<(), CoverageDatabaseDetailedError>;
     async fn read_coverage_data(
         &self,
+        project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError>;
-    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError>;
-    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError>;
+    async fn has_any_coverage_data(
+        &self,
+        project_name: &str,
+    ) -> Result<bool, CoverageDatabaseDetailedError>;
+    async fn clear_project_data(
+        &self,
+        project_name: &str,
+    ) -> Result<(), CoverageDatabaseDetailedError>;
+    async fn intermittent_clean(
+        &self,
+        older_than: &Duration,
+    ) -> Result<(), CoverageDatabaseDetailedError>;
 }
 
 #[derive(Error, Debug)]
@@ -143,44 +155,33 @@ where
 }
 
 pub fn create_db<TP: TestPlatform>(
-    project_name: String,
 ) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
     match env::var("TESTTRIM_DATABASE_URL") {
         Ok(db_url) if db_url.starts_with("postgres") => {
-            Ok(PostgresCoverageDatabase::new(db_url, project_name).into())
+            Ok(PostgresCoverageDatabase::new(db_url).into())
         }
         Ok(db_url) if db_url.starts_with("file://") => {
-            Ok(DieselCoverageDatabase::new_sqlite(db_url, project_name).into())
+            Ok(DieselCoverageDatabase::new_sqlite(db_url).into())
         }
         Ok(db_url) if db_url.starts_with(":memory:") => {
-            Ok(DieselCoverageDatabase::new_sqlite(db_url, project_name).into())
+            Ok(DieselCoverageDatabase::new_sqlite(db_url).into())
         }
-        Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => Ok(
-            TesttrimApiCoverageDatabase::new(&db_url, project_name, TP::platform_identifier())?
-                .into(),
-        ),
+        Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => {
+            Ok(TesttrimApiCoverageDatabase::new(&db_url, TP::platform_identifier())?.into())
+        }
         Ok(db_url) => Err(CreateDatabaseError::UnsupportedDatabaseUrl(db_url)),
-        Err(_) => Ok(DieselCoverageDatabase::new_sqlite_from_default_url(project_name)?.into()),
+        Err(_) => Ok(DieselCoverageDatabase::new_sqlite_from_default_url()?.into()),
     }
 }
 
 pub fn create_test_db<TP: TestPlatform>(
-    project_name: String,
 ) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
-    Ok(DieselCoverageDatabase::new_sqlite(String::from(":memory:"), project_name).into())
+    Ok(DieselCoverageDatabase::new_sqlite(String::from(":memory:")).into())
 }
 
 #[must_use]
 pub fn create_db_infallible<TP: TestPlatform>() -> CoverageDatabaseDispatch<TP::TI, TP::CI> {
-    let project_name = match TP::project_name() {
-        Ok(project_name) => project_name,
-        Err(e) => {
-            error!("Unable to identify project_name: {e:?}");
-            panic!("Unable to identify project_name: {e:?}");
-        }
-    };
-
-    match create_db::<TP>(project_name) {
+    match create_db::<TP>() {
         Ok(db) => db,
         Err(e) => {
             error!("Unable to create coverage DB: {e:?}");

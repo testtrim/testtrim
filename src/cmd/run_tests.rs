@@ -266,6 +266,7 @@ where
         async move {
             coverage_db
                 .save_coverage_data(
+                    &TP::project_name()?,
                     &coverage_data,
                     &commit_identifier,
                     ancestor_commit_identifier.as_deref(),

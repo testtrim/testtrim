@@ -27,6 +27,7 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 use thiserror::Error;
 use time::{OffsetDateTime, PrimitiveDateTime};
@@ -99,7 +100,6 @@ impl From<uuid::Error> for CoverageDatabaseDetailedError {
 
 pub struct DieselCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
-    project_name: String,
     connection: OnceCell<Mutex<SqliteConnection>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
@@ -111,7 +111,6 @@ impl<
     > DieselCoverageDatabase<TI, CI>
 {
     pub fn new_sqlite_from_default_url(
-        project_name: String,
     ) -> Result<DieselCoverageDatabase<TI, CI>, DefaultDatabaseError> {
         let target = match env::var("XDG_CACHE_HOME") {
             Ok(xdg) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
@@ -129,19 +128,14 @@ impl<
             }
         })?;
 
-        Ok(DieselCoverageDatabase::new_sqlite(
-            String::from(target.to_string_lossy()),
-            project_name,
-        ))
+        Ok(DieselCoverageDatabase::new_sqlite(String::from(
+            target.to_string_lossy(),
+        )))
     }
 
-    pub fn new_sqlite(
-        database_url: String,
-        project_name: String,
-    ) -> DieselCoverageDatabase<TI, CI> {
+    pub fn new_sqlite(database_url: String) -> DieselCoverageDatabase<TI, CI> {
         DieselCoverageDatabase {
             database_url,
-            project_name,
             connection: OnceCell::new(),
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
@@ -432,7 +426,7 @@ impl<
 
     fn ensure_project_id(
         conn: &mut SqliteConnection,
-        project_name: &String,
+        project_name: &str,
     ) -> Result<Uuid, CoverageDatabaseDetailedError> {
         use crate::schema::project;
 
@@ -467,6 +461,7 @@ impl<
     // impl CoverageDatabase<TI, CI> for DieselCoverageDatabase {
     async fn save_coverage_data(
         &self,
+        project_name: &str,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -476,7 +471,6 @@ impl<
             commit_test_case, commit_test_case_executed, scm_commit, test_case, test_case_execution,
         };
 
-        let project_name = self.project_name.clone();
         // SQLite isn't going to do a JSON-aware comparison when searching, so we use a sorted serialization to try to
         // get consistent outputs that will work for a bare string comparison.
         let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
@@ -489,7 +483,7 @@ impl<
 
         // FIXME: ideally all of this should happen in a transaction, but I'm not sure it matters for SQLite
 
-        let project_id = Self::ensure_project_id(conn, &project_name)?;
+        let project_id = Self::ensure_project_id(conn, project_name)?;
 
         // In case this was a "re-run" on a commit, delete the old associated data.  Ideally this delete should
         // cascade...
@@ -664,6 +658,7 @@ impl<
 
     async fn read_coverage_data(
         &self,
+        project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
@@ -673,7 +668,6 @@ impl<
             test_case_file_covered, test_case_function_covered,
         };
 
-        let project_name = self.project_name.clone();
         // SQLite isn't going to do a JSON-aware comparison when searching, so we use a sorted serialization to try to
         // get consistent outputs that will work for a bare string comparison.
         let tags_string = serde_json::to_string(&SortedTagArray(tags))?;
@@ -684,7 +678,7 @@ impl<
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
         })?;
 
-        let project_id = Self::ensure_project_id(conn, &project_name)?;
+        let project_id = Self::ensure_project_id(conn, project_name)?;
 
         let coverage_map_id = coverage_map::dsl::coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
@@ -849,10 +843,12 @@ impl<
         Ok(Some(coverage_data))
     }
 
-    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
+    async fn has_any_coverage_data(
+        &self,
+        project_name: &str,
+    ) -> Result<bool, CoverageDatabaseDetailedError> {
         use crate::schema::{coverage_map, scm_commit};
 
-        let project_name = self.project_name.clone();
         let mut conn_guard = self.get_connection().await?;
         let conn = &mut *conn_guard;
 
@@ -860,7 +856,7 @@ impl<
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
         })?;
 
-        let project_id = Self::ensure_project_id(conn, &project_name)?;
+        let project_id = Self::ensure_project_id(conn, project_name)?;
         let coverage_map_id = coverage_map::dsl::coverage_map
             .inner_join(scm_commit::dsl::scm_commit)
             .filter(scm_commit::dsl::project_id.eq(project_id.to_string()))
@@ -873,7 +869,14 @@ impl<
         Ok(coverage_map_id.is_some())
     }
 
-    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
+    async fn clear_project_data(
+        &self,
+        // FIXME: this cleanup isn't specific to the project being run, but should be; the problem is that without FK's
+        // being enforced we can't use cascade deletes and instead have to do ugly stuff ourselves.  It's probably
+        // OK-ish given the limited contexts in which the SQLite driver will be used -- testing and small-scale use --
+        // but should eventually be fixed since a run-server backing on SQLite is plausible.
+        _project_name: &str,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, coverage_map,
             coverage_map_test_case_executed, project, scm_commit, test_case,
@@ -887,10 +890,6 @@ impl<
         conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
         })?;
-
-        // FIXME: this cleanup isn't specific to the project being run, but should be; the problem is that without FK's
-        // being enforced we can't use cascade deletes and instead have to do ugly stuff ourselves.  It's probably
-        // OK-ish.
 
         diesel::delete(coverage_map_test_case_executed::dsl::coverage_map_test_case_executed)
             .execute(conn)?;
@@ -911,10 +910,38 @@ impl<
 
         Ok(())
     }
+
+    async fn intermittent_clean(
+        &self,
+        older_than: &Duration,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
+        use crate::schema::coverage_map;
+
+        let mut conn_guard = self.get_connection().await?;
+        let conn = &mut *conn_guard;
+
+        let now = OffsetDateTime::now_utc();
+        let now = PrimitiveDateTime::new(now.date(), now.time());
+        let cutoff_time = now
+            .checked_sub(time::Duration::seconds_f64(older_than.as_secs_f64()))
+            .ok_or_else(|| {
+                CoverageDatabaseError::DatabaseError(String::from("time overflow occurred"))
+            })?;
+
+        diesel::delete(coverage_map::dsl::coverage_map)
+            .filter(coverage_map::dsl::last_read_timestamp.lt(cutoff_time))
+            .execute(conn)
+            .context("delete in intermittent_clean")?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use time::macros::{date, time};
+
     use super::*;
     use crate::{
         coverage::{commit_coverage_data::CommitCoverageData, db_tests},
@@ -925,7 +952,6 @@ mod tests {
     async fn has_any_coverage_data_false() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::has_any_coverage_data_false(db).await;
     }
@@ -934,7 +960,6 @@ mod tests {
     async fn save_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::save_empty(db).await;
     }
@@ -943,7 +968,6 @@ mod tests {
     async fn has_any_coverage_data_true() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::has_any_coverage_data_true(db).await;
     }
@@ -952,7 +976,6 @@ mod tests {
     async fn load_empty() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::load_empty(db).await;
     }
@@ -963,14 +986,15 @@ mod tests {
 
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
 
         let saved_data = CommitCoverageData::new();
-        let result = db.save_coverage_data(&saved_data, "c1", None, &[]).await;
+        let result = db
+            .save_coverage_data("testtrim-tests", &saved_data, "c1", None, &[])
+            .await;
         assert!(result.is_ok());
 
-        {
+        let first_timestamp = {
             let mut conn_guard = db.get_connection().await.unwrap();
             let conn = &mut *conn_guard;
 
@@ -980,21 +1004,21 @@ mod tests {
                     coverage_map::dsl::id,
                     coverage_map::dsl::last_read_timestamp,
                 ))
-                .get_result::<(String, Option<PrimitiveDateTime>)>(conn)
+                .get_result::<(String, PrimitiveDateTime)>(conn)
                 .optional();
             assert!(data.is_ok());
             let data = data.unwrap();
             assert!(data.is_some());
             let data = data.unwrap();
-            assert!(data.1.is_none());
-        }
+            data.1
+        };
 
-        let result = db.read_coverage_data("c1", &[]).await;
+        let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
 
-        {
+        let second_timestamp = {
             let mut conn_guard = db.get_connection().await.unwrap();
             let conn = &mut *conn_guard;
 
@@ -1004,22 +1028,83 @@ mod tests {
                     coverage_map::dsl::id,
                     coverage_map::dsl::last_read_timestamp,
                 ))
-                .get_result::<(String, Option<PrimitiveDateTime>)>(conn)
+                .get_result::<(String, PrimitiveDateTime)>(conn)
                 .optional();
             assert!(data.is_ok());
             let data = data.unwrap();
             assert!(data.is_some());
             let data = data.unwrap();
-            assert!(data.1.is_some());
-        }
+            data.1
+        };
+        println!("{first_timestamp:?}");
+        println!("{second_timestamp:?}");
+        assert!(
+            second_timestamp > first_timestamp,
+            "second timestamp > first timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn intermittent_clean() -> Result<()> {
+        use crate::schema::*;
+
+        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
+            String::from(":memory:"),
+        );
+
+        let saved_data = CommitCoverageData::new();
+        let result = db
+            .save_coverage_data("testtrim-tests", &saved_data, "d1", None, &[])
+            .await;
+        assert!(result.is_ok());
+
+        let saved_data = CommitCoverageData::new();
+        let result = db
+            .save_coverage_data("testtrim-tests", &saved_data, "d2", None, &[])
+            .await;
+        assert!(result.is_ok());
+
+        let check_data = async || {
+            let mut conn_guard = db.get_connection().await.unwrap();
+            let conn = &mut *conn_guard;
+
+            coverage_map::dsl::coverage_map
+                .inner_join(scm_commit::dsl::scm_commit)
+                .select((
+                    coverage_map::dsl::id,
+                    coverage_map::dsl::last_read_timestamp,
+                ))
+                .filter(scm_commit::dsl::scm_identifier.eq_any(vec!["d1", "d2"]))
+                .get_results::<(String, PrimitiveDateTime)>(conn)
+        };
+
+        let data = check_data().await?;
+        assert_eq!(data.len(), 2);
+
+        let do_tweak = async || {
+            let mut conn_guard = db.get_connection().await.unwrap();
+            let conn = &mut *conn_guard;
+
+            let time = PrimitiveDateTime::new(date!(2019 - 01 - 01), time!(0:00));
+            diesel::update(coverage_map::dsl::coverage_map)
+                .set(coverage_map::dsl::last_read_timestamp.eq(time))
+                .filter(coverage_map::dsl::id.eq(&data.first().unwrap().0))
+                .execute(conn)
+                .context("update coverage_map.last_read_timestamp")
+        };
+        do_tweak().await?;
+
+        db.intermittent_clean(&Duration::from_secs(1800)).await?;
+
+        let data = check_data().await?;
+        assert_eq!(data.len(), 1);
+
+        Ok(())
     }
 
     #[tokio::test]
     async fn save_and_load_no_ancestor() {
-        let db = DieselCoverageDatabase::new_sqlite(
-            String::from(":memory:"),
-            String::from("testtrim-tests"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::save_and_load_no_ancestor(db).await;
     }
 
@@ -1028,7 +1113,6 @@ mod tests {
     async fn save_and_load_new_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::save_and_load_new_case_in_child(db).await;
     }
@@ -1038,7 +1122,6 @@ mod tests {
     async fn save_and_load_replacement_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::save_and_load_replacement_case_in_child(db).await;
     }
@@ -1048,7 +1131,6 @@ mod tests {
     async fn save_and_load_removed_case_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::save_and_load_removed_case_in_child(db).await;
     }
@@ -1058,7 +1140,6 @@ mod tests {
     async fn remove_file_references_in_child() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::remove_file_references_in_child(db).await;
     }
@@ -1068,7 +1149,6 @@ mod tests {
     async fn independent_tags() {
         let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
             String::from(":memory:"),
-            String::from("testtrim-tests"),
         );
         db_tests::independent_tags(db).await;
     }

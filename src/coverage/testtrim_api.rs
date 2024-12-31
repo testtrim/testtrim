@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use async_compression::tokio::bufread::ZstdEncoder;
-use log::debug;
+use log::{debug, warn};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{marker::PhantomData, sync::OnceLock, time::Instant};
+use std::{
+    marker::PhantomData,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 use tokio::io::AsyncReadExt;
 use url::Url;
 
@@ -24,7 +28,6 @@ use super::{
 
 pub struct TesttrimApiCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     api_url: Url,
-    project_name: String,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
     client: OnceLock<Client>,
@@ -49,7 +52,6 @@ where
 {
     pub fn new(
         api_url: &str,
-        project_name: String,
         platform_identifier: &str,
     ) -> Result<TesttrimApiCoverageDatabase<TI, CI>, CreateDatabaseError> {
         let mut url = Url::parse(api_url)
@@ -72,7 +74,6 @@ where
 
         Ok(TesttrimApiCoverageDatabase {
             api_url: url,
-            project_name,
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
             client: OnceLock::new(),
@@ -99,6 +100,7 @@ where
 {
     async fn save_coverage_data(
         &self,
+        project_name: &str,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -112,7 +114,7 @@ where
                 ))
             })
             .context("parse configured API URL")?
-            .push(&self.project_name)
+            .push(project_name)
             .push(commit_identifier);
 
         let post_request = PostCoverageDataRequest {
@@ -174,6 +176,7 @@ where
 
     async fn read_coverage_data(
         &self,
+        project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
@@ -185,7 +188,7 @@ where
                 ))
             })
             .context("parse configured API URL")?
-            .push(&self.project_name)
+            .push(project_name)
             .push(commit_identifier);
         {
             let mut mutator = url.query_pairs_mut();
@@ -223,7 +226,10 @@ where
         Ok(body)
     }
 
-    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
+    async fn has_any_coverage_data(
+        &self,
+        project_name: &str,
+    ) -> Result<bool, CoverageDatabaseDetailedError> {
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -232,7 +238,7 @@ where
                 ))
             })
             .context("parse configured API URL")?
-            .push(&self.project_name);
+            .push(project_name);
         debug!("HTTP request GET {url}");
         let client = self.client()?;
         let request = client
@@ -263,7 +269,10 @@ where
         Ok(body)
     }
 
-    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
+    async fn clear_project_data(
+        &self,
+        project_name: &str,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -272,7 +281,7 @@ where
                 ))
             })
             .context("parse configured API URL")?
-            .push(&self.project_name);
+            .push(project_name);
         debug!("HTTP request DELETE {url}");
         let client = self.client()?;
         let request = client
@@ -300,6 +309,14 @@ where
 
         Ok(())
     }
+
+    async fn intermittent_clean(
+        &self,
+        _older_than: &Duration,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
+        warn!("intermittent_clean is not supported when TESTTRIM_DATABASE_URL is a remote HTTP server");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -313,10 +330,7 @@ mod tests {
     };
     use anyhow::Result;
     use lazy_static::lazy_static;
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::{collections::HashMap, sync::Mutex};
 
     use crate::{
         coverage::{
@@ -327,7 +341,7 @@ mod tests {
             rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
             TestPlatform,
         },
-        server::{coverage_data::CoverageDatabaseFactoryHolder, InstallTestPlatform as _},
+        server::InstallTestPlatform as _,
     };
 
     use super::TesttrimApiCoverageDatabase;
@@ -389,12 +403,9 @@ mod tests {
     }
 
     fn create_test_server() -> TestServer {
-        let coverage_db =
-            crate::coverage::create_test_db::<RustTestPlatform>(String::from("in-memory-project"))
-                .unwrap();
-        let factory = web::Data::new(CoverageDatabaseFactoryHolder::<RustTestPlatform>::Fixture(
-            Arc::new(coverage_db),
-        ));
+        let coverage_db = crate::coverage::create_test_db::<RustTestPlatform>() // String::from("in-memory-project"))
+            .unwrap();
+        let factory = web::Data::new(coverage_db);
 
         let test_state = web::Data::new(TestInterceptState {
             last_req_headers: Mutex::new(None),
@@ -431,18 +442,14 @@ mod tests {
         let url = srv.url("/");
         (
             srv,
-            TesttrimApiCoverageDatabase::new(
-                &url,
-                String::from("testtrim-tests-apibased"),
-                RustTestPlatform::platform_identifier(),
-            )
-            .expect("init must succeed"),
+            TesttrimApiCoverageDatabase::new(&url, RustTestPlatform::platform_identifier())
+                .expect("init must succeed"),
         )
     }
 
     async fn cleanup() {
         let (_srv, db) = create_test_db();
-        db.clear_project_data()
+        db.clear_project_data("testtrim-tests")
             .await
             .expect("clear_project_data must succeed for test consistency");
     }
@@ -541,7 +548,9 @@ mod tests {
 
         // Make a POST...
         let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        let result = db.save_coverage_data(&data1, "c1", None, &[]).await;
+        let result = db
+            .save_coverage_data("testtrim-tests", &data1, "c1", None, &[])
+            .await;
         assert!(result.is_ok(), "result = {result:?}");
 
         // Check what HTTP headers were sent:
@@ -573,7 +582,7 @@ mod tests {
         let (srv, db) = create_test_db();
 
         // Make a GET...
-        let result = db.read_coverage_data("c1", &[]).await;
+        let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
         assert!(result.is_ok(), "result = {result:?}");
 
         // Check what HTTP headers were sent:

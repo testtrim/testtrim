@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE coverage_map SET last_read_timestamp = '2024-01-01' WHERE id = $1\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a38270e3c69e3eefcda8d0672762434fdac945c9eca0ccc6bd8d9ee63c8215d"
+}

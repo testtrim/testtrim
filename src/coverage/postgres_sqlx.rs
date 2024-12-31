@@ -5,8 +5,11 @@
 use log::debug;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
-use sqlx::{postgres::PgPoolOptions, Executor, Pool, Postgres, Transaction};
-use std::{collections::HashMap, marker::PhantomData, path::PathBuf};
+use sqlx::{
+    postgres::{types::PgInterval, PgPoolOptions},
+    Executor, Pool, Postgres, Transaction,
+};
+use std::{collections::HashMap, marker::PhantomData, path::PathBuf, time::Duration};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -23,7 +26,6 @@ use super::{
 
 pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
     database_url: String,
-    project_name: String,
     connection: OnceCell<Pool<Postgres>>,
     test_identifier_type: PhantomData<TI>,
     coverage_identifier_type: PhantomData<CI>,
@@ -67,10 +69,9 @@ where
     TI: TestIdentifier + Serialize + DeserializeOwned,
     CI: CoverageIdentifier + Serialize + DeserializeOwned,
 {
-    pub fn new(database_url: String, project_name: String) -> PostgresCoverageDatabase<TI, CI> {
+    pub fn new(database_url: String) -> PostgresCoverageDatabase<TI, CI> {
         PostgresCoverageDatabase {
             database_url,
-            project_name,
             connection: OnceCell::new(),
             test_identifier_type: PhantomData,
             coverage_identifier_type: PhantomData,
@@ -809,6 +810,7 @@ where
 {
     async fn save_coverage_data(
         &self,
+        project_name: &str,
         coverage_data: &CommitCoverageData<TI, CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
@@ -817,7 +819,7 @@ where
         let tx = self.get_pool().await?;
         let mut tx = tx.begin().await?;
 
-        let project_id = Self::upsert_project(&mut *tx, &self.project_name).await?;
+        let project_id = Self::upsert_project(&mut *tx, project_name).await?;
         Self::delete_old_commit_data(&mut tx, &project_id, commit_identifier, tags).await?;
         let ancestor_scm_commit_id = Self::load_ancestor_scm_commit_id(
             &mut tx,
@@ -886,13 +888,13 @@ where
 
     async fn read_coverage_data(
         &self,
+        project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
     ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
-        let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
         let pool = self.get_pool().await?;
 
-        let project_id = Self::upsert_project(pool, &project_name).await?;
+        let project_id = Self::upsert_project(pool, project_name).await?;
 
         let tag_value = serde_json::to_value(TagArray(tags))?;
         let coverage_map_id = sqlx::query!(
@@ -966,11 +968,13 @@ where
         Ok(Some(coverage_data))
     }
 
-    async fn has_any_coverage_data(&self) -> Result<bool, CoverageDatabaseDetailedError> {
-        let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
+    async fn has_any_coverage_data(
+        &self,
+        project_name: &str,
+    ) -> Result<bool, CoverageDatabaseDetailedError> {
         let pool = self.get_pool().await?;
 
-        let project_id = Self::upsert_project(pool, &project_name).await?;
+        let project_id = Self::upsert_project(pool, project_name).await?;
         let coverage_map_id = sqlx::query!(
             r"
             SELECT
@@ -990,8 +994,10 @@ where
         Ok(coverage_map_id.is_some())
     }
 
-    async fn clear_project_data(&self) -> Result<(), CoverageDatabaseDetailedError> {
-        let project_name = self.project_name.clone(); // since pool is a quiet &mut borrow of self for the scope of this func
+    async fn clear_project_data(
+        &self,
+        project_name: &str,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
         let pool = self.get_pool().await?;
         sqlx::query!("DELETE FROM project WHERE name = $1", project_name)
             .execute(pool)
@@ -999,14 +1005,41 @@ where
             .context("delete in clear_project_data")?;
         Ok(())
     }
+
+    async fn intermittent_clean(
+        &self,
+        older_than: &Duration,
+    ) -> Result<(), CoverageDatabaseDetailedError> {
+        let pool = self.get_pool().await?;
+
+        let duration_us = older_than
+            .as_micros()
+            .try_into()
+            .map_err(|e| CoverageDatabaseError::DatabaseError(format!("u182 -> i64 error: {e:?}")))
+            .context("converting Duration into PgInterval")?;
+
+        sqlx::query!(
+            "DELETE FROM coverage_map WHERE last_read_timestamp < (NOW() - $1::interval)",
+            PgInterval {
+                months: 0,
+                days: 0,
+                microseconds: duration_us,
+            }
+        )
+        .execute(pool)
+        .await
+        .context("delete in intermittent_clean")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use lazy_static::lazy_static;
     use named_lock::NamedLock;
     use serde_json::Value;
-    use std::env;
+    use std::{env, time::Duration};
 
     use crate::{
         coverage::{
@@ -1027,7 +1060,7 @@ mod tests {
             .or(env::var("TESTTRIM_DATABASE_URL"))
             .expect("TESTTRIM_UNITTEST_PGSQL_URL or TESTTRIM_DATABASE_URL must be set for postgres_sqlx tests");
 
-        PostgresCoverageDatabase::new(test_db_url, String::from("testtrim-tests"))
+        PostgresCoverageDatabase::new(test_db_url)
     }
 
     async fn cleanup() {
@@ -1105,19 +1138,74 @@ mod tests {
         let mut db = create_test_db();
 
         let saved_data = CommitCoverageData::new();
-        let result = db.save_coverage_data(&saved_data, "c1", None, &[]).await;
+        let result = db
+            .save_coverage_data("testtrim-tests", &saved_data, "c1", None, &[])
+            .await;
         assert!(result.is_ok());
 
-        let ts = ts_fetcher(&mut db).await;
-        assert!(ts.is_none());
+        let first_timestamp = ts_fetcher(&mut db).await;
 
-        let result = db.read_coverage_data("c1", &[]).await;
+        let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
 
-        let ts = ts_fetcher(&mut db).await;
-        assert!(ts.is_some());
+        let second_timestamp = ts_fetcher(&mut db).await;
+        println!("{first_timestamp:?}");
+        println!("{second_timestamp:?}");
+        assert!(
+            second_timestamp > first_timestamp,
+            "second timestamp > first timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn intermittent_clean() -> Result<()> {
+        let _db_mutex = DB_MUTEX.lock();
+        cleanup().await;
+
+        let mut db = create_test_db();
+
+        let saved_data = CommitCoverageData::new();
+        let result = db
+            .save_coverage_data("testtrim-tests", &saved_data, "d1", None, &[])
+            .await;
+        assert!(result.is_ok());
+
+        let saved_data = CommitCoverageData::new();
+        let result = db
+            .save_coverage_data("testtrim-tests", &saved_data, "d2", None, &[])
+            .await;
+        assert!(result.is_ok());
+
+        let check_data = async |db: &mut PostgresCoverageDatabase<_, _>| {
+            let pool = db.get_pool().await.unwrap();
+            sqlx::query!(r#"SELECT coverage_map.* FROM coverage_map INNER JOIN scm_commit ON (scm_commit.id = coverage_map.scm_commit_id) WHERE scm_commit.scm_identifier IN ('"d1"', '"d2"')"#)
+            .fetch_all(pool)
+            .await
+        };
+        let data = check_data(&mut db).await?;
+        assert_eq!(data.len(), 2);
+
+        let do_tweak = async |db: &mut PostgresCoverageDatabase<_, _>| {
+            let pool = db.get_pool().await.unwrap();
+            sqlx::query!(
+                r"
+                UPDATE coverage_map SET last_read_timestamp = '2024-01-01' WHERE id = $1
+                ",
+                data.get(0).unwrap().id
+            )
+            .execute(pool)
+            .await
+        };
+        do_tweak(&mut db).await?;
+
+        db.intermittent_clean(&Duration::from_secs(1800)).await?;
+
+        let data = check_data(&mut db).await?;
+        assert_eq!(data.len(), 1);
+
+        Ok(())
     }
 
     #[tokio::test]

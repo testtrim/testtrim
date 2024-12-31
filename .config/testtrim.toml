@@ -7,7 +7,8 @@
 name = "PostgreSQL"
 apply.run-if-files-changed = [
     ".forgejo/workflows/rust-check.yaml",
-    "db/postgres/*.sql",
+    "db/postgres/migrations/*.sql",
+    ".sqlx/*"
 ]
 [[network-policy.match]]
 port = 5432

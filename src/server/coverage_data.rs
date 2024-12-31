@@ -5,7 +5,6 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
 };
 
 use actix_web::{
@@ -14,6 +13,7 @@ use actix_web::{
     web::{self, JsonConfig},
     HttpResponse, Responder, ResponseError, Scope,
 };
+use anyhow::Result;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_map_to_array::HashMapToArray;
@@ -25,66 +25,30 @@ use crate::{
             CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
             HeuristicCoverage,
         },
-        create_db, CoverageDatabase as _, CoverageDatabaseDispatch, CreateDatabaseError, Tag,
+        create_db, CoverageDatabase as _, CoverageDatabaseDispatch, Tag,
     },
     platform::{TestIdentifier, TestPlatform},
 };
 
-type FactoryFunction<TP> = fn(
-    String,
-) -> Result<
-    CoverageDatabaseDispatch<<TP as TestPlatform>::TI, <TP as TestPlatform>::CI>,
-    CreateDatabaseError,
->;
-
-pub enum CoverageDatabaseFactoryHolder<TP: TestPlatform> {
-    Function(FactoryFunction<TP>),
-    #[allow(dead_code)] // used in tests only
-    Fixture(Arc<CoverageDatabaseDispatch<TP::TI, TP::CI>>),
-}
-
-// FIXME: this Arc<..> usage is a little ugly, but it is used because the CoverageDatabaseFactoryHolder has one approach
-// (factory) that returns an owned object, and one approach (fixture) that returns a reference to an object, hence the
-// Arc.  If coverage databases were stored/cached we wouldn't need to do this, but then we'd have to get rid of
-// project_name as an input during creation and instead use it as an input during the methods.  Switching to this model
-// of a purely injected coverage database seems like the right thing to do, but practically probably doesn't have much
-// value.
-type ThreadsafeCoverageDatabase<TP> =
-    Arc<CoverageDatabaseDispatch<<TP as TestPlatform>::TI, <TP as TestPlatform>::CI>>;
-
-impl<TP: TestPlatform> CoverageDatabaseFactoryHolder<TP> {
-    // Rc<T> is a little ugly here; &'a where 'a is the life of this would be better, but we don't hold the result of
-    // the Function and we're an enum so don't have a place for one (an enum can't be self mutating, right?)
-    fn get_db(
-        &self,
-        project_name: String,
-    ) -> Result<ThreadsafeCoverageDatabase<TP>, CreateDatabaseError> {
-        match self {
-            CoverageDatabaseFactoryHolder::Function(f) => f(project_name).map(Arc::new),
-            CoverageDatabaseFactoryHolder::Fixture(f) => Ok(f.clone()),
-        }
-    }
-}
-
 pub trait InstallCoverageDataHandlers {
-    fn coverage_data_handlers<TP: TestPlatform + 'static>(self) -> Self;
+    fn coverage_data_handlers<TP: TestPlatform + 'static>(self) -> Result<Self>
+    where
+        Self: Sized;
     fn coverage_data_handlers_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
     ) -> Self;
 }
 
 impl InstallCoverageDataHandlers for Scope {
-    fn coverage_data_handlers<TP: TestPlatform + 'static>(self) -> Self {
-        let factory = |project_name: String| create_db::<TP>(project_name);
-        self.coverage_data_handlers_with_db_factory::<TP>(web::Data::new(
-            CoverageDatabaseFactoryHolder::Function(factory),
-        ))
+    fn coverage_data_handlers<TP: TestPlatform + 'static>(self) -> Result<Self> {
+        let coverage_db = create_db::<TP>()?;
+        Ok(self.coverage_data_handlers_with_db_factory::<TP>(web::Data::new(coverage_db)))
     }
 
     fn coverage_data_handlers_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
     ) -> Self {
         let size_64_mb = 1 << 26;
         self.app_data(factory)
@@ -131,23 +95,20 @@ impl ResponseError for GetCoverageDataError {
 
 async fn get_any_coverage_data<TP: TestPlatform>(
     path: web::Path<String>,
-    db_factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
 ) -> Result<impl Responder, GetCoverageDataError> {
     let project_name = path.into_inner();
     debug!("get_any_coverage_data received: {:?}", project_name);
 
-    let coverage_db = db_factory.get_db(project_name.clone())?;
-    // let mut mut_coverage_db = coverage_db.lock().await;
-
     Ok(HttpResponse::Ok().json(serde_json::to_value(
-        coverage_db.has_any_coverage_data().await?,
+        coverage_db.has_any_coverage_data(&project_name).await?,
     )?))
 }
 
 async fn get_coverage_data<TP: TestPlatform>(
     path: web::Path<(String, String)>,
     tags: web::Query<HashMap<String, String>>,
-    db_factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
 ) -> Result<impl Responder, GetCoverageDataError> {
     let (project_name, commit_identifier) = path.into_inner();
     let tags = tags.into_inner();
@@ -163,11 +124,9 @@ async fn get_coverage_data<TP: TestPlatform>(
         .map(|(key, value)| Tag { key, value })
         .collect::<Vec<Tag>>();
 
-    let coverage_db = db_factory.get_db(project_name.clone())?;
-
     Ok(HttpResponse::Ok().json(
         coverage_db
-            .read_coverage_data(&commit_identifier, &tags)
+            .read_coverage_data(&project_name, &commit_identifier, &tags)
             .await?,
     ))
 }
@@ -216,7 +175,7 @@ impl ResponseError for PostCoverageDataError {
 async fn post_coverage_data<TP: TestPlatform>(
     path: web::Path<(String, String)>,
     req: web::Json<PostCoverageDataRequest<TP::TI, TP::CI>>,
-    db_factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
 ) -> Result<impl Responder, PostCoverageDataError> {
     let (project_name, commit_identifier) = path.into_inner();
     debug!("post_coverage_data received: {:?}", req);
@@ -266,10 +225,9 @@ async fn post_coverage_data<TP: TestPlatform>(
         }
     }
 
-    let coverage_db = db_factory.get_db(project_name.clone())?;
-
     coverage_db
         .save_coverage_data(
+            &project_name,
             &commit_coverage_data,
             &commit_identifier,
             req.ancestor_commit_identifier.as_deref(),
@@ -306,15 +264,13 @@ impl ResponseError for DeleteCoverageDataError {
 
 async fn delete_coverage_data<TP: TestPlatform>(
     path: web::Path<String>,
-    db_factory: web::Data<CoverageDatabaseFactoryHolder<TP>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
 ) -> Result<impl Responder, DeleteCoverageDataError> {
     let project_name = path.into_inner();
     debug!("delete_coverage_data received: {:?}", project_name);
 
-    let coverage_db = db_factory.get_db(project_name.clone())?;
-
     debug!("web: starting clear_project_data({})", project_name);
-    coverage_db.clear_project_data().await?;
+    coverage_db.clear_project_data(&project_name).await?;
     debug!("web: completed clear_project_data({})", project_name);
 
     Ok(HttpResponse::Ok().json(None::<String>))
@@ -376,7 +332,7 @@ mod tests {
     #[actix_web::test]
     async fn test_get_coverage_rust() -> Result<()> {
         let test_project = String::from("testtrim-tests-2");
-        let coverage_db = create_test_db::<RustTestPlatform>(test_project.clone())?;
+        let coverage_db = create_test_db::<RustTestPlatform>()?;
 
         let mut saved_data =
             CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
@@ -392,6 +348,7 @@ mod tests {
         });
         coverage_db
             .save_coverage_data(
+                &test_project,
                 &saved_data,
                 "test-123-correct-identifier",
                 None,
@@ -399,9 +356,7 @@ mod tests {
             )
             .await?;
 
-        let factory = web::Data::new(CoverageDatabaseFactoryHolder::<RustTestPlatform>::Fixture(
-            Arc::new(coverage_db),
-        ));
+        let factory = web::Data::new(coverage_db);
         let app = test::init_service(App::new().app_data(factory).route(
             "/coverage-data/{project}/{commit_identifier}",
             web::get().to(get_coverage_data::<RustTestPlatform>),
@@ -448,7 +403,7 @@ mod tests {
     #[actix_web::test]
     async fn test_get_coverage_dotnet() -> Result<()> {
         let test_project = String::from("testtrim-tests-3");
-        let coverage_db = create_test_db::<DotnetTestPlatform>(test_project.clone())?;
+        let coverage_db = create_test_db::<DotnetTestPlatform>()?;
 
         let mut saved_data =
             CommitCoverageData::<DotnetTestIdentifier, DotnetCoverageIdentifier>::new();
@@ -464,6 +419,7 @@ mod tests {
         });
         coverage_db
             .save_coverage_data(
+                &test_project,
                 &saved_data,
                 "test-456-correct-identifier",
                 None,
@@ -471,9 +427,7 @@ mod tests {
             )
             .await?;
 
-        let factory = web::Data::new(
-            CoverageDatabaseFactoryHolder::<DotnetTestPlatform>::Fixture(Arc::new(coverage_db)),
-        );
+        let factory = web::Data::new(coverage_db);
         let app = test::init_service(App::new().app_data(factory).route(
             "/coverage-data/{project}/{commit_identifier}",
             web::get().to(get_coverage_data::<DotnetTestPlatform>),
