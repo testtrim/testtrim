@@ -7,7 +7,6 @@ use log::{debug, warn};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    marker::PhantomData,
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -15,7 +14,8 @@ use tokio::io::AsyncReadExt;
 use url::Url;
 
 use crate::{
-    coverage::ResultWithContext as _, platform::TestIdentifier,
+    coverage::ResultWithContext as _,
+    platform::{TestIdentifier, TestPlatform},
     server::coverage_data::PostCoverageDataRequest,
 };
 
@@ -26,10 +26,8 @@ use super::{
     Tag,
 };
 
-pub struct TesttrimApiCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
+pub struct TesttrimApiCoverageDatabase {
     api_url: Url,
-    test_identifier_type: PhantomData<TI>,
-    coverage_identifier_type: PhantomData<CI>,
     client: OnceLock<Client>,
 }
 
@@ -45,15 +43,8 @@ impl From<url::ParseError> for CoverageDatabaseError {
     }
 }
 
-impl<TI, CI> TesttrimApiCoverageDatabase<TI, CI>
-where
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
-{
-    pub fn new(
-        api_url: &str,
-        platform_identifier: &str,
-    ) -> Result<TesttrimApiCoverageDatabase<TI, CI>, CreateDatabaseError> {
+impl TesttrimApiCoverageDatabase {
+    pub fn new(api_url: &str) -> Result<TesttrimApiCoverageDatabase, CreateDatabaseError> {
         let mut url = Url::parse(api_url)
             .context("parse configured API URL")
             .map_err(|e| {
@@ -68,14 +59,12 @@ where
                 ))
             })?
             .push("api")
-            .push("v0")
-            .push(platform_identifier)
-            .push("coverage-data");
+            .push("v0");
+        // .push(platform_identifier)
+        // .push("coverage-data");
 
         Ok(TesttrimApiCoverageDatabase {
             api_url: url,
-            test_identifier_type: PhantomData,
-            coverage_identifier_type: PhantomData,
             client: OnceLock::new(),
         })
     }
@@ -93,19 +82,20 @@ where
     }
 }
 
-impl<TI, CI> CoverageDatabase<TI, CI> for TesttrimApiCoverageDatabase<TI, CI>
-where
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
-{
-    async fn save_coverage_data(
+impl CoverageDatabase for TesttrimApiCoverageDatabase {
+    async fn save_coverage_data<TP>(
         &self,
         project_name: &str,
-        coverage_data: &CommitCoverageData<TI, CI>,
+        coverage_data: &CommitCoverageData<TP::TI, TP::CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -114,6 +104,8 @@ where
                 ))
             })
             .context("parse configured API URL")?
+            .push(TP::platform_identifier())
+            .push("coverage-data")
             .push(project_name)
             .push(commit_identifier);
 
@@ -174,12 +166,17 @@ where
         Ok(())
     }
 
-    async fn read_coverage_data(
+    async fn read_coverage_data<TP>(
         &self,
         project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
+    ) -> Result<Option<FullCoverageData<TP::TI, TP::CI>>, CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
         let mut url = self.api_url.clone();
         url.path_segments_mut()
             .map_err(|()| {
@@ -188,6 +185,8 @@ where
                 ))
             })
             .context("parse configured API URL")?
+            .push(TP::platform_identifier())
+            .push("coverage-data")
             .push(project_name)
             .push(commit_identifier);
         {
@@ -218,7 +217,7 @@ where
         }
 
         let body = response
-            .json::<Option<FullCoverageData<TI, CI>>>()
+            .json::<Option<FullCoverageData<TP::TI, TP::CI>>>()
             .await
             .context("parsing response body for coverage data GET")?;
 
@@ -226,7 +225,7 @@ where
         Ok(body)
     }
 
-    async fn has_any_coverage_data(
+    async fn has_any_coverage_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<bool, CoverageDatabaseDetailedError> {
@@ -238,6 +237,8 @@ where
                 ))
             })
             .context("parse configured API URL")?
+            .push(TP::platform_identifier())
+            .push("coverage-data")
             .push(project_name);
         debug!("HTTP request GET {url}");
         let client = self.client()?;
@@ -269,7 +270,7 @@ where
         Ok(body)
     }
 
-    async fn clear_project_data(
+    async fn clear_project_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<(), CoverageDatabaseDetailedError> {
@@ -281,6 +282,8 @@ where
                 ))
             })
             .context("parse configured API URL")?
+            .push(TP::platform_identifier())
+            .push("coverage-data")
             .push(project_name);
         debug!("HTTP request DELETE {url}");
         let client = self.client()?;
@@ -403,8 +406,7 @@ mod tests {
     }
 
     fn create_test_server() -> TestServer {
-        let coverage_db = crate::coverage::create_test_db::<RustTestPlatform>() // String::from("in-memory-project"))
-            .unwrap();
+        let coverage_db = crate::coverage::create_test_db().unwrap();
         let factory = web::Data::new(coverage_db);
 
         let test_state = web::Data::new(TestInterceptState {
@@ -434,22 +436,18 @@ mod tests {
         })
     }
 
-    fn create_test_db() -> (
-        TestServer,
-        TesttrimApiCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-    ) {
+    fn create_test_db() -> (TestServer, TesttrimApiCoverageDatabase) {
         let srv = create_test_server();
         let url = srv.url("/");
         (
             srv,
-            TesttrimApiCoverageDatabase::new(&url, RustTestPlatform::platform_identifier())
-                .expect("init must succeed"),
+            TesttrimApiCoverageDatabase::new(&url).expect("init must succeed"),
         )
     }
 
     async fn cleanup() {
         let (_srv, db) = create_test_db();
-        db.clear_project_data("testtrim-tests")
+        db.clear_project_data::<RustTestPlatform>("testtrim-tests")
             .await
             .expect("clear_project_data must succeed for test consistency");
     }
@@ -549,7 +547,7 @@ mod tests {
         // Make a POST...
         let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &data1, "c1", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &data1, "c1", None, &[])
             .await;
         assert!(result.is_ok(), "result = {result:?}");
 
@@ -582,7 +580,9 @@ mod tests {
         let (srv, db) = create_test_db();
 
         // Make a GET...
-        let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
+        let result = db
+            .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[])
+            .await;
         assert!(result.is_ok(), "result = {result:?}");
 
         // Check what HTTP headers were sent:

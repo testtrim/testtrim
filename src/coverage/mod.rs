@@ -30,26 +30,34 @@ pub use tag::Tag;
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)] // should be fine to the extent that this is only used internally to this project
-pub trait CoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
-    async fn save_coverage_data(
+pub trait CoverageDatabase {
+    async fn save_coverage_data<TP>(
         &self,
         project_name: &str,
-        coverage_data: &CommitCoverageData<TI, CI>,
+        coverage_data: &CommitCoverageData<TP::TI, TP::CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> Result<(), CoverageDatabaseDetailedError>;
-    async fn read_coverage_data(
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned;
+    async fn read_coverage_data<TP>(
         &self,
         project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError>;
-    async fn has_any_coverage_data(
+    ) -> Result<Option<FullCoverageData<TP::TI, TP::CI>>, CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned;
+    async fn has_any_coverage_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<bool, CoverageDatabaseDetailedError>;
-    async fn clear_project_data(
+    async fn clear_project_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<(), CoverageDatabaseDetailedError>;
@@ -143,19 +151,14 @@ impl From<CoverageDatabaseError> for CoverageDatabaseDetailedError {
     }
 }
 
-#[enum_dispatch(CoverageDatabase<TI, CI>)]
-pub enum CoverageDatabaseDispatch<TI, CI>
-where
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
-{
-    Postgres(PostgresCoverageDatabase<TI, CI>),
-    Sqlite(DieselCoverageDatabase<TI, CI>),
-    TesttrimApi(TesttrimApiCoverageDatabase<TI, CI>),
+#[enum_dispatch(CoverageDatabase)]
+pub enum CoverageDatabaseDispatch {
+    Postgres(PostgresCoverageDatabase),
+    Sqlite(DieselCoverageDatabase),
+    TesttrimApi(TesttrimApiCoverageDatabase),
 }
 
-pub fn create_db<TP: TestPlatform>(
-) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
+pub fn create_db() -> Result<CoverageDatabaseDispatch, CreateDatabaseError> {
     match env::var("TESTTRIM_DATABASE_URL") {
         Ok(db_url) if db_url.starts_with("postgres") => {
             Ok(PostgresCoverageDatabase::new(db_url).into())
@@ -167,21 +170,20 @@ pub fn create_db<TP: TestPlatform>(
             Ok(DieselCoverageDatabase::new_sqlite(db_url).into())
         }
         Ok(db_url) if db_url.starts_with("http://") || db_url.starts_with("https://") => {
-            Ok(TesttrimApiCoverageDatabase::new(&db_url, TP::platform_identifier())?.into())
+            Ok(TesttrimApiCoverageDatabase::new(&db_url)?.into())
         }
         Ok(db_url) => Err(CreateDatabaseError::UnsupportedDatabaseUrl(db_url)),
         Err(_) => Ok(DieselCoverageDatabase::new_sqlite_from_default_url()?.into()),
     }
 }
 
-pub fn create_test_db<TP: TestPlatform>(
-) -> Result<CoverageDatabaseDispatch<TP::TI, TP::CI>, CreateDatabaseError> {
+pub fn create_test_db() -> Result<CoverageDatabaseDispatch, CreateDatabaseError> {
     Ok(DieselCoverageDatabase::new_sqlite(String::from(":memory:")).into())
 }
 
 #[must_use]
-pub fn create_db_infallible<TP: TestPlatform>() -> CoverageDatabaseDispatch<TP::TI, TP::CI> {
-    match create_db::<TP>() {
+pub fn create_db_infallible() -> CoverageDatabaseDispatch {
+    match create_db() {
         Ok(db) => db,
         Err(e) => {
             error!("Unable to create coverage DB: {e:?}");

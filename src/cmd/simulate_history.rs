@@ -66,7 +66,7 @@ where
         &GitScm {},
         num_commits,
         jobs,
-        &create_db_infallible::<TP>(),
+        &create_db_infallible(),
     )
     .await
     {
@@ -149,7 +149,7 @@ async fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     num_commits: u16,
     jobs: u16,
-    coverage_db: &impl CoverageDatabase<TI, CI>,
+    coverage_db: &impl CoverageDatabase,
 ) -> Result<SimulateHistoryOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -161,7 +161,9 @@ where
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
-    coverage_db.clear_project_data(&TP::project_name()?).await?;
+    coverage_db
+        .clear_project_data::<TP>(&TP::project_name()?)
+        .await?;
 
     // Use git log -> get the target commits from earliest to latest.  When we hit a merge branch, we'll go up each
     // parent's path until we've found enough commits to meet the requested test count.  This might not reach a common
@@ -219,7 +221,7 @@ async fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     commit: Commit,
     jobs: u16,
-    coverage_db: &impl CoverageDatabase<TI, CI>,
+    coverage_db: &impl CoverageDatabase,
 ) -> Result<SimulateCommitOutput<Commit>>
 where
     Commit: ScmCommit,

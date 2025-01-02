@@ -289,6 +289,7 @@ fn parse_resumed_unfinished_call(input: &str) -> IResult<&str, InternalLineType>
         parse_terminating_process_case1,
         parse_terminating_process_case2,
         parse_terminating_process_case3,
+        parse_terminating_process_case4,
     ))(input)
 }
 
@@ -328,6 +329,16 @@ fn parse_terminating_process_case3(input: &str) -> IResult<&str, InternalLineTyp
             function_name: "???",
         },
     ))
+}
+
+fn parse_terminating_process_case4(input: &str) -> IResult<&str, InternalLineType> {
+    let (input, function_name) = parse_function_name(input)?;
+    let (input, _) = tag("(")(input)?;
+    let (input, _) = separated_list0(tag(", "), parse_argument)(input)?;
+    let (input, _) = tag(", )")(input)?;
+    let (input, _) = consume_whitespace(input)?;
+    let (input, _) = tag("= ? <unavailable>")(input)?;
+    Ok((input, InternalLineType::ResumedUnfinished { function_name }))
 }
 
 fn consume_whitespace(input: &str) -> IResult<&str, &str> {
@@ -711,6 +722,18 @@ mod tests {
                 outcome: CallOutcome::ResumedUnfinished
             }
         );
+        let tokenized =
+            tokenize_syscall(r"read(7, )                               = ? <unavailable>")?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                function: "read",
+                // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished,
+            }
+        );
+
         // Another unrecognizable mess right before a process exit.  Again since ResumedUnfinished is just suppressed at
         // the sequencer layer, I'll output it like that... but maybe "ResumedUnfinished" is just becoming "terminated
         // during process exit"?

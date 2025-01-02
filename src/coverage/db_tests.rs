@@ -11,7 +11,9 @@ use crate::{
         },
         Tag,
     },
-    platform::rust::{RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier},
+    platform::rust::{
+        RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier, RustTestPlatform,
+    },
 };
 use lazy_static::lazy_static;
 
@@ -48,47 +50,47 @@ lazy_static! {
         });
 }
 
-pub async fn has_any_coverage_data_false(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
-    let result = db.has_any_coverage_data("testtrim-tests").await;
+pub async fn has_any_coverage_data_false(db: impl CoverageDatabase) {
+    let result = db
+        .has_any_coverage_data::<RustTestPlatform>("testtrim-tests")
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let has_coverage_data = result.unwrap();
     assert!(!has_coverage_data);
 }
 
-pub async fn save_empty(db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
-    let data1 = CommitCoverageData::new();
+pub async fn save_empty(db: impl CoverageDatabase) {
+    let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     let result = db
-        .save_coverage_data("testtrim-tests", &data1, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &data1, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 }
 
-pub async fn has_any_coverage_data_true(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
-    let data1 = CommitCoverageData::new();
+pub async fn has_any_coverage_data_true(db: impl CoverageDatabase) {
+    let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     let result = db
-        .save_coverage_data("testtrim-tests", &data1, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &data1, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
-    let result = db.has_any_coverage_data("testtrim-tests").await;
+    let result = db
+        .has_any_coverage_data::<RustTestPlatform>("testtrim-tests")
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let has_coverage_data = result.unwrap();
     assert!(has_coverage_data);
 }
 
-pub async fn load_empty(db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>) {
-    let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
+pub async fn load_empty(db: impl CoverageDatabase) {
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none());
 }
 
-pub async fn save_and_load_no_ancestor(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
+pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
     let mut saved_data = CommitCoverageData::new();
     // note -- no ancestor, so the only case that makes sense is for all existing tests to be executed tests
     saved_data.add_executed_test(test1.clone());
@@ -147,11 +149,13 @@ pub async fn save_and_load_no_ancestor(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &saved_data, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -291,10 +295,8 @@ pub async fn save_and_load_no_ancestor(
 }
 
 /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
-pub async fn save_and_load_new_case_in_child(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
-    let mut ancestor_data = CommitCoverageData::new();
+pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
+    let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     ancestor_data.add_executed_test(test1.clone());
     ancestor_data.add_existing_test(test1.clone());
     ancestor_data.add_file_to_test(FileCoverage {
@@ -319,11 +321,11 @@ pub async fn save_and_load_new_case_in_child(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &ancestor_data, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let mut child_data = CommitCoverageData::new();
+    let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     child_data.add_executed_test(test2.clone());
     child_data.add_existing_test(test1.clone());
     child_data.add_existing_test(test2.clone());
@@ -341,11 +343,19 @@ pub async fn save_and_load_new_case_in_child(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c2", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -439,10 +449,8 @@ pub async fn save_and_load_new_case_in_child(
 }
 
 /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
-pub async fn save_and_load_replacement_case_in_child(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
-    let mut ancestor_data = CommitCoverageData::new();
+pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) {
+    let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     ancestor_data.add_executed_test(test1.clone());
     ancestor_data.add_existing_test(test1.clone());
     ancestor_data.add_file_to_test(FileCoverage {
@@ -475,11 +483,11 @@ pub async fn save_and_load_replacement_case_in_child(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &ancestor_data, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let mut child_data = CommitCoverageData::new();
+    let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     child_data.add_executed_test(test1.clone());
     child_data.add_existing_test(test1.clone());
     child_data.add_file_to_test(FileCoverage {
@@ -496,11 +504,19 @@ pub async fn save_and_load_replacement_case_in_child(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c2", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -578,10 +594,8 @@ pub async fn save_and_load_replacement_case_in_child(
 }
 
 /// Test a child coverage set which indicates a test was removed and no longer present
-pub async fn save_and_load_removed_case_in_child(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
-    let mut ancestor_data = CommitCoverageData::new();
+pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
+    let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     ancestor_data.add_executed_test(test1.clone());
     ancestor_data.add_executed_test(test2.clone());
     ancestor_data.add_existing_test(test1.clone());
@@ -616,22 +630,30 @@ pub async fn save_and_load_removed_case_in_child(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &ancestor_data, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
     // Also an odd case -- we'll give child_data no executed tests just to make sure that no "inner joins" turn
     // into no data.  We should get all the test2 data from the ancestor because we're indicating that it still
     // exists though...
-    let mut child_data = CommitCoverageData::new();
+    let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     child_data.add_existing_test(test2.clone());
 
     let result = db
-        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c2", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -669,10 +691,8 @@ pub async fn save_and_load_removed_case_in_child(
 }
 
 /// Test that we can remove file references from an ancestor
-pub async fn remove_file_references_in_child(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
-    let mut ancestor_data = CommitCoverageData::new();
+pub async fn remove_file_references_in_child(db: impl CoverageDatabase) {
+    let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     ancestor_data.add_executed_test(test1.clone());
     ancestor_data.add_existing_test(test1.clone());
     ancestor_data.add_file_reference(FileReference {
@@ -689,23 +709,31 @@ pub async fn remove_file_references_in_child(
     });
 
     let result = db
-        .save_coverage_data("testtrim-tests", &ancestor_data, "c1", None, &[])
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &ancestor_data, "c1", None, &[])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
     // Slightly weird here; the point of this test is to verify that the positive absence of data
     // (mark_file_makes_no_reference) correctly overwrites ancestor data with no records for that file.
-    let mut child_data = CommitCoverageData::new();
+    let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
     child_data.add_executed_test(test1.clone());
     child_data.add_existing_test(test1.clone());
     child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
 
     let result = db
-        .save_coverage_data("testtrim-tests", &child_data, "c2", Some("c1"), &[])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("testtrim-tests", "c2", &[]).await;
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c2", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_some());
@@ -732,9 +760,7 @@ pub async fn remove_file_references_in_child(
 }
 
 /// Test that save and load use independent data based upon tags
-pub async fn independent_tags(
-    db: impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
-) {
+pub async fn independent_tags(db: impl CoverageDatabase) {
     let mut saved_data = CommitCoverageData::new();
     let windows = RustCoverageIdentifier::PackageDependency(RustPackageDependency {
         package_name: String::from("windows-sys"),
@@ -760,7 +786,7 @@ pub async fn independent_tags(
     });
 
     let result = db
-        .save_coverage_data(
+        .save_coverage_data::<RustTestPlatform>(
             "testtrim-tests",
             &saved_data,
             "c1",
@@ -779,13 +805,15 @@ pub async fn independent_tags(
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
-    let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
+    let result = db
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[])
+        .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
     assert!(result.is_none()); // should not load as we provided mismatching tags
 
     let result = db
-        .read_coverage_data(
+        .read_coverage_data::<RustTestPlatform>(
             "testtrim-tests",
             "c1",
             &[
@@ -807,7 +835,7 @@ pub async fn independent_tags(
     // the order of the tags is reversed, but expected to be loaded successfully -- the tag order is irrelevant (should
     // probably be a HashSet for clarity?)
     let result = db
-        .read_coverage_data(
+        .read_coverage_data::<RustTestPlatform>(
             "testtrim-tests",
             "c1",
             &[

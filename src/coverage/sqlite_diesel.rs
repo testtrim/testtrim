@@ -10,7 +10,7 @@ use crate::{
         full_coverage_data::FullCoverageData,
         tag::SortedTagArray,
     },
-    platform::TestIdentifier,
+    platform::{TestIdentifier, TestPlatform},
 };
 
 use diesel::{
@@ -24,7 +24,6 @@ use std::{
     collections::HashMap,
     env::{self, VarError},
     fs, io,
-    marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -98,20 +97,13 @@ impl From<uuid::Error> for CoverageDatabaseDetailedError {
     }
 }
 
-pub struct DieselCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
+pub struct DieselCoverageDatabase {
     database_url: String,
     connection: OnceCell<Mutex<SqliteConnection>>,
-    test_identifier_type: PhantomData<TI>,
-    coverage_identifier_type: PhantomData<CI>,
 }
 
-impl<
-        TI: TestIdentifier + Serialize + DeserializeOwned,
-        CI: CoverageIdentifier + Serialize + DeserializeOwned,
-    > DieselCoverageDatabase<TI, CI>
-{
-    pub fn new_sqlite_from_default_url(
-    ) -> Result<DieselCoverageDatabase<TI, CI>, DefaultDatabaseError> {
+impl DieselCoverageDatabase {
+    pub fn new_sqlite_from_default_url() -> Result<DieselCoverageDatabase, DefaultDatabaseError> {
         let target = match env::var("XDG_CACHE_HOME") {
             Ok(xdg) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
             Err(_) => Path::new(&env::var("HOME")?)
@@ -133,12 +125,10 @@ impl<
         )))
     }
 
-    pub fn new_sqlite(database_url: String) -> DieselCoverageDatabase<TI, CI> {
+    pub fn new_sqlite(database_url: String) -> DieselCoverageDatabase {
         DieselCoverageDatabase {
             database_url,
             connection: OnceCell::new(),
-            test_identifier_type: PhantomData,
-            coverage_identifier_type: PhantomData,
         }
     }
 
@@ -169,7 +159,7 @@ impl<
             .await)
     }
 
-    fn save_test_case_file_coverage(
+    fn save_test_case_file_coverage<TI: TestIdentifier, CI: CoverageIdentifier>(
         conn: &mut SqliteConnection,
         test_case_execution_id: &Uuid,
         test_case: &TI,
@@ -198,7 +188,7 @@ impl<
         Ok(())
     }
 
-    fn save_test_case_function_coverage(
+    fn save_test_case_function_coverage<TI: TestIdentifier, CI: CoverageIdentifier>(
         conn: &mut SqliteConnection,
         test_case_execution_id: &Uuid,
         test_case: &TI,
@@ -230,7 +220,7 @@ impl<
         Ok(())
     }
 
-    fn save_test_case_coverage_identifiers(
+    fn save_test_case_coverage_identifiers<TI: TestIdentifier, CI: CoverageIdentifier>(
         conn: &mut SqliteConnection,
         test_case_execution_id: &Uuid,
         test_case: &TI,
@@ -272,7 +262,7 @@ impl<
     ///   in the denormalized tables
     /// - It's moderately complex to do in SQL, and when operating through the wet-noodle of a query builder it's even
     ///   more complex
-    fn save_coverage_map(
+    fn save_coverage_map<TI: TestIdentifier, CI: CoverageIdentifier>(
         conn: &mut SqliteConnection,
         scm_commit_id: Uuid,
         ancestor_scm_commit_id: Option<&String>,
@@ -453,20 +443,21 @@ impl<
     }
 }
 
-impl<
-        TI: TestIdentifier + Serialize + DeserializeOwned,
-        CI: CoverageIdentifier + Serialize + DeserializeOwned,
-    > CoverageDatabase<TI, CI> for DieselCoverageDatabase<TI, CI>
-{
+impl CoverageDatabase for DieselCoverageDatabase {
     // impl CoverageDatabase<TI, CI> for DieselCoverageDatabase {
-    async fn save_coverage_data(
+    async fn save_coverage_data<TP>(
         &self,
         project_name: &str,
-        coverage_data: &CommitCoverageData<TI, CI>,
+        coverage_data: &CommitCoverageData<TP::TI, TP::CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
         use crate::schema::{
             commit_test_case, commit_test_case_executed, scm_commit, test_case, test_case_execution,
         };
@@ -538,7 +529,7 @@ impl<
             .get_results(conn)
             .context("loading project_test_cases")?;
         for project_test_case in project_test_cases {
-            let test_identifier: TI = serde_json::from_str(&project_test_case.test_identifier)?;
+            let test_identifier: TP::TI = serde_json::from_str(&project_test_case.test_identifier)?;
             if let Some(stored_ti) = coverage_data.existing_test_set().get(&test_identifier) {
                 let test_case_id = Uuid::parse_str(&project_test_case.id)?;
                 test_case_to_test_case_id_map.insert(stored_ti, test_case_id);
@@ -656,12 +647,17 @@ impl<
         Ok(())
     }
 
-    async fn read_coverage_data(
+    async fn read_coverage_data<TP>(
         &self,
         project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
+    ) -> Result<Option<FullCoverageData<TP::TI, TP::CI>>, CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
         use crate::schema::{
             commit_file_reference, coverage_map, coverage_map_test_case_executed, scm_commit,
             test_case, test_case_coverage_identifier_covered, test_case_execution,
@@ -726,7 +722,7 @@ impl<
 
         let mut test_case_id_to_test_identifier_map = HashMap::new();
         for (test_case_id, test_identifier) in all_test_cases {
-            let test_identifier: TI = serde_json::from_str(&test_identifier)?;
+            let test_identifier: TP::TI = serde_json::from_str(&test_identifier)?;
             test_case_id_to_test_identifier_map.insert(test_case_id, test_identifier.clone());
             coverage_data.add_existing_test(test_identifier);
         }
@@ -843,7 +839,7 @@ impl<
         Ok(Some(coverage_data))
     }
 
-    async fn has_any_coverage_data(
+    async fn has_any_coverage_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<bool, CoverageDatabaseDetailedError> {
@@ -855,6 +851,8 @@ impl<
         conn.run_pending_migrations(MIGRATIONS).map_err(|e| {
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
         })?;
+
+        // FIXME: theoretically should filter to just the data from TestPlatform
 
         let project_id = Self::ensure_project_id(conn, project_name)?;
         let coverage_map_id = coverage_map::dsl::coverage_map
@@ -869,7 +867,7 @@ impl<
         Ok(coverage_map_id.is_some())
     }
 
-    async fn clear_project_data(
+    async fn clear_project_data<TP: TestPlatform>(
         &self,
         // FIXME: this cleanup isn't specific to the project being run, but should be; the problem is that without FK's
         // being enforced we can't use cascade deletes and instead have to do ugly stuff ourselves.  It's probably
@@ -891,6 +889,7 @@ impl<
             CoverageDatabaseError::DatabaseError(format!("failed to run pending migrations: {e}"))
         })?;
 
+        // FIXME: theoretically should filter to just the data from TestPlatform
         diesel::delete(coverage_map_test_case_executed::dsl::coverage_map_test_case_executed)
             .execute(conn)?;
         diesel::delete(coverage_map::dsl::coverage_map).execute(conn)?;
@@ -945,38 +944,30 @@ mod tests {
     use super::*;
     use crate::{
         coverage::{commit_coverage_data::CommitCoverageData, db_tests},
-        platform::rust::{RustCoverageIdentifier, RustTestIdentifier},
+        platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
     };
 
     #[tokio::test]
     async fn has_any_coverage_data_false() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::has_any_coverage_data_false(db).await;
     }
 
     #[tokio::test]
     async fn save_empty() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::save_empty(db).await;
     }
 
     #[tokio::test]
     async fn has_any_coverage_data_true() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::has_any_coverage_data_true(db).await;
     }
 
     #[tokio::test]
     async fn load_empty() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::load_empty(db).await;
     }
 
@@ -984,13 +975,11 @@ mod tests {
     async fn load_updates_last_read_timestamp() {
         use crate::schema::*;
 
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
 
-        let saved_data = CommitCoverageData::new();
+        let saved_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &saved_data, "c1", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "c1", None, &[])
             .await;
         assert!(result.is_ok());
 
@@ -1013,7 +1002,9 @@ mod tests {
             data.1
         };
 
-        let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
+        let result = db
+            .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[])
+            .await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
@@ -1048,19 +1039,17 @@ mod tests {
     async fn intermittent_clean() -> Result<()> {
         use crate::schema::*;
 
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
 
-        let saved_data = CommitCoverageData::new();
+        let saved_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &saved_data, "d1", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "d1", None, &[])
             .await;
         assert!(result.is_ok());
 
-        let saved_data = CommitCoverageData::new();
+        let saved_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &saved_data, "d2", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "d2", None, &[])
             .await;
         assert!(result.is_ok());
 
@@ -1111,45 +1100,35 @@ mod tests {
     /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
     #[tokio::test]
     async fn save_and_load_new_case_in_child() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::save_and_load_new_case_in_child(db).await;
     }
 
     /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
     #[tokio::test]
     async fn save_and_load_replacement_case_in_child() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::save_and_load_replacement_case_in_child(db).await;
     }
 
     /// Test a child coverage set which indicates a test was removed and no longer present
     #[tokio::test]
     async fn save_and_load_removed_case_in_child() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::save_and_load_removed_case_in_child(db).await;
     }
 
     /// Test that we can remove file references from an ancestor
     #[tokio::test]
     async fn remove_file_references_in_child() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::remove_file_references_in_child(db).await;
     }
 
     /// Test that save and load use independent data based upon tags
     #[tokio::test]
     async fn independent_tags() {
-        let db = DieselCoverageDatabase::<RustTestIdentifier, RustCoverageIdentifier>::new_sqlite(
-            String::from(":memory:"),
-        );
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::independent_tags(db).await;
     }
 }

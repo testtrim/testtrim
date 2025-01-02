@@ -12,9 +12,7 @@ use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorS
 use testtrim::cmd::run_tests::run_tests;
 use testtrim::coverage::{create_test_db, CoverageDatabase};
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
-use testtrim::platform::dotnet::{
-    DotnetCoverageIdentifier, DotnetTestIdentifier, DotnetTestPlatform,
-};
+use testtrim::platform::dotnet::DotnetTestPlatform;
 use testtrim::scm::git::GitScm;
 use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use tracing::instrument::WithSubscriber as _;
@@ -35,9 +33,9 @@ async fn dotnet_linearcommits_filecoverage() -> Result<()> {
     let _tmp_dir_cwd2 =
         ChangeWorkingDirectory::new(&tmp_dir.path().join("dotnet-coverage-specimen")); // FIXME: hack assumes folder name
 
-    let coverage_db = create_test_db::<DotnetTestPlatform>()?;
+    let coverage_db = create_test_db()?;
     coverage_db
-        .clear_project_data("dotnet-coverage-specimen")
+        .clear_project_data::<DotnetTestPlatform>("dotnet-coverage-specimen")
         .await?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
@@ -434,7 +432,7 @@ async fn dotnet_linearcommits_filecoverage() -> Result<()> {
 
     async fn execute_test(
         commit_test_data: &CommitTestData<'_>,
-        coverage_db: &impl CoverageDatabase<DotnetTestIdentifier, DotnetCoverageIdentifier>,
+        coverage_db: &impl CoverageDatabase,
     ) -> Result<()> {
         let scm = GitScm {};
         let tags = &get_test_identifiers::tags::<DotnetTestPlatform>(

@@ -12,7 +12,7 @@ use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorS
 use testtrim::cmd::run_tests::run_tests;
 use testtrim::coverage::{create_test_db, CoverageDatabase};
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
-use testtrim::platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform};
+use testtrim::platform::rust::RustTestPlatform;
 use testtrim::scm::git::GitScm;
 use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use tracing::instrument::WithSubscriber;
@@ -32,9 +32,9 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
     git_clone("rust-coverage-specimen")?;
     let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("rust-coverage-specimen")); // FIXME: hack assumes folder name
 
-    let coverage_db = create_test_db::<RustTestPlatform>()?;
+    let coverage_db = create_test_db()?;
     coverage_db
-        .clear_project_data("rust-coverage-specimen")
+        .clear_project_data::<RustTestPlatform>("rust-coverage-specimen")
         .await?;
 
     // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
@@ -421,7 +421,7 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
 
     async fn execute_test(
         commit_test_data: &CommitTestData<'_>,
-        coverage_db: &impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier>,
+        coverage_db: &impl CoverageDatabase,
     ) -> Result<()> {
         let scm = GitScm {};
         let tags = &get_test_identifiers::tags::<RustTestPlatform>(

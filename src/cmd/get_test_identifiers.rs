@@ -101,7 +101,7 @@ where
             &GitScm {},
             AncestorSearchMode::AllCommits,
             &tags,
-            &create_db_infallible::<TP>(),
+            &create_db_infallible(),
         )
         .await
         {
@@ -180,7 +180,7 @@ pub async fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
     tags: &[Tag],
-    coverage_db: &impl CoverageDatabase<TI, CI>,
+    coverage_db: &impl CoverageDatabase,
 ) -> Result<TargetTestCases<Commit, TI, CTI, CI>>
 where
     Commit: ScmCommit,
@@ -208,8 +208,8 @@ where
         });
     }
 
-    let (ancestor_commit, coverage_data) = if let Some((ancestor_commit, coverage_data)) =
-        find_ancestor_commit_with_coverage_data::<Commit, MyScm, TI, CI>(
+    let (ancestor_commit, coverage_data) = if let Some(ancestor_retval) =
+        find_ancestor_commit_with_coverage_data::<Commit, MyScm, TP>(
             &TP::project_name()?,
             scm,
             scm.get_head_commit()?,
@@ -221,9 +221,12 @@ where
     {
         info!(
             "relevant test cases will be computed base upon commit {:?}",
-            scm.get_commit_identifier(&ancestor_commit)
+            scm.get_commit_identifier(&ancestor_retval.ancestor_commit)
         );
-        (ancestor_commit, coverage_data)
+        (
+            ancestor_retval.ancestor_commit,
+            ancestor_retval.coverage_data,
+        )
     } else {
         warn!("no base commit identified with coverage data to work from");
         return Ok(TargetTestCases {
@@ -288,6 +291,11 @@ where
     })
 }
 
+struct AncestorCommit<Commit: ScmCommit, TP: TestPlatform> {
+    ancestor_commit: Commit,
+    coverage_data: FullCoverageData<TP::TI, TP::CI>,
+}
+
 /// Identify a useable commit which has stored coverage data and can be used as a basis for determining which tests to
 /// run in this project.
 ///
@@ -296,21 +304,25 @@ where
 /// checking for any coverage data.  If a merge commit is found, then the search skips to the best common ancestor to
 /// both parents of the merge commit, and continues from there.
 #[instrument(skip_all, fields(perftrace = "read-coverage-data"))]
-async fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TI, CI>(
+async fn find_ancestor_commit_with_coverage_data<Commit, MyScm, TP>(
     project_name: &str,
     scm: &MyScm,
     head: Commit,
     ancestor_search_mode: AncestorSearchMode,
-    coverage_db: &impl CoverageDatabase<TI, CI>,
+    coverage_db: &impl CoverageDatabase,
     tags: &[Tag],
-) -> Result<Option<(Commit, FullCoverageData<TI, CI>)>>
+) -> Result<Option<AncestorCommit<Commit, TP>>>
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
-    TI: TestIdentifier,
-    CI: CoverageIdentifier,
+    TP: TestPlatform,
+    TP::TI: TestIdentifier + DeserializeOwned,
+    TP::CI: CoverageIdentifier,
 {
-    if !coverage_db.has_any_coverage_data(project_name).await? {
+    if !coverage_db
+        .has_any_coverage_data::<TP>(project_name)
+        .await?
+    {
         return Ok(None);
     }
 
@@ -319,7 +331,7 @@ where
     let mut coverage_data = match ancestor_search_mode {
         AncestorSearchMode::AllCommits => {
             let coverage_data = coverage_db
-                .read_coverage_data(project_name, &commit_identifier, tags)
+                .read_coverage_data::<TP>(project_name, &commit_identifier, tags)
                 .await?;
             trace!(
                 "commit (HEAD) id {} had coverage data? {:}",
@@ -355,7 +367,7 @@ where
         }
         let commit_identifier = scm.get_commit_identifier(&commit);
         coverage_data = coverage_db
-            .read_coverage_data(project_name, &commit_identifier, tags)
+            .read_coverage_data::<TP>(project_name, &commit_identifier, tags)
             .await?;
         trace!(
             "commit id {} had coverage data? {:}",
@@ -364,7 +376,10 @@ where
         );
     }
 
-    Ok(Some((commit, coverage_data.unwrap())))
+    Ok(Some(AncestorCommit {
+        ancestor_commit: commit,
+        coverage_data: coverage_data.unwrap(),
+    }))
 }
 
 /// Compute which test cases need to be run based upon what changes are being made, and stored coverage data from
@@ -495,16 +510,22 @@ mod tests {
             AncestorSearchMode,
         },
         coverage::{
-            commit_coverage_data::{CommitCoverageData, FileCoverage},
+            commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage},
             full_coverage_data::FullCoverageData,
             CoverageDatabase, CoverageDatabaseDetailedError, Tag,
         },
-        platform::rust::{
-            RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary, RustTestIdentifier,
+        platform::{
+            rust::{
+                RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary,
+                RustTestIdentifier, RustTestPlatform,
+            },
+            TestIdentifier, TestPlatform,
         },
         scm::Scm,
     };
     use lazy_static::lazy_static;
+    use serde::{de::DeserializeOwned, Serialize};
+    use serde_json::Value;
     use std::{
         collections::{HashMap, HashSet},
         path::PathBuf,
@@ -647,38 +668,45 @@ mod tests {
     }
 
     struct MockCoverageDatabase {
-        commit_data: HashMap<String, FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>>,
+        commit_data: HashMap<String, Value>,
     }
 
-    impl CoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> for MockCoverageDatabase {
-        async fn save_coverage_data(
+    impl CoverageDatabase for MockCoverageDatabase {
+        async fn save_coverage_data<TP>(
             &self,
             _project_name: &str,
-            _coverage_data: &CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
+            _coverage_data: &CommitCoverageData<TP::TI, TP::CI>,
             _commit_identifier: &str,
             _ancestor_commit_identifier: Option<&str>,
             _tags: &[Tag],
-        ) -> Result<(), CoverageDatabaseDetailedError> {
+        ) -> Result<(), CoverageDatabaseDetailedError>
+        where
+            TP: TestPlatform,
+            TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+            TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+        {
             // save_coverage_data should never be used on this mock
             unreachable!()
         }
 
-        async fn read_coverage_data(
+        async fn read_coverage_data<TP>(
             &self,
             _project_name: &str,
             commit_identifier: &str,
             _tags: &[Tag],
-        ) -> Result<
-            Option<FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>>,
-            CoverageDatabaseDetailedError,
-        > {
+        ) -> Result<Option<FullCoverageData<TP::TI, TP::CI>>, CoverageDatabaseDetailedError>
+        where
+            TP: TestPlatform,
+            TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+            TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+        {
             match self.commit_data.get(commit_identifier) {
-                Some(data) => Ok(Some(data.clone())),
+                Some(data) => Ok(Some(serde_json::from_value(data.clone())?)),
                 None => Ok(None),
             }
         }
 
-        async fn has_any_coverage_data(
+        async fn has_any_coverage_data<TP: TestPlatform>(
             &self,
             _project_name: &str,
         ) -> Result<bool, CoverageDatabaseDetailedError> {
@@ -686,7 +714,7 @@ mod tests {
             Ok(!self.commit_data.is_empty())
         }
 
-        async fn clear_project_data(
+        async fn clear_project_data<TP: TestPlatform>(
             &self,
             _project_name: &str,
         ) -> Result<(), CoverageDatabaseDetailedError> {
@@ -713,7 +741,7 @@ mod tests {
                 ..Default::default()
             }],
         };
-        let result = find_ancestor_commit_with_coverage_data(
+        let result = find_ancestor_commit_with_coverage_data::<_, _, RustTestPlatform>(
             "testtrim-tests",
             &scm,
             scm.get_head_commit().unwrap(),
@@ -747,15 +775,18 @@ mod tests {
                 },
             ],
         };
-        let mut previous_coverage_data = FullCoverageData::new();
+        let mut previous_coverage_data = FullCoverageData::<_, RustCoverageIdentifier>::new();
         previous_coverage_data.add_existing_test(test1.clone());
-        let result = find_ancestor_commit_with_coverage_data(
+        let result = find_ancestor_commit_with_coverage_data::<_, _, RustTestPlatform>(
             "testtrim-tests",
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
             &MockCoverageDatabase {
-                commit_data: HashMap::from([(String::from("c2"), previous_coverage_data)]),
+                commit_data: HashMap::from([(
+                    String::from("c2"),
+                    serde_json::to_value(previous_coverage_data).unwrap(),
+                )]),
             },
             &[],
         )
@@ -764,9 +795,9 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
-        let (result_commit, result_coverage_data) = result.unwrap();
-        assert_eq!(scm.get_commit_identifier(&result_commit), "c2");
-        assert_eq!(result_coverage_data.all_tests().len(), 1);
+        let ancestor = result.unwrap();
+        assert_eq!(scm.get_commit_identifier(&ancestor.ancestor_commit), "c2");
+        assert_eq!(ancestor.coverage_data.all_tests().len(), 1);
     }
 
     #[tokio::test]
@@ -802,24 +833,30 @@ mod tests {
             ],
         };
 
-        let mut branch_coverage_data = FullCoverageData::new();
+        let mut branch_coverage_data = FullCoverageData::<_, RustCoverageIdentifier>::new();
         branch_coverage_data.add_existing_test(test1.clone());
         branch_coverage_data.add_existing_test(test2.clone());
         branch_coverage_data.add_existing_test(test3.clone());
 
-        let mut ancestor_coverage_data = FullCoverageData::new();
+        let mut ancestor_coverage_data = FullCoverageData::<_, RustCoverageIdentifier>::new();
         ancestor_coverage_data.add_existing_test(test1.clone());
         ancestor_coverage_data.add_existing_test(test3.clone());
 
-        let result = find_ancestor_commit_with_coverage_data(
+        let result = find_ancestor_commit_with_coverage_data::<_, _, RustTestPlatform>(
             "testtrim-tests",
             &scm,
             scm.get_head_commit().unwrap(),
             AncestorSearchMode::AllCommits,
             &MockCoverageDatabase {
                 commit_data: HashMap::from([
-                    (String::from("branch-a"), branch_coverage_data),
-                    (String::from("ancestor"), ancestor_coverage_data),
+                    (
+                        String::from("branch-a"),
+                        serde_json::to_value(branch_coverage_data).unwrap(),
+                    ),
+                    (
+                        String::from("ancestor"),
+                        serde_json::to_value(ancestor_coverage_data).unwrap(),
+                    ),
                 ]),
             },
             &[],
@@ -829,9 +866,12 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
-        let (result_commit, result_coverage_data) = result.unwrap();
-        assert_eq!(scm.get_commit_identifier(&result_commit), "ancestor");
-        assert_eq!(result_coverage_data.all_tests().len(), 2); // ancestor is the only one missing test2
+        let result = result.unwrap();
+        assert_eq!(
+            scm.get_commit_identifier(&result.ancestor_commit),
+            "ancestor"
+        );
+        assert_eq!(result.coverage_data.all_tests().len(), 2); // ancestor is the only one missing test2
     }
 
     #[test]

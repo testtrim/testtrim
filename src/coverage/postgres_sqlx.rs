@@ -9,11 +9,11 @@ use sqlx::{
     postgres::{types::PgInterval, PgPoolOptions},
     Executor, Pool, Postgres, Transaction,
 };
-use std::{collections::HashMap, marker::PhantomData, path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
-use crate::platform::TestIdentifier;
+use crate::platform::{TestIdentifier, TestPlatform};
 
 use super::{
     commit_coverage_data::{
@@ -24,11 +24,9 @@ use super::{
     CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, ResultWithContext, Tag,
 };
 
-pub struct PostgresCoverageDatabase<TI: TestIdentifier, CI: CoverageIdentifier> {
+pub struct PostgresCoverageDatabase {
     database_url: String,
     connection: OnceCell<Pool<Postgres>>,
-    test_identifier_type: PhantomData<TI>,
-    coverage_identifier_type: PhantomData<CI>,
 }
 
 impl From<sqlx::Error> for CoverageDatabaseError {
@@ -64,17 +62,11 @@ impl From<sqlx::migrate::MigrateError> for CoverageDatabaseDetailedError {
 type TestCaseToIdMap<'a, TI> = HashMap<&'a TI, Uuid>;
 type IdToTestCaseMap<'a, TI> = HashMap<Uuid, &'a TI>;
 
-impl<TI, CI> PostgresCoverageDatabase<TI, CI>
-where
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
-{
-    pub fn new(database_url: String) -> PostgresCoverageDatabase<TI, CI> {
+impl PostgresCoverageDatabase {
+    pub fn new(database_url: String) -> PostgresCoverageDatabase {
         PostgresCoverageDatabase {
             database_url,
             connection: OnceCell::new(),
-            test_identifier_type: PhantomData,
-            coverage_identifier_type: PhantomData,
         }
     }
 
@@ -193,11 +185,14 @@ where
         .id)
     }
 
-    async fn load_relevant_test_case_ids<'a>(
+    async fn load_relevant_test_case_ids<'a, TI, CI>(
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
         coverage_data: &'a CommitCoverageData<TI, CI>,
     ) -> Result<(TestCaseToIdMap<'a, TI>, IdToTestCaseMap<'a, TI>), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier + DeserializeOwned,
+        CI: CoverageIdentifier + DeserializeOwned,
     {
         let mut test_case_to_test_case_id_map = HashMap::new();
         let mut test_case_id_to_test_case_map = HashMap::new();
@@ -225,13 +220,17 @@ where
         Ok((test_case_to_test_case_id_map, test_case_id_to_test_case_map))
     }
 
-    async fn insert_missing_test_cases<'a>(
+    async fn insert_missing_test_cases<'a, TI, CI>(
         tx: &mut Transaction<'static, Postgres>,
         project_id: &Uuid,
         test_case_to_test_case_id_map: &mut HashMap<&'a TI, Uuid>,
         test_case_id_to_test_case_map: &mut HashMap<Uuid, &'a TI>,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let mut test_case_id_vec = vec![];
         let mut test_case_identifiers_vec = vec![];
         for tc in coverage_data.existing_test_set() {
@@ -264,12 +263,16 @@ where
         Ok(())
     }
 
-    async fn insert_commit_test_cases<'a>(
+    async fn insert_commit_test_cases<'a, TI, CI>(
         tx: &mut Transaction<'static, Postgres>,
         scm_commit_id: &Uuid,
         test_case_to_test_case_id_map: &HashMap<&'a TI, Uuid>,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         // Batch insert into commit_test_case...
         let mut test_case_id_vec = vec![];
         for tc in coverage_data.existing_test_set() {
@@ -297,12 +300,16 @@ where
         Ok(())
     }
 
-    async fn save_normalized_coverage_data<'a>(
+    async fn save_normalized_coverage_data<'a, TI, CI>(
         tx: &mut Transaction<'static, Postgres>,
         scm_commit_id: &Uuid,
         test_case_to_test_case_id_map: &HashMap<&'a TI, Uuid>,
         coverage_data: &'a CommitCoverageData<TI, CI>,
-    ) -> Result<HashMap<&'a TI, Uuid>, CoverageDatabaseDetailedError> {
+    ) -> Result<HashMap<&'a TI, Uuid>, CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let mut test_case_to_test_case_execution_id_map = HashMap::new();
 
         let mut insert_test_case_execution_id_vec = vec![];
@@ -437,12 +444,15 @@ where
         Ok(test_case_to_test_case_execution_id_map)
     }
 
-    async fn save_denormalized_coverage_data(
+    async fn save_denormalized_coverage_data<TI>(
         tx: &mut Transaction<'static, Postgres>,
         scm_commit_id: &Uuid,
         test_case_to_test_case_execution_id_map: &HashMap<&TI, Uuid>,
         ancestor_scm_commit_id: Option<Uuid>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+    {
         let coverage_map_id = sqlx::query!(
             r"
             INSERT INTO coverage_map (id, scm_commit_id)
@@ -522,12 +532,16 @@ where
         Ok(())
     }
 
-    async fn save_denormalized_file_references(
+    async fn save_denormalized_file_references<TI, CI>(
         tx: &mut Transaction<'static, Postgres>,
         scm_commit_id: &Uuid,
         coverage_data: &CommitCoverageData<TI, CI>,
         ancestor_scm_commit_id: Option<Uuid>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let mut referencing_filepath_vec = vec![];
         let mut target_filepath_vec = vec![];
         let mut exclude_ancestor_referencing_files = vec![];
@@ -622,12 +636,16 @@ where
         Ok(())
     }
 
-    async fn read_coverage_test_cases(
+    async fn read_coverage_test_cases<TI, CI>(
         pool: &Pool<Postgres>,
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &mut HashMap<Uuid, TI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier + DeserializeOwned,
+        CI: CoverageIdentifier,
+    {
         let all_test_cases = sqlx::query!(
             r"
             SELECT
@@ -655,12 +673,16 @@ where
         Ok(())
     }
 
-    async fn read_file_coverage_data(
+    async fn read_file_coverage_data<TI, CI>(
         pool: &Pool<Postgres>,
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &HashMap<Uuid, TI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let all_files_by_test_case = sqlx::query!(
             r"
             SELECT
@@ -695,12 +717,16 @@ where
         Ok(())
     }
 
-    async fn read_function_coverage_data(
+    async fn read_function_coverage_data<TI, CI>(
         pool: &Pool<Postgres>,
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &HashMap<Uuid, TI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let all_functions_by_test_case = sqlx::query!(
             r"
             SELECT
@@ -735,12 +761,16 @@ where
         Ok(())
     }
 
-    async fn read_coverage_identifier_data(
+    async fn read_coverage_identifier_data<TI, CI>(
         pool: &Pool<Postgres>,
         coverage_map_id: &Uuid,
         coverage_data: &mut FullCoverageData<TI, CI>,
         test_case_id_to_test_identifier_map: &HashMap<Uuid, TI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let all_cis_by_test_case = sqlx::query!(
             r"
             SELECT
@@ -770,12 +800,16 @@ where
         Ok(())
     }
 
-    async fn read_referenced_file_data(
+    async fn read_referenced_file_data<TI, CI>(
         pool: &Pool<Postgres>,
         project_id: &Uuid,
         commit_identifier: &str,
         coverage_data: &mut FullCoverageData<TI, CI>,
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TI: TestIdentifier,
+        CI: CoverageIdentifier,
+    {
         let all_referenced_files = sqlx::query!(
             r"
             SELECT
@@ -803,19 +837,20 @@ where
     }
 }
 
-impl<TI, CI> CoverageDatabase<TI, CI> for PostgresCoverageDatabase<TI, CI>
-where
-    TI: TestIdentifier + Serialize + DeserializeOwned,
-    CI: CoverageIdentifier + Serialize + DeserializeOwned,
-{
-    async fn save_coverage_data(
+impl CoverageDatabase for PostgresCoverageDatabase {
+    async fn save_coverage_data<TP>(
         &self,
         project_name: &str,
-        coverage_data: &CommitCoverageData<TI, CI>,
+        coverage_data: &CommitCoverageData<TP::TI, TP::CI>,
         commit_identifier: &str,
         ancestor_commit_identifier: Option<&str>,
         tags: &[Tag],
-    ) -> Result<(), CoverageDatabaseDetailedError> {
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
         let tx = self.get_pool().await?;
         let mut tx = tx.begin().await?;
 
@@ -886,12 +921,17 @@ where
         Ok(())
     }
 
-    async fn read_coverage_data(
+    async fn read_coverage_data<TP>(
         &self,
         project_name: &str,
         commit_identifier: &str,
         tags: &[Tag],
-    ) -> Result<Option<FullCoverageData<TI, CI>>, CoverageDatabaseDetailedError> {
+    ) -> Result<Option<FullCoverageData<TP::TI, TP::CI>>, CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
         let pool = self.get_pool().await?;
 
         let project_id = Self::upsert_project(pool, project_name).await?;
@@ -968,11 +1008,13 @@ where
         Ok(Some(coverage_data))
     }
 
-    async fn has_any_coverage_data(
+    async fn has_any_coverage_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<bool, CoverageDatabaseDetailedError> {
         let pool = self.get_pool().await?;
+
+        // FIXME: theoretically should filter to just the data from TestPlatform
 
         let project_id = Self::upsert_project(pool, project_name).await?;
         let coverage_map_id = sqlx::query!(
@@ -994,11 +1036,12 @@ where
         Ok(coverage_map_id.is_some())
     }
 
-    async fn clear_project_data(
+    async fn clear_project_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<(), CoverageDatabaseDetailedError> {
         let pool = self.get_pool().await?;
+        // FIXME: theoretically should filter to just the data from TestPlatform
         sqlx::query!("DELETE FROM project WHERE name = $1", project_name)
             .execute(pool)
             .await
@@ -1046,7 +1089,7 @@ mod tests {
             commit_coverage_data::CommitCoverageData, db_tests,
             postgres_sqlx::PostgresCoverageDatabase, CoverageDatabase,
         },
-        platform::rust::{RustCoverageIdentifier, RustTestIdentifier},
+        platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
     };
 
     lazy_static! {
@@ -1055,7 +1098,7 @@ mod tests {
         // cargo-nexttest.
         static ref DB_MUTEX: NamedLock = NamedLock::create("testtrim-postgres_sqlx-tests").unwrap();
     }
-    fn create_test_db() -> PostgresCoverageDatabase<RustTestIdentifier, RustCoverageIdentifier> {
+    fn create_test_db() -> PostgresCoverageDatabase {
         let test_db_url = env::var("TESTTRIM_UNITTEST_PGSQL_URL")
             .or(env::var("TESTTRIM_DATABASE_URL"))
             .expect("TESTTRIM_UNITTEST_PGSQL_URL or TESTTRIM_DATABASE_URL must be set for postgres_sqlx tests");
@@ -1107,7 +1150,7 @@ mod tests {
         let _db_mutex = DB_MUTEX.lock();
         cleanup().await;
 
-        let ts_fetcher = async |db: &mut PostgresCoverageDatabase<_, _>| {
+        let ts_fetcher = async |db: &mut PostgresCoverageDatabase| {
             let pool = db.get_pool().await.unwrap();
 
             let coverage_map = sqlx::query!(
@@ -1137,15 +1180,17 @@ mod tests {
 
         let mut db = create_test_db();
 
-        let saved_data = CommitCoverageData::new();
+        let saved_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &saved_data, "c1", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "c1", None, &[])
             .await;
         assert!(result.is_ok());
 
         let first_timestamp = ts_fetcher(&mut db).await;
 
-        let result = db.read_coverage_data("testtrim-tests", "c1", &[]).await;
+        let result = db
+            .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[])
+            .await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.is_some());
@@ -1166,19 +1211,19 @@ mod tests {
 
         let mut db = create_test_db();
 
-        let saved_data = CommitCoverageData::new();
+        let saved_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &saved_data, "d1", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "d1", None, &[])
             .await;
         assert!(result.is_ok());
 
-        let saved_data = CommitCoverageData::new();
+        let saved_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
         let result = db
-            .save_coverage_data("testtrim-tests", &saved_data, "d2", None, &[])
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "d2", None, &[])
             .await;
         assert!(result.is_ok());
 
-        let check_data = async |db: &mut PostgresCoverageDatabase<_, _>| {
+        let check_data = async |db: &mut PostgresCoverageDatabase| {
             let pool = db.get_pool().await.unwrap();
             sqlx::query!(r#"SELECT coverage_map.* FROM coverage_map INNER JOIN scm_commit ON (scm_commit.id = coverage_map.scm_commit_id) WHERE scm_commit.scm_identifier IN ('"d1"', '"d2"')"#)
             .fetch_all(pool)
@@ -1187,7 +1232,7 @@ mod tests {
         let data = check_data(&mut db).await?;
         assert_eq!(data.len(), 2);
 
-        let do_tweak = async |db: &mut PostgresCoverageDatabase<_, _>| {
+        let do_tweak = async |db: &mut PostgresCoverageDatabase| {
             let pool = db.get_pool().await.unwrap();
             sqlx::query!(
                 r"

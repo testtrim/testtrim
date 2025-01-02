@@ -108,7 +108,7 @@ where
             source_mode,
             jobs,
             &tags,
-            &create_db_infallible::<TP>(),
+            &create_db_infallible(),
         )
         .await
         {
@@ -192,7 +192,7 @@ pub async fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     source_mode: SourceMode,
     jobs: u16,
     tags: &[Tag],
-    coverage_db: &impl CoverageDatabase<TI, CI>,
+    coverage_db: &impl CoverageDatabase,
 ) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>
 where
     Commit: ScmCommit,
@@ -265,7 +265,7 @@ where
 
         async move {
             coverage_db
-                .save_coverage_data(
+                .save_coverage_data::<TP>(
                     &TP::project_name()?,
                     &coverage_data,
                     &commit_identifier,

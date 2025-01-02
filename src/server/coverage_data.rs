@@ -36,19 +36,19 @@ pub trait InstallCoverageDataHandlers {
         Self: Sized;
     fn coverage_data_handlers_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+        factory: web::Data<CoverageDatabaseDispatch>,
     ) -> Self;
 }
 
 impl InstallCoverageDataHandlers for Scope {
     fn coverage_data_handlers<TP: TestPlatform + 'static>(self) -> Result<Self> {
-        let coverage_db = create_db::<TP>()?;
+        let coverage_db = create_db()?;
         Ok(self.coverage_data_handlers_with_db_factory::<TP>(web::Data::new(coverage_db)))
     }
 
     fn coverage_data_handlers_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+        factory: web::Data<CoverageDatabaseDispatch>,
     ) -> Self {
         let size_64_mb = 1 << 26;
         self.app_data(factory)
@@ -95,20 +95,22 @@ impl ResponseError for GetCoverageDataError {
 
 async fn get_any_coverage_data<TP: TestPlatform>(
     path: web::Path<String>,
-    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, GetCoverageDataError> {
     let project_name = path.into_inner();
     debug!("get_any_coverage_data received: {:?}", project_name);
 
     Ok(HttpResponse::Ok().json(serde_json::to_value(
-        coverage_db.has_any_coverage_data(&project_name).await?,
+        coverage_db
+            .has_any_coverage_data::<TP>(&project_name)
+            .await?,
     )?))
 }
 
 async fn get_coverage_data<TP: TestPlatform>(
     path: web::Path<(String, String)>,
     tags: web::Query<HashMap<String, String>>,
-    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, GetCoverageDataError> {
     let (project_name, commit_identifier) = path.into_inner();
     let tags = tags.into_inner();
@@ -126,7 +128,7 @@ async fn get_coverage_data<TP: TestPlatform>(
 
     Ok(HttpResponse::Ok().json(
         coverage_db
-            .read_coverage_data(&project_name, &commit_identifier, &tags)
+            .read_coverage_data::<TP>(&project_name, &commit_identifier, &tags)
             .await?,
     ))
 }
@@ -175,7 +177,7 @@ impl ResponseError for PostCoverageDataError {
 async fn post_coverage_data<TP: TestPlatform>(
     path: web::Path<(String, String)>,
     req: web::Json<PostCoverageDataRequest<TP::TI, TP::CI>>,
-    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, PostCoverageDataError> {
     let (project_name, commit_identifier) = path.into_inner();
     debug!("post_coverage_data received: {:?}", req);
@@ -226,7 +228,7 @@ async fn post_coverage_data<TP: TestPlatform>(
     }
 
     coverage_db
-        .save_coverage_data(
+        .save_coverage_data::<TP>(
             &project_name,
             &commit_coverage_data,
             &commit_identifier,
@@ -264,13 +266,13 @@ impl ResponseError for DeleteCoverageDataError {
 
 async fn delete_coverage_data<TP: TestPlatform>(
     path: web::Path<String>,
-    coverage_db: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+    coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, DeleteCoverageDataError> {
     let project_name = path.into_inner();
     debug!("delete_coverage_data received: {:?}", project_name);
 
     debug!("web: starting clear_project_data({})", project_name);
-    coverage_db.clear_project_data(&project_name).await?;
+    coverage_db.clear_project_data::<TP>(&project_name).await?;
     debug!("web: completed clear_project_data({})", project_name);
 
     Ok(HttpResponse::Ok().json(None::<String>))
@@ -332,7 +334,7 @@ mod tests {
     #[actix_web::test]
     async fn test_get_coverage_rust() -> Result<()> {
         let test_project = String::from("testtrim-tests-2");
-        let coverage_db = create_test_db::<RustTestPlatform>()?;
+        let coverage_db = create_test_db()?;
 
         let mut saved_data =
             CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
@@ -347,7 +349,7 @@ mod tests {
             coverage_identifier: rust_coverage_identifier.clone(),
         });
         coverage_db
-            .save_coverage_data(
+            .save_coverage_data::<RustTestPlatform>(
                 &test_project,
                 &saved_data,
                 "test-123-correct-identifier",
@@ -403,7 +405,7 @@ mod tests {
     #[actix_web::test]
     async fn test_get_coverage_dotnet() -> Result<()> {
         let test_project = String::from("testtrim-tests-3");
-        let coverage_db = create_test_db::<DotnetTestPlatform>()?;
+        let coverage_db = create_test_db()?;
 
         let mut saved_data =
             CommitCoverageData::<DotnetTestIdentifier, DotnetCoverageIdentifier>::new();
@@ -418,7 +420,7 @@ mod tests {
             coverage_identifier: dotnet_coverage_identifier.clone(),
         });
         coverage_db
-            .save_coverage_data(
+            .save_coverage_data::<DotnetTestPlatform>(
                 &test_project,
                 &saved_data,
                 "test-456-correct-identifier",

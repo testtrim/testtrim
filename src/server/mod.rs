@@ -35,7 +35,7 @@ pub trait InstallTestPlatform {
     #[allow(dead_code)] // used in tests only
     fn platform_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+        factory: web::Data<CoverageDatabaseDispatch>,
     ) -> Self;
 }
 
@@ -51,7 +51,7 @@ where
     }
     fn platform_with_db_factory<TP: TestPlatform + 'static>(
         self,
-        factory: web::Data<CoverageDatabaseDispatch<TP::TI, TP::CI>>,
+        factory: web::Data<CoverageDatabaseDispatch>,
     ) -> Self {
         self.service(
             web::scope("/coverage-data").coverage_data_handlers_with_db_factory::<TP>(factory),
@@ -100,19 +100,12 @@ async fn intermittent_cleanup() {
 
     loop {
         interval.tick().await;
-
-        // FIXME: intermittent_clean doesn't do any platform-specific logic, even though CoverageDatabase is generic
-        // over the test platform's TI & CI.  So we just do this once because it will cleanup everything.  Probably the
-        // CoverageDatabase trait should be tweaked -- none of the state of the databases is tied to the types, so it
-        // would make more sense for the functions to be generic and the trait & struct to not be.
-        intermittent_cleanup_for_platform::<RustTestPlatform>(&remove_older_than).await;
-        // intermittent_cleanup_for_platform::<DotnetTestPlatform>().await;
-        // intermittent_cleanup_for_platform::<GolangTestPlatform>().await;
+        do_intermittent_cleanup(&remove_older_than).await;
     }
 }
 
-async fn intermittent_cleanup_for_platform<TP: TestPlatform>(remove_older_than: &Duration) {
-    match create_db::<TP>() {
+async fn do_intermittent_cleanup(remove_older_than: &Duration) {
+    match create_db() {
         Ok(db) => {
             info!("Performing intermittent cleanup");
             if let Err(e) = db.intermittent_clean(remove_older_than).await {
