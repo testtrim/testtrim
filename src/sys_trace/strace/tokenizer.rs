@@ -144,22 +144,33 @@ pub fn tokenize(input: &str) -> Result<TokenizerOutput<'_>> {
 }
 
 fn internal_tokenize(input: &str) -> IResult<&str, TokenizerOutput<'_>> {
+    println!("internal_tokenize: {input:?}");
     alt((
         map(parse_syscall, TokenizerOutput::Syscall),
         map(parse_proc_exit, TokenizerOutput::Exit),
+        map(parse_proc_killed, TokenizerOutput::Exit),
         map(parse_signal, TokenizerOutput::Signal),
     ))
     .parse(input)
 }
 
 fn parse_proc_exit(input: &str) -> IResult<&str, ProcessExit<'_>> {
+    println!("parse_proc_exit: {input:?}");
     let (input, _) = tag("+++ exited with ")(input)?;
     let (input, exit_code) = digit1(input)?;
     let (input, _) = tag(" +++")(input)?;
     Ok((input, ProcessExit { exit_code }))
 }
 
+fn parse_proc_killed(input: &str) -> IResult<&str, ProcessExit<'_>> {
+    println!("parse_proc_killed: {input:?}");
+    let (input, _) = tag("+++ killed by SIGKILL +++")(input)?;
+    println!("parse_proc_killed tag passed");
+    Ok((input, ProcessExit { exit_code: "-1" }))
+}
+
 fn parse_signal(input: &str) -> IResult<&str, SignalRecv<'_>> {
+    println!("parse_signal: {input:?}");
     let (input, _) = tag("---")(input)?;
     let (input, _) = consume_whitespace(input)?;
     let (input, signal) = take_while1(|c: char| c.is_ascii_uppercase())(input)?;
@@ -623,9 +634,9 @@ mod tests {
     use anyhow::Result;
 
     use crate::sys_trace::strace::tokenizer::{
-        extract_encoded_string, nested_braces, parse_encoded_string, parse_signal, tokenize,
-        tokenize_syscall, Argument, CallOutcome, EncodedString, ProcessExit, Retval, SignalRecv,
-        SyscallSegment, TokenizerOutput,
+        extract_encoded_string, nested_braces, parse_encoded_string, parse_proc_killed,
+        parse_signal, tokenize, tokenize_syscall, Argument, CallOutcome, EncodedString,
+        ProcessExit, Retval, SignalRecv, SyscallSegment, TokenizerOutput,
     };
 
     use super::{
@@ -1229,6 +1240,14 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_proc_killed() -> Result<()> {
+        let (rem, exit) = parse_proc_killed("+++ killed by SIGKILL +++")?;
+        assert_eq!(rem, "");
+        assert_eq!(exit, ProcessExit { exit_code: "-1" });
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_signal() -> Result<()> {
         let (rem, exit) = parse_signal("--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---")?;
         assert_eq!(rem, "");
@@ -1240,6 +1259,9 @@ mod tests {
     fn test_parse_all_results() -> Result<()> {
         let res = tokenize("+++ exited with 0 +++")?;
         assert_eq!(res, TokenizerOutput::Exit(ProcessExit { exit_code: "0" }));
+        let res = tokenize("+++ killed by SIGKILL +++")?;
+        assert_eq!(res, TokenizerOutput::Exit(ProcessExit { exit_code: "-1" }));
+
         let res = tokenize(r"close(3)                        = 0")?;
         assert_eq!(
             res,
