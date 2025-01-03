@@ -147,7 +147,6 @@ pub fn tokenize(input: &str) -> Result<TokenizerOutput<'_>> {
 }
 
 fn internal_tokenize(input: &str) -> IResult<&str, TokenizerOutput<'_>> {
-    println!("internal_tokenize: {input:?}");
     alt((
         map(parse_syscall, TokenizerOutput::Syscall),
         map(parse_proc_exit, TokenizerOutput::Exit),
@@ -158,7 +157,6 @@ fn internal_tokenize(input: &str) -> IResult<&str, TokenizerOutput<'_>> {
 }
 
 fn parse_proc_exit(input: &str) -> IResult<&str, ProcessExit<'_>> {
-    println!("parse_proc_exit: {input:?}");
     let (input, _) = tag("+++ exited with ")(input)?;
     let (input, exit_code) = digit1(input)?;
     let (input, _) = tag(" +++")(input)?;
@@ -166,14 +164,11 @@ fn parse_proc_exit(input: &str) -> IResult<&str, ProcessExit<'_>> {
 }
 
 fn parse_proc_killed(input: &str) -> IResult<&str, ProcessExit<'_>> {
-    println!("parse_proc_killed: {input:?}");
     let (input, _) = tag("+++ killed by SIGKILL +++")(input)?;
-    println!("parse_proc_killed tag passed");
     Ok((input, ProcessExit { exit_code: "-1" }))
 }
 
 fn parse_signal(input: &str) -> IResult<&str, SignalRecv<'_>> {
-    println!("parse_signal: {input:?}");
     let (input, _) = tag("---")(input)?;
     let (input, _) = consume_whitespace(input)?;
     let (input, signal) = take_while1(|c: char| c.is_ascii_uppercase())(input)?;
