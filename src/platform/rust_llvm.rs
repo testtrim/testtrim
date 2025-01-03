@@ -114,7 +114,6 @@ impl CoverageLibrary {
     pub fn search_metadata(
         &self,
         point: &InstrumentationPoint,
-        debug_output: bool,
     ) -> Result<Option<InstrumentationPointMetadata>> {
         let (Some(name_hash), Some(fn_hash)) = (point.rec.name_hash, point.rec.hash) else {
             // Function point didn't have a hash; this comes pretty straight from the llvm parser so I don't think
@@ -133,9 +132,6 @@ impl CoverageLibrary {
             .get(&coverage_locator)
             // coverage point found in profiling data was not found in binary's coverage map
             .ok_or(RustLlvmError::CoverageMismatch)?;
-        if debug_output {
-            println!("filenames_ref: {filenames_ref:?}");
-        }
 
         let object_file = self
             .object_files

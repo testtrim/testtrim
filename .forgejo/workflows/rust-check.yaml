@@ -46,6 +46,15 @@ jobs:
       # understand. So we replace github.com in the access-token field of the nix.conf file.
       - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
 
+      - name: verify clippy warning-free
+        run: nix develop .# --command cargo clippy -- -D warnings
+      - name: verify clippy on tests warning-free
+        run: nix develop .# --command cargo clippy --tests -- -D warnings
+      - name: verify rust format correct
+        run: nix develop .# --command cargo fmt --all -- --check
+      - name: copyright checks
+        run: nix develop .# --command reuse lint
+
       - name: .sqlx verify clean & correct
         env:
           DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
@@ -87,12 +96,3 @@ jobs:
           TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
         run: nix develop .# --command cargo nextest run
-
-      - name: verify clippy warning-free
-        run: nix develop .# --command cargo clippy -- -D warnings
-      - name: verify clippy on tests warning-free
-        run: nix develop .# --command cargo clippy --tests -- -D warnings
-      - name: verify rust format correct
-        run: nix develop .# --command cargo fmt --all -- --check
-      - name: copyright checks
-        run: nix develop .# --command reuse lint

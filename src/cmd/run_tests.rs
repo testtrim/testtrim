@@ -82,6 +82,7 @@ pub async fn cli(
     }
 }
 
+#[allow(clippy::print_stdout)]
 async fn specific_cli<TI, CI, TD, CTI, TP>(
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,

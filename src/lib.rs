@@ -12,6 +12,8 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::items_after_statements)] // maybe should warn on it, but currently use this pattern and like it
 #![allow(clippy::too_many_lines)] // probably the right thing to warn on, but somewhat arbitrary
+#![warn(clippy::print_stderr)]
+#![warn(clippy::print_stdout)]
 
 pub mod cmd;
 pub mod coverage;
@@ -26,3 +28,5 @@ mod server;
 mod sys_trace;
 pub mod timing_tracer;
 mod util;
+
+// allow-print-in-tests

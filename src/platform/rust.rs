@@ -399,7 +399,7 @@ impl RustTestPlatform {
                 .context("new_from_profraw_reader")?;
 
         for point in profiling_data.get_hit_instrumentation_points() {
-            if let Ok(Some(metadata)) = coverage_library.search_metadata(&point, false) {
+            if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
                 let file = metadata.file_path;
                 if file.is_relative() {
                     coverage_data.add_file_to_test(FileCoverage {

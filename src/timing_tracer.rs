@@ -113,6 +113,7 @@ impl PerformanceStorage {
         accumulated_time
     }
 
+    #[allow(clippy::print_stdout)]
     pub fn print(&self) {
         let accumulated_time = self.aggregate_cumulative_time();
         for (trace, duration) in &accumulated_time {
