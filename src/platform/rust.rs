@@ -797,6 +797,26 @@ impl TestPlatform for RustTestPlatform {
 
         Ok(())
     }
+
+    fn get_function_hashes() {
+        // FIXME: this could be something we tie into TestDiscovery -- which maybe becomes "project introspection"?
+        experimental_get_function_hashes_1().unwrap();
+    }
+}
+
+fn experimental_get_function_hashes_1() -> Result<()> {
+    let test_binaries = RustTestPlatform::find_test_binaries()?;
+    info!("test_binaries: {:?}", test_binaries);
+
+    crate::platform::rust_llvm::experimental_get_function_hashes_2(&test_binaries.into_iter().map(|b| b.executable_path).collect())?;
+    // let coverage_library = CoverageLibrary::new();
+    // trace!(
+    //     "binary {:?}; loading instrumentation data...",
+    //     test_case.test_binary
+    // );
+    // (*lock).load_binary(&test_case.test_binary.executable_path)?;
+
+    Ok(())
 }
 
 lazy_static! {

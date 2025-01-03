@@ -118,4 +118,6 @@ pub trait TestPlatform {
         changed_files: &HashSet<PathBuf>,
         coverage_data: &mut CommitCoverageData<Self::TI, Self::CI>,
     ) -> Result<()>;
+
+    fn get_function_hashes();
 }

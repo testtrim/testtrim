@@ -194,6 +194,8 @@ where
     let test_discovery = TP::discover_tests()?;
     let all_test_cases = test_discovery.all_test_cases();
 
+    TP::get_function_hashes();
+
     if mode == GetTestIdentifierMode::All {
         return Ok(TargetTestCases {
             all_test_cases: all_test_cases.clone(),

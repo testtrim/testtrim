@@ -9,9 +9,7 @@ use llvm_profparser::{
     CoverageMappingInfo,
 };
 use std::{
-    collections::HashMap,
-    io::Read,
-    path::{Path, PathBuf},
+    collections::{HashMap, HashSet}, fs::File, hash::{DefaultHasher, Hash, Hasher}, io::{BufRead as _, BufReader, Read}, path::{Path, PathBuf}
 };
 
 use crate::errors::RustLlvmError;
@@ -211,6 +209,154 @@ pub struct InstrumentationPointMetadata {
     pub file_path: PathBuf,
     pub function_name: String,
 }
+
+pub fn experimental_get_function_hashes_2(test_binaries: &HashSet<PathBuf>) -> Result<()> {
+    // let test_binaries = RustTestPlatform::find_test_binaries()?;
+    // info!("test_binaries: {:?}", test_binaries);
+
+    // let coverage_library = CoverageLibrary::new();
+    // trace!(
+    //     "binary {:?}; loading instrumentation data...",
+    //     test_case.test_binary
+    // );
+    // (*lock).load_binary(&test_case.test_binary.executable_path)?;
+
+    for binary in test_binaries {
+        // FIXME: is the version 10 provided here... meaningful?  I guessed a random number and it worked.
+        let object_file = read_object_file(binary, 10)?;
+
+        for c in &object_file.cov_fun {
+            // println!("c: {c:?}");
+            if c.header.name_hash != 2494788893327102158 {
+                continue;
+            }
+
+            let mut file_id: Option<usize> = None;
+            for region in &c.regions {
+                if let Some(existing_file_id) = file_id
+                    && existing_file_id != region.file_id
+                {
+                    panic!("llvm coverage region had multiple file_ids for a single function -- this isn't currently supported");
+                } else {
+                    file_id = Some(region.file_id);
+                }
+            }
+            let Some(file_id) = file_id else {
+                // A function with no regions?  Let's crash for now because that seems suspiciously wrong and I want to
+                // bring attention to it to understand it, if it happens.
+                panic!("llvm coverage region file_id could not be identified -- this suggests no regions in this function?");
+            };
+
+            match object_file.cov_map.get(&c.header.filenames_ref) {
+                Some(filenames) => {
+
+                    match filenames.get(file_id) {
+                        Some(filename) => {
+                            if filename.starts_with("/home") {
+                                continue;
+                            }
+                            println!("filename: {filename:?}");
+                            println!("c.header.name_hash = {}", c.header.name_hash);
+                            println!("c.header = {:?}", c.header);
+
+                            let mut hasher = DefaultHasher::new();
+                            hasher.write_usize(c.regions.len());
+
+                            for region in &c.regions {
+                                println!("region: {region:?}");
+                                let loc = &region.loc;
+
+                                let file = File::open(&filename)?;
+                                let lines = BufReader::new(file).lines();
+                                let lines = lines.map(|l| l.unwrap()).collect::<Vec<String>>();
+
+                                let mut code = String::with_capacity(512);
+
+                                let start = &lines[loc.line_start-1]; // 1-based -> 0-based
+                                println!("start: {:?}", start);
+                                println!("start: {:?}", &start[(loc.column_start-1)..]);
+                                code.push_str(&start[(loc.column_start-1)..]);
+                                for line_num in (loc.line_start+1)..loc.line_end {
+                                    println!("line: {:?}", &lines[line_num-1]); // 1-based -> 0-based
+                                    code.push_str(&lines[line_num-1]); // 1-based -> 0-based
+                                }
+                                let end = &lines[loc.line_end-1]; // 1-based -> 0-based
+                                println!("end: {:?} ({})", end, loc.column_end);
+                                println!("end: {:?}", &end[..(loc.column_end-1)]);
+                                code.push_str(&end[..(loc.column_end-1)]);
+
+                                code.hash(&mut hasher);
+                                println!("code: {code:?}");
+                            }
+
+                            let hash = hasher.finish();
+                            println!("hash: {hash:?}");
+
+
+                        }
+                        None => {
+                            println!("filename not found at {file_id:?}");
+                        },
+                    }
+
+                },
+                None => {
+                    println!("cov_map not found at {:?}", c.header.filenames_ref);
+
+                }
+            }
+
+
+
+
+            // break
+        }
+        // panic!("continue");
+    }
+
+    panic!("stop");
+
+        // let mut object_file_lookup_map = HashMap::new();
+        // for c in &object_file.cov_fun {
+        //     // Every function has a variety of regions associated with it.  Those regions represent the branches in the
+        //     // function that can have separate instrumentation profiling data.  Each region has a `file_id`, which is
+        //     // going to be an index into an array of filenames for a translation unit, which in short, means that it's
+        //     // going to point to a specific file name.
+        //     //
+        //     // For our needs in Rust language profiling, and based upon the current project experience, all the regions
+        //     // within a function are expected to have the same file_id.  If there are cases that violate this, we'll
+        //     // have to come across them experimentally.
+        //     let mut file_id: Option<usize> = None;
+        //     for region in &c.regions {
+        //         if let Some(existing_file_id) = file_id
+        //             && existing_file_id != region.file_id
+        //         {
+        //             panic!("llvm coverage region had multiple file_ids for a single function -- this isn't currently supported");
+        //         } else {
+        //             file_id = Some(region.file_id);
+        //         }
+        //     }
+        //     let Some(file_id) = file_id else {
+        //         // A function with no regions?  Let's crash for now because that seems suspiciously wrong and I want to
+        //         // bring attention to it to understand it, if it happens.
+        //         panic!("llvm coverage region file_id could not be identified -- this suggests no regions in this function?");
+        //     };
+        //     let key = CoverageFunctionLocator {
+        //         name_hash: c.header.name_hash,
+        //         fn_hash: c.header.fn_hash,
+        //     };
+        //     let previous_value =
+        //         object_file_lookup_map.insert(key, FilenamesRef(c.header.filenames_ref, file_id));
+        //     assert!(previous_value.is_none()); // must never have duplicate/conflicting hashes
+        // }
+
+        // self.lookup_map
+        //     .insert(PathBuf::from(path), object_file_lookup_map);
+        // self.object_files.insert(PathBuf::from(path), object_file);
+
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {

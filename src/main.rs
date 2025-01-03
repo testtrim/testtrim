@@ -8,5 +8,6 @@ use testtrim::cmd::cli::run_cli;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    println!("woot");
     run_cli().await
 }

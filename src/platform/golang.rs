@@ -1316,6 +1316,10 @@ impl TestPlatform for GolangTestPlatform {
 
         Ok(())
     }
+
+    fn get_function_hashes() {
+        todo!()
+    }
 }
 
 #[cfg(test)]
