@@ -5,8 +5,8 @@
 use std::{fmt, ops::RangeInclusive, time::Duration};
 
 use serde::{
-    de::{self, Visitor},
     Deserializer, Serializer,
+    de::{self, Visitor},
 };
 
 pub fn duration_to_seconds<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>

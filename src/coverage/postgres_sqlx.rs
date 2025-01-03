@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use log::debug;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sqlx::{
-    postgres::{types::PgInterval, PgPoolOptions},
     Executor, Pool, Postgres, Transaction,
+    postgres::{PgPoolOptions, types::PgInterval},
 };
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 use tokio::sync::OnceCell;
@@ -16,12 +16,12 @@ use uuid::Uuid;
 use crate::platform::{TestIdentifier, TestPlatform};
 
 use super::{
+    CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, ResultWithContext, Tag,
     commit_coverage_data::{
         CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
     },
     full_coverage_data::FullCoverageData,
     tag::TagArray,
-    CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, ResultWithContext, Tag,
 };
 
 pub struct PostgresCoverageDatabase {
@@ -1086,8 +1086,8 @@ mod tests {
 
     use crate::{
         coverage::{
-            commit_coverage_data::CommitCoverageData, db_tests,
-            postgres_sqlx::PostgresCoverageDatabase, CoverageDatabase,
+            CoverageDatabase, commit_coverage_data::CommitCoverageData, db_tests,
+            postgres_sqlx::PostgresCoverageDatabase,
         },
         platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
     };

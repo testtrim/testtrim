@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use dashmap::DashSet;
 use lazy_static::lazy_static;
 use log::{trace, warn};
@@ -19,19 +19,19 @@ use std::{fmt, fs};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
 use tokio::process::Command;
-use tracing::{info_span, instrument, Instrument as _};
+use tracing::{Instrument as _, info_span, instrument};
 
+use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage};
 use crate::coverage::full_coverage_data::FullCoverageData;
-use crate::coverage::Tag;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
 use crate::network::NetworkDependency;
 
+use super::TestReason;
 use super::dotnet_cobertura::Coverage;
 use super::util::spawn_limited_concurrency;
-use super::TestReason;
 use super::{
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
     TestIdentifierCore, TestPlatform,
@@ -347,8 +347,7 @@ impl DotnetTestPlatform {
                     let current_source_file = Path::new(&cls.filename);
                     trace!(
                         "test hit file {} {} {current_source_file:?}; project_dir: {project_dir:?}",
-                        pkg.name,
-                        cls.name
+                        pkg.name, cls.name
                     );
 
                     // current_source_file should be an absolute path thanks to the DeterministicReport setting, but
@@ -724,10 +723,10 @@ impl TestPlatform for DotnetTestPlatform {
         }
 
         let concurrency = 1; /* if jobs == 0 {
-                                 num_cpus::get()
-                             } else {
-                                 jobs.into()
-                             }; */
+        num_cpus::get()
+        } else {
+        jobs.into()
+        }; */
         let results = spawn_limited_concurrency(concurrency, futures).await?;
 
         let mut failed_test_results = vec![];

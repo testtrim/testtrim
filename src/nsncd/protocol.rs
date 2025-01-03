@@ -36,7 +36,7 @@
 
 use std::net::IpAddr;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 

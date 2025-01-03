@@ -30,7 +30,9 @@ pub enum TestError {
         status: std::process::ExitStatus,
         stderr: String,
     },
-    #[error("test sub-command '{command:?}' had unparseable output; error: {error:?} output: {output:?})")]
+    #[error(
+        "test sub-command '{command:?}' had unparseable output; error: {error:?} output: {output:?})"
+    )]
     SubcommandOutputParseFailed {
         command: String,
         error: String,

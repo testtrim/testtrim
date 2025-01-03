@@ -209,21 +209,27 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .file_to_test_map()
-            .get(&PathBuf::from("file1.rs"))
-            .unwrap()
-            .contains(&test1));
-        assert!(coverage_data
-            .file_to_test_map()
-            .get(&PathBuf::from("file1.rs"))
-            .unwrap()
-            .contains(&test2));
-        assert!(coverage_data
-            .file_to_test_map()
-            .get(&PathBuf::from("file2.rs"))
-            .unwrap()
-            .contains(&test1));
+        assert!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file1.rs"))
+                .unwrap()
+                .contains(&test1)
+        );
+        assert!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file1.rs"))
+                .unwrap()
+                .contains(&test2)
+        );
+        assert!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file2.rs"))
+                .unwrap()
+                .contains(&test1)
+        );
     }
 
     #[test]
@@ -260,21 +266,27 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .function_to_test_map()
-            .get("func1")
-            .unwrap()
-            .contains(&test1));
-        assert!(coverage_data
-            .function_to_test_map()
-            .get("func1")
-            .unwrap()
-            .contains(&test2));
-        assert!(coverage_data
-            .function_to_test_map()
-            .get("func2")
-            .unwrap()
-            .contains(&test1));
+        assert!(
+            coverage_data
+                .function_to_test_map()
+                .get("func1")
+                .unwrap()
+                .contains(&test1)
+        );
+        assert!(
+            coverage_data
+                .function_to_test_map()
+                .get("func1")
+                .unwrap()
+                .contains(&test2)
+        );
+        assert!(
+            coverage_data
+                .function_to_test_map()
+                .get("func2")
+                .unwrap()
+                .contains(&test1)
+        );
     }
 
     #[test]
@@ -301,21 +313,27 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .coverage_identifier_to_test_map()
-            .get(&regex)
-            .unwrap()
-            .contains(&test1));
-        assert!(coverage_data
-            .coverage_identifier_to_test_map()
-            .get(&regex)
-            .unwrap()
-            .contains(&test2));
-        assert!(coverage_data
-            .coverage_identifier_to_test_map()
-            .get(&thiserror)
-            .unwrap()
-            .contains(&test1));
+        assert!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&regex)
+                .unwrap()
+                .contains(&test1)
+        );
+        assert!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&regex)
+                .unwrap()
+                .contains(&test2)
+        );
+        assert!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&thiserror)
+                .unwrap()
+                .contains(&test1)
+        );
     }
 
     #[test]
@@ -352,21 +370,27 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .file_referenced_by_files_map()
-            .get(&PathBuf::from("extra-data/abc-123.txt"))
-            .unwrap()
-            .contains(&PathBuf::from("src/two.rs")));
-        assert!(coverage_data
-            .file_referenced_by_files_map()
-            .get(&PathBuf::from("extra-data/abc-123.txt"))
-            .unwrap()
-            .contains(&PathBuf::from("src/one.rs")));
-        assert!(coverage_data
-            .file_referenced_by_files_map()
-            .get(&PathBuf::from("extra-data/abc-321.txt"))
-            .unwrap()
-            .contains(&PathBuf::from("src/two.rs")));
+        assert!(
+            coverage_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra-data/abc-123.txt"))
+                .unwrap()
+                .contains(&PathBuf::from("src/two.rs"))
+        );
+        assert!(
+            coverage_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra-data/abc-123.txt"))
+                .unwrap()
+                .contains(&PathBuf::from("src/one.rs"))
+        );
+        assert!(
+            coverage_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra-data/abc-321.txt"))
+                .unwrap()
+                .contains(&PathBuf::from("src/two.rs"))
+        );
     }
 
     #[test]
@@ -404,11 +428,13 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .file_to_test_map()
-            .get(&PathBuf::from("file1.rs"))
-            .unwrap()
-            .contains(&test1));
+        assert!(
+            coverage_data
+                .file_to_test_map()
+                .get(&PathBuf::from("file1.rs"))
+                .unwrap()
+                .contains(&test1)
+        );
         assert_eq!(coverage_data.coverage_identifier_to_test_map().len(), 1);
         assert_eq!(
             coverage_data
@@ -418,11 +444,13 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .coverage_identifier_to_test_map()
-            .get(&regex)
-            .unwrap()
-            .contains(&test1));
+        assert!(
+            coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&regex)
+                .unwrap()
+                .contains(&test1)
+        );
         assert_eq!(coverage_data.file_referenced_by_files_map().len(), 1);
         assert_eq!(
             coverage_data
@@ -432,11 +460,13 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .file_referenced_by_files_map()
-            .get(&PathBuf::from("extra-data/abc-123.txt"))
-            .unwrap()
-            .contains(&PathBuf::from("src/one.rs")));
+        assert!(
+            coverage_data
+                .file_referenced_by_files_map()
+                .get(&PathBuf::from("extra-data/abc-123.txt"))
+                .unwrap()
+                .contains(&PathBuf::from("src/one.rs"))
+        );
 
         Ok(())
     }

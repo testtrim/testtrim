@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument};
 use log::{debug, info, warn};
 use std::{
     collections::{HashMap, HashSet},
     env,
-    fs::{read_dir, File},
+    fs::{File, read_dir},
     io::{BufRead, BufReader},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::{Path, PathBuf},
@@ -20,8 +20,8 @@ use tokio::process::Command;
 use crate::{errors::SubcommandErrors, sys_trace::trace::SocketCaptureState};
 
 use super::{
-    trace::{DraftTrace, SocketCapture, SocketOperation, Trace, UnifiedSocketAddr},
     SysTraceCommand,
+    trace::{DraftTrace, SocketCapture, SocketOperation, Trace, UnifiedSocketAddr},
 };
 
 mod funcs;
@@ -201,13 +201,10 @@ impl STraceSysTraceCommand {
                     // that pid_socket_fd_captures could already contain the same pid & socket.  In that case this will
                     // be a reinitialization which should be fine; the expected case is we're just finished an
                     // incomplete or non-blocking connect.
-                    pid_socket_fd_captures.insert(
-                        socket_fd.to_owned(),
-                        SocketCapture {
-                            socket_addr: socket_addr.clone(),
-                            state: SocketCaptureState::Complete(Vec::new()),
-                        },
-                    );
+                    pid_socket_fd_captures.insert(socket_fd.to_owned(), SocketCapture {
+                        socket_addr: socket_addr.clone(),
+                        state: SocketCaptureState::Complete(Vec::new()),
+                    });
 
                     // FIXME: in the near future we could probably remove add_connect and just use the SocketCapture
                     // data that is fed over to the trace when the socket is closed to extract all the connections.
@@ -261,7 +258,9 @@ impl STraceSysTraceCommand {
                         if data.encoded.contains("\\x81\\x80") {
                             let data = data.take();
                             if data.len() > 4 && data[2] == 129 && data[3] == 128 {
-                                debug!("received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it");
+                                debug!(
+                                    "received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it"
+                                );
                                 let fake_capture = SocketCapture {
                                     socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(
                                         SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 53),

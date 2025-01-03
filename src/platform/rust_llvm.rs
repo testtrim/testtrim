@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 use llvm_profparser::{
+    CoverageMappingInfo,
     coverage_mapping::read_object_file,
     instrumentation_profile::types::{InstrumentationProfile, NamedInstrProfRecord},
-    CoverageMappingInfo,
 };
 use std::{
     collections::HashMap,
@@ -81,7 +81,9 @@ impl CoverageLibrary {
                 if let Some(existing_file_id) = file_id
                     && existing_file_id != region.file_id
                 {
-                    panic!("llvm coverage region had multiple file_ids for a single function -- this isn't currently supported");
+                    panic!(
+                        "llvm coverage region had multiple file_ids for a single function -- this isn't currently supported"
+                    );
                 } else {
                     file_id = Some(region.file_id);
                 }
@@ -89,7 +91,9 @@ impl CoverageLibrary {
             let Some(file_id) = file_id else {
                 // A function with no regions?  Let's crash for now because that seems suspiciously wrong and I want to
                 // bring attention to it to understand it, if it happens.
-                panic!("llvm coverage region file_id could not be identified -- this suggests no regions in this function?");
+                panic!(
+                    "llvm coverage region file_id could not be identified -- this suggests no regions in this function?"
+                );
             };
             let key = CoverageFunctionLocator {
                 name_hash: c.header.name_hash,

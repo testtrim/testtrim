@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context as _, Result};
-use gomod_rs::{parse_gomod, Directive};
+use anyhow::{Context as _, Result, anyhow};
+use gomod_rs::{Directive, parse_gomod};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
 use regex::{Captures, Regex};
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::env::{self, current_dir};
-use std::fs::{read_to_string, File};
+use std::fs::{File, read_to_string};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
@@ -20,13 +20,13 @@ use std::sync::Arc;
 use std::{fmt, fs, io};
 use tempdir::TempDir;
 use tokio::process::Command;
-use tracing::{info_span, instrument, Instrument as _};
+use tracing::{Instrument as _, info_span, instrument};
 
+use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, HeuristicCoverage,
 };
 use crate::coverage::full_coverage_data::FullCoverageData;
-use crate::coverage::Tag;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
@@ -34,7 +34,7 @@ use crate::network::NetworkDependency;
 use crate::platform::util::normalize_path;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::{ResolvedSocketAddr, Trace};
-use crate::sys_trace::{sys_trace_command, SysTraceCommand as _};
+use crate::sys_trace::{SysTraceCommand as _, sys_trace_command};
 
 use super::util::spawn_limited_concurrency;
 use super::{
@@ -541,7 +541,9 @@ impl GolangTestPlatform {
                     }
                     Ordering::Greater => {
                         // I think this should never happen; just curious to see if it does
-                        warn!("baseline_count {baseline_count} was greater than current count {current_count} for identity {identity:?}");
+                        warn!(
+                            "baseline_count {baseline_count} was greater than current count {current_count} for identity {identity:?}"
+                        );
                     }
                 }
             }
@@ -563,8 +565,7 @@ impl GolangTestPlatform {
                 }
                 trace!(
                     "test case {:?} touched file {}",
-                    test_case.test_identifier,
-                    relative_file
+                    test_case.test_identifier, relative_file
                 );
                 coverage_data.add_file_to_test(FileCoverage {
                     test_identifier: test_case.test_identifier.clone(),
@@ -589,8 +590,7 @@ impl GolangTestPlatform {
                     if let Some(dependency) = dependency {
                         trace!(
                             "test case {:?} touched file... {:?} -> {dependency:?}",
-                            test_case.test_identifier,
-                            line.module_and_file
+                            test_case.test_identifier, line.module_and_file
                         );
                         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
                             test_identifier: test_case.test_identifier.clone(),
@@ -602,7 +602,10 @@ impl GolangTestPlatform {
                             ),
                         });
                     } else {
-                        warn!("test touched file {:?} but could not identify what dependency this came from", line.module_and_file);
+                        warn!(
+                            "test touched file {:?} but could not identify what dependency this came from",
+                            line.module_and_file
+                        );
                     }
                 }
             }
@@ -636,7 +639,9 @@ impl GolangTestPlatform {
                     &repo_root.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
                     &repo_root,
                     |warning| {
-                        warn!("syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}");
+                        warn!(
+                            "syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}"
+                        );
                     },
                 );
                 debug!("target_path = {target_path:?}");
@@ -788,9 +793,7 @@ impl GolangTestPlatform {
                             } else {
                                 trace!(
                                     "go.mod package changed {:?}, old: {}, current: {}",
-                                    old_module_path,
-                                    old_version,
-                                    current_version
+                                    old_module_path, old_version, current_version
                                 );
                                 true
                             }
@@ -887,7 +890,9 @@ impl GolangTestPlatform {
                 }
             }
             if !any_match {
-                warn!("inferred that a test named {test_name} exists in file {file:?} but couldn't find it in test cases");
+                warn!(
+                    "inferred that a test named {test_name} exists in file {file:?} but couldn't find it in test cases"
+                );
             }
         }
 
@@ -1293,7 +1298,9 @@ impl TestPlatform for GolangTestPlatform {
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
                     let target_path = normalize_path(&target_path, file, &repo_root, |warning| {
-                        warn!("file {file:?} had a //go:embed, but reference could not be followed: {warning}");
+                        warn!(
+                            "file {file:?} had a //go:embed, but reference could not be followed: {warning}"
+                        );
                     });
 
                     if let Some(target_path) = target_path {

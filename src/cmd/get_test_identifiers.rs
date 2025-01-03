@@ -5,8 +5,8 @@
 use anyhow::Result;
 use current_platform::CURRENT_PLATFORM;
 use log::{debug, error, info, trace, warn};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -16,24 +16,24 @@ use std::{collections::HashSet, path::PathBuf};
 use tracing::instrument;
 use tracing::instrument::WithSubscriber;
 
-use crate::coverage::{create_db_infallible, Tag};
+use crate::coverage::{Tag, create_db_infallible};
 use crate::network::compute_tests_from_network_accesses;
 use crate::repo_config::get_repo_config;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use crate::{
     coverage::{
-        commit_coverage_data::CoverageIdentifier, full_coverage_data::FullCoverageData,
-        CoverageDatabase,
+        CoverageDatabase, commit_coverage_data::CoverageIdentifier,
+        full_coverage_data::FullCoverageData,
     },
     platform::{
-        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
         ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform, TestReason,
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
     },
-    scm::{git::GitScm, Scm, ScmCommit},
+    scm::{Scm, ScmCommit, git::GitScm},
 };
 
 use super::cli::{
-    autodetect_test_project_type, GetTestIdentifierMode, PlatformTaggingMode, TestProjectType,
+    GetTestIdentifierMode, PlatformTaggingMode, TestProjectType, autodetect_test_project_type,
 };
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
@@ -348,7 +348,10 @@ where
         trace!("checking parents; {} parents found", parents.len());
 
         if parents.is_empty() {
-            warn!("Commit {} had no parents; unable to identify a base set of test cases that has already been run.  All test cases will be run.", scm.get_commit_identifier(&commit));
+            warn!(
+                "Commit {} had no parents; unable to identify a base set of test cases that has already been run.  All test cases will be run.",
+                scm.get_commit_identifier(&commit)
+            );
             return Ok(None);
         } else if parents.len() > 1 {
             // If the commit had multiple parents, try to find their common ancestor and continue looking for coverage
@@ -439,7 +442,10 @@ fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
 ) {
     for tc in eval_target_test_cases {
         if !coverage_data.all_tests().contains(tc) {
-            trace!("test case {:?} was not found in parent coverage data and so will be run as a new test", tc);
+            trace!(
+                "test case {:?} was not found in parent coverage data and so will be run as a new test",
+                tc
+            );
             retval
                 .entry(tc.clone())
                 .or_default()
@@ -506,25 +512,25 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
 mod tests {
     use crate::{
         cmd::get_test_identifiers::{
-            compute_relevant_test_cases, find_ancestor_commit_with_coverage_data,
-            AncestorSearchMode,
+            AncestorSearchMode, compute_relevant_test_cases,
+            find_ancestor_commit_with_coverage_data,
         },
         coverage::{
+            CoverageDatabase, CoverageDatabaseDetailedError, Tag,
             commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage},
             full_coverage_data::FullCoverageData,
-            CoverageDatabase, CoverageDatabaseDetailedError, Tag,
         },
         platform::{
+            TestIdentifier, TestPlatform,
             rust::{
                 RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary,
                 RustTestIdentifier, RustTestPlatform,
             },
-            TestIdentifier, TestPlatform,
         },
         scm::Scm,
     };
     use lazy_static::lazy_static;
-    use serde::{de::DeserializeOwned, Serialize};
+    use serde::{Serialize, de::DeserializeOwned};
     use serde_json::Value;
     use std::{
         collections::{HashMap, HashSet},

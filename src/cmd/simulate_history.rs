@@ -11,25 +11,25 @@ use std::{
 
 use anyhow::Result;
 use log::{error, info, trace, warn};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tracing::instrument::WithSubscriber;
 
 use crate::{
     cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
-    coverage::{commit_coverage_data::CoverageIdentifier, create_db_infallible, CoverageDatabase},
+    coverage::{CoverageDatabase, commit_coverage_data::CoverageIdentifier, create_db_infallible},
     errors::{RunTestsCommandErrors, RunTestsErrors},
     platform::{
-        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
         ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
     },
-    scm::{git::GitScm, Scm, ScmCommit},
+    scm::{Scm, ScmCommit, git::GitScm},
     timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
     util::duration_to_seconds,
 };
 
 use super::cli::{
-    autodetect_test_project_type, GetTestIdentifierMode, SourceMode, TestProjectType,
+    GetTestIdentifierMode, SourceMode, TestProjectType, autodetect_test_project_type,
 };
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual

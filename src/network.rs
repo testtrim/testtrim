@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use ipnet::IpNet;
 use log::{debug, trace, warn};
 use regex::Regex;
@@ -120,7 +120,9 @@ where
                     )
                 }
                 Outcome::RunFromFileChange(ref policy_name, ref file_changed) => {
-                    debug!("network to {network_dependency:?} + file {file_changed:?} hit run policy {policy_name}");
+                    debug!(
+                        "network to {network_dependency:?} + file {file_changed:?} hit run policy {policy_name}"
+                    );
                     TestReason::SideEffect(
                         Box::new(TestReason::CoverageIdentifier(ci.clone())),
                         Box::new(TestReason::NetworkPolicy(format!(
@@ -149,76 +151,72 @@ where
 }
 
 fn check_policy_match(network_dependency: &NetworkDependency, policy: &PolicyMatch) -> bool {
-    match network_dependency.socket.address {
-        UnifiedSocketAddr::Unix(ref nd) => match policy {
-            PolicyMatch::UnixSocket(ref mtch) => {
+    match &network_dependency.socket.address {
+        UnifiedSocketAddr::Unix(nd) => match policy {
+            PolicyMatch::UnixSocket(mtch) => {
                 evaluate_glob(mtch, &HashSet::from([nd.clone()])).is_some()
             }
             _ => false,
         },
-        UnifiedSocketAddr::Inet(SocketAddr::V4(ref v4)) => match policy {
-            PolicyMatch::Port(ref port) => v4.port() == *port,
-            PolicyMatch::PortRange(ref port_range) => port_range.contains(&v4.port()),
-            PolicyMatch::Address(IpNet::V4(ref v4_subnet)) => v4_subnet.contains(v4.ip()),
-            PolicyMatch::AddressPort(IpNet::V4(ref v4_subnet), ref port) => {
+        &UnifiedSocketAddr::Inet(SocketAddr::V4(ref v4)) => match policy {
+            PolicyMatch::Port(port) => v4.port() == *port,
+            PolicyMatch::PortRange(port_range) => port_range.contains(&v4.port()),
+            &PolicyMatch::Address(IpNet::V4(ref v4_subnet)) => v4_subnet.contains(v4.ip()),
+            &PolicyMatch::AddressPort(IpNet::V4(ref v4_subnet), ref port) => {
                 v4_subnet.contains(v4.ip()) && v4.port() == *port
             }
-            PolicyMatch::AddressPortRange(IpNet::V4(ref v4_subnet), ref port_range) => {
+            &PolicyMatch::AddressPortRange(IpNet::V4(ref v4_subnet), ref port_range) => {
                 v4_subnet.contains(v4.ip()) && port_range.contains(&v4.port())
             }
-            PolicyMatch::Host(ref hostname) => {
-                network_dependency.socket.hostnames.contains(hostname)
-            }
-            PolicyMatch::HostPort(ref hostname, ref port) => {
+            PolicyMatch::Host(hostname) => network_dependency.socket.hostnames.contains(hostname),
+            PolicyMatch::HostPort(hostname, port) => {
                 network_dependency.socket.hostnames.contains(hostname) && v4.port() == *port
             }
-            PolicyMatch::HostPortRange(ref hostname, ref port_range) => {
+            PolicyMatch::HostPortRange(hostname, port_range) => {
                 network_dependency.socket.hostnames.contains(hostname)
                     && port_range.contains(&v4.port())
             }
-            PolicyMatch::Address(IpNet::V6(_))
-            | PolicyMatch::AddressPort(IpNet::V6(_), _)
-            | PolicyMatch::AddressPortRange(IpNet::V6(_), _)
-            | PolicyMatch::UnixSocket(_) => false,
+            &PolicyMatch::Address(IpNet::V6(_))
+            | &PolicyMatch::AddressPort(IpNet::V6(_), _)
+            | &PolicyMatch::AddressPortRange(IpNet::V6(_), _)
+            | &PolicyMatch::UnixSocket(_) => false,
         },
-        UnifiedSocketAddr::Inet(SocketAddr::V6(ref v6)) => match policy {
-            PolicyMatch::Port(ref port) => v6.port() == *port,
-            PolicyMatch::PortRange(ref port_range) => port_range.contains(&v6.port()),
-            PolicyMatch::Address(IpNet::V6(ref v6_subnet)) => v6_subnet.contains(v6.ip()),
-            PolicyMatch::AddressPort(IpNet::V6(ref v6_subnet), ref port) => {
+        &UnifiedSocketAddr::Inet(SocketAddr::V6(ref v6)) => match policy {
+            PolicyMatch::Port(port) => v6.port() == *port,
+            PolicyMatch::PortRange(port_range) => port_range.contains(&v6.port()),
+            &PolicyMatch::Address(IpNet::V6(ref v6_subnet)) => v6_subnet.contains(v6.ip()),
+            &PolicyMatch::AddressPort(IpNet::V6(ref v6_subnet), ref port) => {
                 v6_subnet.contains(v6.ip()) && v6.port() == *port
             }
-            PolicyMatch::AddressPortRange(IpNet::V6(ref v6_subnet), ref port_range) => {
+            &PolicyMatch::AddressPortRange(IpNet::V6(ref v6_subnet), ref port_range) => {
                 v6_subnet.contains(v6.ip()) && port_range.contains(&v6.port())
             }
-            PolicyMatch::Host(ref hostname) => {
-                network_dependency.socket.hostnames.contains(hostname)
-            }
-            PolicyMatch::HostPort(ref hostname, ref port) => {
+            PolicyMatch::Host(hostname) => network_dependency.socket.hostnames.contains(hostname),
+            PolicyMatch::HostPort(hostname, port) => {
                 network_dependency.socket.hostnames.contains(hostname) && v6.port() == *port
             }
-            PolicyMatch::HostPortRange(ref hostname, ref port_range) => {
+            PolicyMatch::HostPortRange(hostname, port_range) => {
                 network_dependency.socket.hostnames.contains(hostname)
                     && port_range.contains(&v6.port())
             }
             // v6 could be an IPv4 Mapped address, and if so we match it to IPv4 policies as well:
-            PolicyMatch::Address(IpNet::V4(ref v4_subnet)) => v6
+            &PolicyMatch::Address(IpNet::V4(ref v4_subnet)) => v6
                 .ip()
                 .to_ipv4_mapped()
                 .is_some_and(|v4| v4_subnet.contains(&v4)),
-            PolicyMatch::AddressPort(IpNet::V4(ref v4_subnet), ref port) => {
+            &PolicyMatch::AddressPort(IpNet::V4(ref v4_subnet), ref port) => {
                 v6.ip()
                     .to_ipv4_mapped()
                     .is_some_and(|v4| v4_subnet.contains(&v4))
                     && v6.port() == *port
             }
-            PolicyMatch::AddressPortRange(IpNet::V4(ref v4_subnet), ref port_range) => {
+            &PolicyMatch::AddressPortRange(IpNet::V4(ref v4_subnet), ref port_range) => {
                 v6.ip()
                     .to_ipv4_mapped()
                     .is_some_and(|v4| v4_subnet.contains(&v4))
                     && port_range.contains(&v6.port())
             }
-            PolicyMatch::UnixSocket(_) => false,
+            &PolicyMatch::UnixSocket(_) => false,
         },
     }
 }
@@ -306,12 +304,18 @@ pub fn analyze_socket_captures(
     for capture in socket_captures {
         let result = analyze_nscd(capture, &mut retval)?;
         if let DnsCaptureAnalysisResult::IncompleteCapture = result {
-            warn!("network stream to {:?} was not fully captured, preventing nscd protocol decode for DNS analysis", capture.socket_addr);
+            warn!(
+                "network stream to {:?} was not fully captured, preventing nscd protocol decode for DNS analysis",
+                capture.socket_addr
+            );
         }
 
         let result = analyze_dns(capture, &mut retval)?;
         if let DnsCaptureAnalysisResult::IncompleteCapture = result {
-            warn!("network stream to {:?} was not fully captured, preventing DNS protocol decode for DNS analysis", capture.socket_addr);
+            warn!(
+                "network stream to {:?} was not fully captured, preventing DNS protocol decode for DNS analysis",
+                capture.socket_addr
+            );
         }
     }
 
@@ -341,27 +345,27 @@ fn consolidate_chunks(operations: &[SocketOperation]) -> Vec<SocketOperation> {
 
     for op in operations {
         match (op, &mode) {
-            (SocketOperation::Sent(ref new_data), LastOperation::Send)
-            | (SocketOperation::Read(ref new_data), LastOperation::Read) => {
+            (&SocketOperation::Sent(ref new_data), LastOperation::Send)
+            | (&SocketOperation::Read(ref new_data), LastOperation::Read) => {
                 buf.extend(new_data);
             }
-            (SocketOperation::Sent(ref new_data), LastOperation::Read) => {
+            (SocketOperation::Sent(new_data), LastOperation::Read) => {
                 retval.push(SocketOperation::Read(buf));
                 buf = Vec::with_capacity(256);
                 buf.extend(new_data);
                 mode = LastOperation::Send;
             }
-            (SocketOperation::Sent(ref new_data), LastOperation::Unknown) => {
+            (SocketOperation::Sent(new_data), LastOperation::Unknown) => {
                 buf.extend(new_data);
                 mode = LastOperation::Send;
             }
-            (SocketOperation::Read(ref new_data), LastOperation::Send) => {
+            (SocketOperation::Read(new_data), LastOperation::Send) => {
                 retval.push(SocketOperation::Sent(buf));
                 buf = Vec::with_capacity(256);
                 buf.extend(new_data);
                 mode = LastOperation::Read;
             }
-            (SocketOperation::Read(ref new_data), LastOperation::Unknown) => {
+            (SocketOperation::Read(new_data), LastOperation::Unknown) => {
                 buf.extend(new_data);
                 mode = LastOperation::Read;
             }
@@ -406,8 +410,8 @@ fn analyze_nscd(
         let send = &send_recv[0];
         let recv = &send_recv[1];
 
-        if let SocketOperation::Sent(ref send_data) = send {
-            if let SocketOperation::Read(ref recv_data) = recv {
+        if let SocketOperation::Sent(send_data) = send {
+            if let SocketOperation::Read(recv_data) = recv {
                 parse_nscd_interchange(send_data, recv_data, dns_resolutions)?;
             } else {
                 return Err(anyhow!("chunk was expected to be Read, but was Sent"));
@@ -498,7 +502,9 @@ fn analyze_dns(
                     other => {
                         // "warn" is probably higher level logging than needed, but I want to see if anything else
                         // interesting happens here that needs attention.
-                        warn!("DNS response had skipped question {other:?} that is not understood by analyze_dns; {question:?}");
+                        warn!(
+                            "DNS response had skipped question {other:?} that is not understood by analyze_dns; {question:?}"
+                        );
                         continue;
                     }
                 };
@@ -542,7 +548,9 @@ fn analyze_dns(
             }
             Err(e) => {
                 if !hack_query_response {
-                    warn!("Error occurred parsing network response on port 53 as DNS protocol; some DNS resolutions may be lost.  Error was: {e:?}");
+                    warn!(
+                        "Error occurred parsing network response on port 53 as DNS protocol; some DNS resolutions may be lost.  Error was: {e:?}"
+                    );
                 }
             }
         }
@@ -568,12 +576,12 @@ mod tests {
     use crate::{
         coverage::full_coverage_data::FullCoverageData,
         network::{
-            check_policy_match, evaluate_glob, evaluate_policy, DnsCaptureAnalysisResult,
-            NetworkDependency, Outcome, PolicyApply, PolicyMatch,
+            DnsCaptureAnalysisResult, NetworkDependency, Outcome, PolicyApply, PolicyMatch,
+            check_policy_match, evaluate_glob, evaluate_policy,
         },
         platform::{
-            rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
             TestReason,
+            rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
         },
         sys_trace::trace::{
             ResolvedSocketAddr, SocketCapture, SocketCaptureState, SocketOperation,
@@ -581,7 +589,7 @@ mod tests {
         },
     };
 
-    use super::{analyze_dns, analyze_nscd, compute_tests_from_network_accesses, Policy};
+    use super::{Policy, analyze_dns, analyze_nscd, compute_tests_from_network_accesses};
 
     #[derive(Deserialize, Debug)]
     #[serde(rename_all = "kebab-case")]
@@ -638,12 +646,12 @@ mod tests {
         assert_eq!(policy.name, "DNS access");
         assert_eq!(policy.apply_rules, PolicyApply::RunAlways);
 
-        let PolicyMatch::UnixSocket(ref unix_socket) = &policy.match_rules[0] else {
+        let PolicyMatch::UnixSocket(unix_socket) = &policy.match_rules[0] else {
             panic!("expected match_rules[0] to be UnixSocket");
         };
         assert_eq!(unix_socket, "/var/run/nscd/socket");
 
-        let PolicyMatch::Port(ref port) = &policy.match_rules[1] else {
+        let PolicyMatch::Port(port) = &policy.match_rules[1] else {
             panic!("expected match_rules[0] to be Port");
         };
         assert_eq!(port, &53);
@@ -652,16 +660,16 @@ mod tests {
         assert_eq!(policy.name, "internal test servers");
         assert_eq!(policy.apply_rules, PolicyApply::Ignore);
 
-        let PolicyMatch::PortRange(ref port_range) = &policy.match_rules[0] else {
+        let PolicyMatch::PortRange(port_range) = &policy.match_rules[0] else {
             panic!("expected match_rules[0] to be PortRange");
         };
         assert_eq!(*port_range.start(), 16384);
         assert_eq!(*port_range.end(), 32768);
 
-        let PolicyMatch::Address(ref address) = &policy.match_rules[1] else {
+        let PolicyMatch::Address(address) = &policy.match_rules[1] else {
             panic!("expected match_rules[1] to be Address");
         };
-        let IpNet::V4(ref address_ip4) = address else {
+        let IpNet::V4(address_ip4) = address else {
             panic!("expected match_rules[1] to be Ipv4Net");
         };
         assert_eq!(
@@ -669,10 +677,10 @@ mod tests {
             &Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap()
         );
 
-        let PolicyMatch::Address(ref address) = &policy.match_rules[2] else {
+        let PolicyMatch::Address(address) = &policy.match_rules[2] else {
             panic!("expected match_rules[2] to be Address");
         };
-        let IpNet::V6(ref address_ip6) = address else {
+        let IpNet::V6(address_ip6) = address else {
             panic!("expected match_rules[2] to be Ipv6Net");
         };
         assert_eq!(
@@ -680,10 +688,10 @@ mod tests {
             &Ipv6Net::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 128).unwrap()
         );
 
-        let PolicyMatch::AddressPort(ref address, ref port) = &policy.match_rules[3] else {
+        let PolicyMatch::AddressPort(address, port) = &policy.match_rules[3] else {
             panic!("expected match_rules[3] to be AddressPort");
         };
-        let IpNet::V4(ref address_ip4) = address else {
+        let IpNet::V4(address_ip4) = address else {
             panic!("expected match_rules[3] to be Ipv4Net");
         };
         assert_eq!(
@@ -692,11 +700,10 @@ mod tests {
         );
         assert_eq!(port, &8080);
 
-        let PolicyMatch::AddressPortRange(ref address, ref port_range) = &policy.match_rules[4]
-        else {
+        let PolicyMatch::AddressPortRange(address, port_range) = &policy.match_rules[4] else {
             panic!("expected match_rules[4] to be AddressPortRange");
         };
-        let IpNet::V4(ref address_ip4) = address else {
+        let IpNet::V4(address_ip4) = address else {
             panic!("expected match_rules[4] to be Ipv4Net");
         };
         assert_eq!(
@@ -706,25 +713,24 @@ mod tests {
         assert_eq!(*port_range.start(), 8085);
         assert_eq!(*port_range.end(), 8086);
 
-        let PolicyMatch::PortRange(ref port_range) = &policy.match_rules[5] else {
+        let PolicyMatch::PortRange(port_range) = &policy.match_rules[5] else {
             panic!("expected match_rules[5] to be PortRange");
         };
         assert_eq!(*port_range.start(), 1024);
         assert_eq!(*port_range.end(), 65535);
 
-        let PolicyMatch::Host(ref hostname) = &policy.match_rules[6] else {
+        let PolicyMatch::Host(hostname) = &policy.match_rules[6] else {
             panic!("expected match_rules[6] to be Host");
         };
         assert_eq!(*hostname, "testtrim.org");
 
-        let PolicyMatch::HostPort(ref hostname, ref port) = &policy.match_rules[7] else {
+        let PolicyMatch::HostPort(hostname, port) = &policy.match_rules[7] else {
             panic!("expected match_rules[7] to be HostPort");
         };
         assert_eq!(*hostname, "testtrim.org");
         assert_eq!(*port, 8080);
 
-        let PolicyMatch::HostPortRange(ref hostname, ref port_range) = &policy.match_rules[8]
-        else {
+        let PolicyMatch::HostPortRange(hostname, port_range) = &policy.match_rules[8] else {
             panic!("expected match_rules[8] to be HostPortRange");
         };
         assert_eq!(*hostname, "testtrim.org");

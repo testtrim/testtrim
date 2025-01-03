@@ -17,9 +17,9 @@ use diesel::{
     connection::{Instrumentation, SimpleConnection as _},
     prelude::*,
 };
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::trace;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     collections::HashMap,
     env::{self, VarError},

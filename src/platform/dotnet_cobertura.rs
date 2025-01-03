@@ -143,7 +143,10 @@ mod tests {
 
         let cls = &pkg.classes.class[0];
         assert_eq!(cls.name, "MathFunctions.BasicOps");
-        assert_eq!(cls.filename, "home/mfenniak/Dev/testtrim-test-projects/dotnet-coverage-specimen/MathFunctions/BasicOps.cs");
+        assert_eq!(
+            cls.filename,
+            "home/mfenniak/Dev/testtrim-test-projects/dotnet-coverage-specimen/MathFunctions/BasicOps.cs"
+        );
         assert!((cls.line_rate - 1.0).abs() < 0.01, "line_rate == 1.0");
 
         Ok(())

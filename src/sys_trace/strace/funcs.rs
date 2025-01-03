@@ -4,14 +4,14 @@
 
 use std::{os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::sys_trace::trace::UnifiedSocketAddr;
 
 use super::tokenizer::{
-    tokenize, Argument, CallOutcome, EncodedString, Retval, SyscallSegment, TokenizerOutput,
+    Argument, CallOutcome, EncodedString, Retval, SyscallSegment, TokenizerOutput, tokenize,
 };
 
 #[derive(Debug, PartialEq)]
@@ -559,7 +559,9 @@ mod tests {
             t,
             Some(FunctionTrace::Function(Function::Read {
                 fd: "3",
-                data: StringArgument::Complete(EncodedString::new("\\x02\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\t\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\xe8\\x03\\x00\\x00d\\x00\\x00\\x00\\x10\\x00\\x00\\x00\\x0f\\x00\\x00\\x00\\x1f\\x00\\x00\\x00")),
+                data: StringArgument::Complete(EncodedString::new(
+                    "\\x02\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\t\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\xe8\\x03\\x00\\x00d\\x00\\x00\\x00\\x10\\x00\\x00\\x00\\x0f\\x00\\x00\\x00\\x1f\\x00\\x00\\x00"
+                )),
             }))
         );
 
@@ -671,7 +673,9 @@ mod tests {
             t,
             Some(FunctionTrace::Function(Function::Recv {
                 socket_fd: "7",
-                data: StringArgument::Complete(EncodedString::new("\\xd6\\xef\\x81\\x80\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\x01\\x08codeberg\\x03org\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\\"\\x00\\x04\\xd9\\xc5[\\x91\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00")),
+                data: StringArgument::Complete(EncodedString::new(
+                    "\\xd6\\xef\\x81\\x80\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\x01\\x08codeberg\\x03org\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\\"\\x00\\x04\\xd9\\xc5[\\x91\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00"
+                )),
             }))
         );
 

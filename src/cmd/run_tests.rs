@@ -9,27 +9,27 @@ use std::{
 
 use anyhow::{Context, Result};
 use log::{error, info};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tracing::{info_span, instrument::WithSubscriber, Instrument as _};
+use serde::de::DeserializeOwned;
+use tracing::{Instrument as _, info_span, instrument::WithSubscriber};
 
 use crate::{
-    cmd::get_test_identifiers::{get_target_test_cases, tags, AncestorSearchMode},
+    cmd::get_test_identifiers::{AncestorSearchMode, get_target_test_cases, tags},
     coverage::{
-        commit_coverage_data::CoverageIdentifier, create_db_infallible, CoverageDatabase, Tag,
+        CoverageDatabase, Tag, commit_coverage_data::CoverageIdentifier, create_db_infallible,
     },
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
-        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
         ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
     },
-    scm::{git::GitScm, Scm, ScmCommit},
+    scm::{Scm, ScmCommit, git::GitScm},
     timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
 };
 
 use super::cli::{
-    autodetect_test_project_type, GetTestIdentifierMode, PlatformTaggingMode, SourceMode,
-    TestProjectType,
+    GetTestIdentifierMode, PlatformTaggingMode, SourceMode, TestProjectType,
+    autodetect_test_project_type,
 };
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
@@ -135,7 +135,7 @@ where
                             ref stdout,
                             ref stderr,
                         } => {
-                            if let Some(ref exit_code) = exit_code {
+                            if let Some(exit_code) = exit_code {
                                 println!(
                                     "\ttest failed when test process exited with code {exit_code}"
                                 );

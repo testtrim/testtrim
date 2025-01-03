@@ -8,10 +8,10 @@ use std::{
 };
 
 use actix_web::{
-    body::BoxBody,
-    http::{header::ContentType, StatusCode},
-    web::{self, JsonConfig},
     HttpResponse, Responder, ResponseError, Scope,
+    body::BoxBody,
+    http::{StatusCode, header::ContentType},
+    web::{self, JsonConfig},
 };
 use anyhow::Result;
 use log::debug;
@@ -21,11 +21,12 @@ use thiserror::Error;
 
 use crate::{
     coverage::{
+        CoverageDatabase as _, CoverageDatabaseDispatch, Tag,
         commit_coverage_data::{
             CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
             HeuristicCoverage,
         },
-        create_db, CoverageDatabase as _, CoverageDatabaseDispatch, Tag,
+        create_db,
     },
     platform::{TestIdentifier, TestPlatform},
 };
@@ -282,7 +283,7 @@ async fn delete_coverage_data<TP: TestPlatform>(
 mod tests {
     use std::path::PathBuf;
 
-    use actix_web::{test, App};
+    use actix_web::{App, test};
     use anyhow::Result;
     use lazy_static::lazy_static;
 

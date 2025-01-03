@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use log::info;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempdir::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
-use testtrim::cmd::get_test_identifiers::{self, get_target_test_cases, AncestorSearchMode};
+use testtrim::cmd::get_test_identifiers::{self, AncestorSearchMode, get_target_test_cases};
 use testtrim::cmd::run_tests::run_tests;
-use testtrim::coverage::{create_test_db, CoverageDatabase};
+use testtrim::coverage::{CoverageDatabase, create_test_db};
 use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
 use testtrim::platform::dotnet::DotnetTestPlatform;
 use testtrim::scm::git::GitScm;
@@ -18,7 +18,7 @@ use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubsc
 use tracing::instrument::WithSubscriber as _;
 
 use crate::util::ChangeWorkingDirectory;
-use crate::{assert_performance_tracing, git_checkout, git_clone, CWD_MUTEX};
+use crate::{CWD_MUTEX, assert_performance_tracing, git_checkout, git_clone};
 
 #[tokio::test]
 async fn dotnet_linearcommits_filecoverage() -> Result<()> {

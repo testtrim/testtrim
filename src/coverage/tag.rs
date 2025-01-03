@@ -4,7 +4,7 @@
 
 use std::cmp::Ordering;
 
-use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct Tag {

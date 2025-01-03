@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use cargo_lock::Lockfile;
 use cargo_toml::Manifest;
 use dashmap::DashSet;
@@ -23,29 +23,29 @@ use std::{env, fmt, fs, io};
 use std::{hash::Hash, path::Path};
 use tempdir::TempDir;
 use tokio::process::Command;
-use tracing::{info_span, instrument, Instrument};
+use tracing::{Instrument, info_span, instrument};
 
+use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
     HeuristicCoverage,
 };
 use crate::coverage::full_coverage_data::FullCoverageData;
-use crate::coverage::Tag;
 use crate::errors::{
     FailedTestResult, RunTestError, RunTestsErrors, SubcommandErrors, TestFailure,
 };
 use crate::network::NetworkDependency;
 use crate::scm::{Scm, ScmCommit};
-use crate::sys_trace::trace::ResolvedSocketAddr;
 use crate::sys_trace::SysTraceCommand as _;
+use crate::sys_trace::trace::ResolvedSocketAddr;
 use crate::sys_trace::{sys_trace_command, trace::Trace};
 
-use super::util::{normalize_path, spawn_limited_concurrency};
 use super::TestReason;
+use super::util::{normalize_path, spawn_limited_concurrency};
 use super::{
-    rust_llvm::{CoverageLibrary, ProfilingData},
     ConcreteTestIdentifier, PlatformSpecificRelevantTestCaseData, TestDiscovery, TestIdentifier,
     TestIdentifierCore, TestPlatform,
+    rust_llvm::{CoverageLibrary, ProfilingData},
 };
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
@@ -218,9 +218,7 @@ impl RustTestPlatform {
                     } else {
                         trace!(
                             "Cargo.lock package changed {}, old: {}, current: {}",
-                            old.name,
-                            old.version,
-                            current_version
+                            old.name, old.version, current_version
                         );
                         true
                     }
@@ -478,7 +476,9 @@ impl RustTestPlatform {
                     &current_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
                     &repo_root,
                     |warning| {
-                        warn!("syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}");
+                        warn!(
+                            "syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}"
+                        );
                     },
                 );
                 if let Some(target_path) = target_path {
@@ -774,7 +774,9 @@ impl TestPlatform for RustTestPlatform {
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
                     let target_path = normalize_path(&target_path, file, &repo_root, |warning| {
-                        warn!("file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}");
+                        warn!(
+                            "file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}"
+                        );
                     });
 
                     if let Some(target_path) = target_path {
@@ -831,7 +833,7 @@ mod tests {
 
     use crate::{
         coverage::commit_coverage_data::CommitCoverageData,
-        platform::{rust::RustTestPlatform, TestPlatform},
+        platform::{TestPlatform, rust::RustTestPlatform},
     };
 
     use super::parse_cargo_package;
@@ -905,10 +907,12 @@ mod tests {
                 .len(),
             1
         );
-        assert!(coverage_data
-            .file_references_files_map()
-            .get(&PathBuf::from("tests/rust_parse_examples/sequences.rs"))
-            .unwrap()
-            .contains(&PathBuf::from("tests/test_data/Factorial_Vec.txt")));
+        assert!(
+            coverage_data
+                .file_references_files_map()
+                .get(&PathBuf::from("tests/rust_parse_examples/sequences.rs"))
+                .unwrap()
+                .contains(&PathBuf::from("tests/test_data/Factorial_Vec.txt"))
+        );
     }
 }

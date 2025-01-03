@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Display},
@@ -13,9 +13,9 @@ use std::{
 
 use crate::{
     coverage::{
+        Tag,
         commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
         full_coverage_data::FullCoverageData,
-        Tag,
     },
     errors::RunTestsErrors,
     scm::{Scm, ScmCommit},

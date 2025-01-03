@@ -5,7 +5,7 @@
 use async_compression::tokio::bufread::ZstdEncoder;
 use log::{debug, warn};
 use reqwest::Client;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     sync::OnceLock,
     time::{Duration, Instant},
@@ -20,10 +20,10 @@ use crate::{
 };
 
 use super::{
-    commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
-    full_coverage_data::FullCoverageData,
     CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, CreateDatabaseError,
     Tag,
+    commit_coverage_data::{CommitCoverageData, CoverageIdentifier},
+    full_coverage_data::FullCoverageData,
 };
 
 pub struct TesttrimApiCoverageDatabase {
@@ -317,7 +317,9 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
         &self,
         _older_than: &Duration,
     ) -> Result<(), CoverageDatabaseDetailedError> {
-        warn!("intermittent_clean is not supported when TESTTRIM_DATABASE_URL is a remote HTTP server");
+        warn!(
+            "intermittent_clean is not supported when TESTTRIM_DATABASE_URL is a remote HTTP server"
+        );
         Ok(())
     }
 }
@@ -326,10 +328,11 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
 mod tests {
     use actix_test::TestServer;
     use actix_web::{
+        App, Error, HttpResponse, Responder,
         body::MessageBody,
         dev::{ServiceRequest, ServiceResponse},
-        middleware::{self, from_fn, Next},
-        web, App, Error, HttpResponse, Responder,
+        middleware::{self, Next, from_fn},
+        web,
     };
     use anyhow::Result;
     use lazy_static::lazy_static;
@@ -337,12 +340,12 @@ mod tests {
 
     use crate::{
         coverage::{
-            commit_coverage_data::CommitCoverageData, db_tests, CoverageDatabase,
-            ResultWithContext as _,
+            CoverageDatabase, ResultWithContext as _, commit_coverage_data::CommitCoverageData,
+            db_tests,
         },
         platform::{
-            rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
             TestPlatform,
+            rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
         },
         server::InstallTestPlatform as _,
     };

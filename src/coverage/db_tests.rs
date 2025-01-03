@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 use crate::{
     coverage::{
+        Tag,
         commit_coverage_data::{
             CommitCoverageData, FileCoverage, FileReference, FunctionCoverage, HeuristicCoverage,
         },
-        Tag,
     },
     platform::rust::{
         RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier, RustTestPlatform,
@@ -181,21 +181,27 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file1.rs"))
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file2.rs"))
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file1.rs"))
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file2.rs"))
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test2)
+    );
     assert_eq!(loaded_data.function_to_test_map().len(), 2);
     assert_eq!(
         loaded_data
@@ -213,21 +219,27 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func1")
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func2")
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func1")
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func2")
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test2)
+    );
     assert_eq!(loaded_data.coverage_identifier_to_test_map().len(), 2);
     assert_eq!(
         loaded_data
@@ -245,21 +257,27 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .coverage_identifier_to_test_map()
-        .get(&thiserror)
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .coverage_identifier_to_test_map()
-        .get(&regex)
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .coverage_identifier_to_test_map()
-        .get(&regex)
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&thiserror)
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&regex)
+            .unwrap()
+            .contains(&test2)
+    );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 2);
     assert_eq!(
         loaded_data
@@ -277,21 +295,27 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file1.rs")));
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file2.rs")));
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/things.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file1.rs")));
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs"))
+    );
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file2.rs"))
+    );
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/things.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs"))
+    );
 }
 
 /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
@@ -343,13 +367,8 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
     });
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            &child_data,
-            "c2",
-            Some("c1"),
-            &[],
-        )
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -380,21 +399,27 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file1.rs"))
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file2.rs"))
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file1.rs"))
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file2.rs"))
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test2)
+    );
     assert_eq!(loaded_data.function_to_test_map().len(), 2);
     assert_eq!(
         loaded_data
@@ -412,21 +437,27 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func1")
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func2")
-        .unwrap()
-        .contains(&test1));
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func1")
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func2")
+            .unwrap()
+            .contains(&test1)
+    );
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test2)
+    );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -436,16 +467,20 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
             .len(),
         2
     );
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file1.rs")));
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file2.rs")));
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs"))
+    );
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file2.rs"))
+    );
 }
 
 /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
@@ -504,13 +539,8 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
     });
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            &child_data,
-            "c2",
-            Some("c1"),
-            &[],
-        )
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -532,11 +562,13 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file3.rs"))
-        .unwrap()
-        .contains(&test1));
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file3.rs"))
+            .unwrap()
+            .contains(&test1)
+    );
     assert_eq!(loaded_data.function_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -546,11 +578,13 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
             .len(),
         1
     );
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func3")
-        .unwrap()
-        .contains(&test1));
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func3")
+            .unwrap()
+            .contains(&test1)
+    );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 3);
     assert_eq!(
         loaded_data
@@ -576,21 +610,27 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file1.rs")));
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/things.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file1.rs")));
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/more-stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file2.rs")));
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs"))
+    );
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/things.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs"))
+    );
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/more-stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file2.rs"))
+    );
 }
 
 /// Test a child coverage set which indicates a test was removed and no longer present
@@ -641,13 +681,8 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
     child_data.add_existing_test(test2.clone());
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            &child_data,
-            "c2",
-            Some("c1"),
-            &[],
-        )
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -669,11 +704,13 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("file1.rs"))
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("file1.rs"))
+            .unwrap()
+            .contains(&test2)
+    );
     assert_eq!(loaded_data.function_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -683,11 +720,13 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("func1")
-        .unwrap()
-        .contains(&test2));
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("func1")
+            .unwrap()
+            .contains(&test2)
+    );
 }
 
 /// Test that we can remove file references from an ancestor
@@ -721,13 +760,8 @@ pub async fn remove_file_references_in_child(db: impl CoverageDatabase) {
     child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            &child_data,
-            "c2",
-            Some("c1"),
-            &[],
-        )
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -752,11 +786,13 @@ pub async fn remove_file_references_in_child(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra-data/abc-123.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("src/one.rs")));
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra-data/abc-123.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("src/one.rs"))
+    );
 }
 
 /// Test that save and load use independent data based upon tags
@@ -786,22 +822,16 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
     });
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            &saved_data,
-            "c1",
-            None,
-            &[
-                Tag {
-                    key: String::from("platform"),
-                    value: String::from("windows"),
-                },
-                Tag {
-                    key: String::from("database"),
-                    value: String::from("postgresql"),
-                },
-            ],
-        )
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "c1", None, &[
+            Tag {
+                key: String::from("platform"),
+                value: String::from("windows"),
+            },
+            Tag {
+                key: String::from("database"),
+                value: String::from("postgresql"),
+            },
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -813,20 +843,16 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
     assert!(result.is_none()); // should not load as we provided mismatching tags
 
     let result = db
-        .read_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            "c1",
-            &[
-                Tag {
-                    key: String::from("platform"),
-                    value: String::from("linux"),
-                },
-                Tag {
-                    key: String::from("database"),
-                    value: String::from("postgresql"),
-                },
-            ],
-        )
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[
+            Tag {
+                key: String::from("platform"),
+                value: String::from("linux"),
+            },
+            Tag {
+                key: String::from("database"),
+                value: String::from("postgresql"),
+            },
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
@@ -835,20 +861,16 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
     // the order of the tags is reversed, but expected to be loaded successfully -- the tag order is irrelevant (should
     // probably be a HashSet for clarity?)
     let result = db
-        .read_coverage_data::<RustTestPlatform>(
-            "testtrim-tests",
-            "c1",
-            &[
-                Tag {
-                    key: String::from("database"),
-                    value: String::from("postgresql"),
-                },
-                Tag {
-                    key: String::from("platform"),
-                    value: String::from("windows"),
-                },
-            ],
-        )
+        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[
+            Tag {
+                key: String::from("database"),
+                value: String::from("postgresql"),
+            },
+            Tag {
+                key: String::from("platform"),
+                value: String::from("windows"),
+            },
+        ])
         .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
@@ -866,11 +888,13 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_to_test_map()
-        .get(&PathBuf::from("windows.rs"))
-        .unwrap()
-        .contains(&test1));
+    assert!(
+        loaded_data
+            .file_to_test_map()
+            .get(&PathBuf::from("windows.rs"))
+            .unwrap()
+            .contains(&test1)
+    );
     assert_eq!(loaded_data.function_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -880,11 +904,13 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .function_to_test_map()
-        .get("windows")
-        .unwrap()
-        .contains(&test1));
+    assert!(
+        loaded_data
+            .function_to_test_map()
+            .get("windows")
+            .unwrap()
+            .contains(&test1)
+    );
     assert_eq!(loaded_data.coverage_identifier_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -894,11 +920,13 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .coverage_identifier_to_test_map()
-        .get(&windows)
-        .unwrap()
-        .contains(&test1));
+    assert!(
+        loaded_data
+            .coverage_identifier_to_test_map()
+            .get(&windows)
+            .unwrap()
+            .contains(&test1)
+    );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -908,9 +936,11 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .len(),
         1
     );
-    assert!(loaded_data
-        .file_referenced_by_files_map()
-        .get(&PathBuf::from("extra_data/stuff.txt"))
-        .unwrap()
-        .contains(&PathBuf::from("file1.rs")));
+    assert!(
+        loaded_data
+            .file_referenced_by_files_map()
+            .get(&PathBuf::from("extra_data/stuff.txt"))
+            .unwrap()
+            .contains(&PathBuf::from("file1.rs"))
+    );
 }

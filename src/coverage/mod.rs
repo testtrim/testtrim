@@ -10,7 +10,7 @@ use enum_dispatch::enum_dispatch;
 use full_coverage_data::FullCoverageData;
 use log::error;
 use postgres_sqlx::PostgresCoverageDatabase;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use sqlite_diesel::DieselCoverageDatabase;
 use testtrim_api::TesttrimApiCoverageDatabase;
 use thiserror::Error;

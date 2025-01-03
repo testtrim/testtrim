@@ -5,18 +5,19 @@
 use std::{net::ToSocketAddrs, time::Duration};
 
 use actix_web::{
+    App, HttpRequest, HttpServer, Scope,
     dev::{ServiceFactory, ServiceRequest},
-    get, middleware, web, App, HttpRequest, HttpServer, Scope,
+    get, middleware, web,
 };
 use anyhow::Result;
 use coverage_data::InstallCoverageDataHandlers as _;
 use log::{debug, info, warn};
 
 use crate::{
-    coverage::{create_db, CoverageDatabase as _, CoverageDatabaseDispatch},
+    coverage::{CoverageDatabase as _, CoverageDatabaseDispatch, create_db},
     platform::{
-        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
-        TestPlatform,
+        TestPlatform, dotnet::DotnetTestPlatform, golang::GolangTestPlatform,
+        rust::RustTestPlatform,
     },
 };
 
@@ -121,10 +122,11 @@ async fn do_intermittent_cleanup(remove_older_than: &Duration) {
 #[cfg(test)]
 mod tests {
     use actix_web::{
+        App, HttpMessage,
         http::header::{
             AcceptEncoding, ContentEncoding, Encoding, Header, Preference, QualityItem,
         },
-        test, App, HttpMessage,
+        test,
     };
 
     use super::*;

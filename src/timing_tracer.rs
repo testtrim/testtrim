@@ -4,7 +4,7 @@
 
 use dashmap::DashMap;
 use log::warn;
-use rand::{thread_rng, RngCore};
+use rand::{RngCore, thread_rng};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -12,9 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{
+    Event, Metadata, Subscriber,
     field::Visit,
     span::{Attributes, Id, Record},
-    Event, Metadata, Subscriber,
 };
 
 use crate::util::duration_to_seconds;

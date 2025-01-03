@@ -4,9 +4,9 @@
 
 use std::cell::OnceCell;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, take_until1, take_while, take_while1, take_while_m_n};
+use nom::bytes::complete::{is_not, tag, take_until1, take_while, take_while_m_n, take_while1};
 use nom::character::complete::{self, digit1, hex_digit1, multispace1, none_of, one_of};
 use nom::combinator::{map, map_res, opt, recognize, value, verify};
 use nom::multi::{fold_many0, many0, separated_list0};
@@ -30,7 +30,10 @@ impl<'a> EncodedString<'a> {
     fn do_decode(&self) -> Vec<u8> {
         match parse_encoded_string(self.encoded) {
             Ok((_rem, vec)) => vec,
-            Err(_) => unreachable!("parse_encoded_string must not be able to fail for a string in EncodedString; encoded was: {:?}", self.encoded),
+            Err(_) => unreachable!(
+                "parse_encoded_string must not be able to fail for a string in EncodedString; encoded was: {:?}",
+                self.encoded
+            ),
         }
     }
 
@@ -208,22 +211,16 @@ fn parse_syscall(input: &str) -> IResult<&str, SyscallSegment<'_>> {
             function_name,
             arguments,
             outcome,
-        } => Ok((
-            input,
-            SyscallSegment {
-                function: function_name,
-                arguments,
-                outcome,
-            },
-        )),
-        InternalLineType::ResumedUnfinished { function_name } => Ok((
-            input,
-            SyscallSegment {
-                function: function_name,
-                arguments: Vec::new(),
-                outcome: CallOutcome::ResumedUnfinished,
-            },
-        )),
+        } => Ok((input, SyscallSegment {
+            function: function_name,
+            arguments,
+            outcome,
+        })),
+        InternalLineType::ResumedUnfinished { function_name } => Ok((input, SyscallSegment {
+            function: function_name,
+            arguments: Vec::new(),
+            outcome: CallOutcome::ResumedUnfinished,
+        })),
     }
 }
 
@@ -256,14 +253,11 @@ fn parse_started_call(input: &str) -> IResult<&str, InternalLineType> {
     let (input, _) = tag("(")(input)?;
     let (input, arguments) = separated_list0(tag(", "), parse_argument)(input)?;
     let (input, outcome) = parse_started_call_outcome(input)?;
-    Ok((
-        input,
-        InternalLineType::Started {
-            function_name,
-            arguments,
-            outcome,
-        },
-    ))
+    Ok((input, InternalLineType::Started {
+        function_name,
+        arguments,
+        outcome,
+    }))
 }
 
 fn parse_resumed_call(input: &str) -> IResult<&str, InternalLineType> {
@@ -285,14 +279,11 @@ fn parse_resumed_call(input: &str) -> IResult<&str, InternalLineType> {
         CallOutcome::ResumedUnfinished => CallOutcome::ResumedUnfinished,
         _ => unreachable!(),
     };
-    Ok((
-        input,
-        InternalLineType::Resumed {
-            function_name,
-            arguments,
-            outcome,
-        },
-    ))
+    Ok((input, InternalLineType::Resumed {
+        function_name,
+        arguments,
+        outcome,
+    }))
 }
 
 fn parse_resumed_unfinished_call(input: &str) -> IResult<&str, InternalLineType> {
@@ -322,24 +313,18 @@ fn parse_terminating_process_case1(input: &str) -> IResult<&str, InternalLineTyp
 
 fn parse_terminating_process_case2(input: &str) -> IResult<&str, InternalLineType> {
     let (input, _) = tag("???( <unfinished ...>")(input)?;
-    Ok((
-        input,
-        InternalLineType::ResumedUnfinished {
-            function_name: "???",
-        },
-    ))
+    Ok((input, InternalLineType::ResumedUnfinished {
+        function_name: "???",
+    }))
 }
 
 fn parse_terminating_process_case3(input: &str) -> IResult<&str, InternalLineType> {
     let (input, _) = tag("???()")(input)?;
     let (input, _) = consume_whitespace(input)?;
     let (input, _) = tag("= ?")(input)?;
-    Ok((
-        input,
-        InternalLineType::ResumedUnfinished {
-            function_name: "???",
-        },
-    ))
+    Ok((input, InternalLineType::ResumedUnfinished {
+        function_name: "???",
+    }))
 }
 
 fn parse_terminating_process_case4(input: &str) -> IResult<&str, InternalLineType> {
@@ -634,9 +619,9 @@ mod tests {
     use anyhow::Result;
 
     use crate::sys_trace::strace::tokenizer::{
-        extract_encoded_string, nested_braces, parse_encoded_string, parse_proc_killed,
-        parse_signal, tokenize, tokenize_syscall, Argument, CallOutcome, EncodedString,
-        ProcessExit, Retval, SignalRecv, SyscallSegment, TokenizerOutput,
+        Argument, CallOutcome, EncodedString, ProcessExit, Retval, SignalRecv, SyscallSegment,
+        TokenizerOutput, extract_encoded_string, nested_braces, parse_encoded_string,
+        parse_proc_killed, parse_signal, tokenize, tokenize_syscall,
     };
 
     use super::{
@@ -646,152 +631,113 @@ mod tests {
     #[test]
     fn start_all_retval_states() -> Result<()> {
         let tokenized = tokenize_syscall(r"close(3)                                = 0")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "close",
-                arguments: vec![Argument::Numeric("3")],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "close",
+            arguments: vec![Argument::Numeric("3")],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized =
             tokenize_syscall(r"close(3)                        = -1 EBADF (Bad file descriptor)")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "close",
-                arguments: vec![Argument::Numeric("3")],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Failure(-1, "EBADF (Bad file descriptor)"),
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "close",
+            arguments: vec![Argument::Numeric("3")],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Failure(-1, "EBADF (Bad file descriptor)"),
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(r"close(17 <unfinished ...>")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "close",
-                arguments: vec![Argument::Numeric("17")],
-                outcome: CallOutcome::Unfinished,
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "close",
+            arguments: vec![Argument::Numeric("17")],
+            outcome: CallOutcome::Unfinished,
+        });
 
         let tokenized = tokenize_syscall(r"read(7,  <unfinished ...>")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![Argument::Numeric("7")],
-                outcome: CallOutcome::Unfinished,
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![Argument::Numeric("7")],
+            outcome: CallOutcome::Unfinished,
+        });
 
         let tokenized =
             tokenize_syscall(r"close(3)                        = ? ERESTARTSYS (To be restarted)")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "close",
-                arguments: vec![Argument::Numeric("3")],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Restart("ERESTARTSYS (To be restarted)"),
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "close",
+            arguments: vec![Argument::Numeric("3")],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Restart("ERESTARTSYS (To be restarted)"),
             }
-        );
+        });
 
         // The cases where I've seen this behavior -- "resumed> <unfinished...>" AND "resumed>) = ?" have both occurred
         // right before the process exited.  I'm combining both of these into one "ResumedUnfinished" state because, at
         // least for now, it doesn't seem like I need to do anything differently with them.
         let tokenized = tokenize_syscall(r"<... read resumed> <unfinished ...>) = ?")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![],
+            outcome: CallOutcome::ResumedUnfinished
+        });
         let tokenized = tokenize_syscall(r"<... openat resumed>)           = ?")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "openat",
-                arguments: vec![],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "openat",
+            arguments: vec![],
+            outcome: CallOutcome::ResumedUnfinished
+        });
         let tokenized = tokenize_syscall(r"read(3,  <unfinished ...>)              = ?")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![Argument::Numeric("3")],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![Argument::Numeric("3")],
+            outcome: CallOutcome::ResumedUnfinished
+        });
         let tokenized =
             tokenize_syscall(r"read(7, )                               = ? <unavailable>")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
-                arguments: vec![],
-                outcome: CallOutcome::ResumedUnfinished,
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
+            arguments: vec![],
+            outcome: CallOutcome::ResumedUnfinished,
+        });
 
         // Another unrecognizable mess right before a process exit.  Again since ResumedUnfinished is just suppressed at
         // the sequencer layer, I'll output it like that... but maybe "ResumedUnfinished" is just becoming "terminated
         // during process exit"?
         let tokenized = tokenize_syscall(r"???( <unfinished ...>")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "???",
-                arguments: vec![],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "???",
+            arguments: vec![],
+            outcome: CallOutcome::ResumedUnfinished
+        });
         let tokenized = tokenize_syscall(r"???()                                   = ?")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "???",
-                arguments: vec![],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "???",
+            arguments: vec![],
+            outcome: CallOutcome::ResumedUnfinished
+        });
         // basically anything ending with a ? seems to happen at the end of a process... even a completed call?
         let tokenized = tokenize_syscall(
             r#"openat(AT_FDCWD, "/proc/sys/vm/overcommit_memory", O_RDONLY|O_CLOEXEC) = ?"#,
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "openat",
-                arguments: vec![
-                    Argument::Enum("AT_FDCWD"),
-                    Argument::String(EncodedString::new("/proc/sys/vm/overcommit_memory")),
-                    Argument::Enum("O_RDONLY|O_CLOEXEC"),
-                ],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "openat",
+            arguments: vec![
+                Argument::Enum("AT_FDCWD"),
+                Argument::String(EncodedString::new("/proc/sys/vm/overcommit_memory")),
+                Argument::Enum("O_RDONLY|O_CLOEXEC"),
+            ],
+            outcome: CallOutcome::ResumedUnfinished
+        });
 
         let tokenized = tokenize_syscall(r"exit_group(0)                           = ?")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "exit_group",
-                arguments: vec![Argument::Numeric("0"),],
-                outcome: CallOutcome::ResumedUnfinished
-            }
-        );
+        assert_eq!(tokenized, SyscallSegment {
+            function: "exit_group",
+            arguments: vec![Argument::Numeric("0"),],
+            outcome: CallOutcome::ResumedUnfinished
+        });
 
         Ok(())
     }
@@ -799,30 +745,24 @@ mod tests {
     #[test]
     fn resumed_all_retval_states() -> Result<()> {
         let tokenized = tokenize_syscall(r"<... chdir resumed>)             = 0")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "chdir",
-                arguments: vec![],
-                outcome: CallOutcome::Resumed {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "chdir",
+            arguments: vec![],
+            outcome: CallOutcome::Resumed {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r"<... chdir resumed>)             = -1 ENOENT (No such file or directory)",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "chdir",
-                arguments: vec![],
-                outcome: CallOutcome::Resumed {
-                    retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "chdir",
+            arguments: vec![],
+            outcome: CallOutcome::Resumed {
+                retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
             }
-        );
+        });
 
         Ok(())
     }
@@ -830,236 +770,206 @@ mod tests {
     #[test]
     fn various_arguments() -> Result<()> {
         let tokenized = tokenize_syscall(r#"read(3, "", 4096)               = 0"#)?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![
-                    Argument::Numeric("3"),
-                    Argument::String(EncodedString::new("")),
-                    Argument::Numeric("4096"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![
+                Argument::Numeric("3"),
+                Argument::String(EncodedString::new("")),
+                Argument::Numeric("4096"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r"wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WNOHANG, NULL) = 4187946",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "wait4",
-                arguments: vec![
-                    Argument::Numeric("-1"),
-                    Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]"),
-                    Argument::Enum("WNOHANG"),
-                    Argument::Null,
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(4_187_946)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "wait4",
+            arguments: vec![
+                Argument::Numeric("-1"),
+                Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]"),
+                Argument::Enum("WNOHANG"),
+                Argument::Null,
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(4_187_946)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(r#"read(3, ""..., 4096)               = 0"#)?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![
-                    Argument::Numeric("3"),
-                    Argument::PartialString(EncodedString::new("")),
-                    Argument::Numeric("4096"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![
+                Argument::Numeric("3"),
+                Argument::PartialString(EncodedString::new("")),
+                Argument::Numeric("4096"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r#"sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#,
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "sendto",
-                arguments: vec![
-                    Argument::Numeric("3"),
-                    Argument::String(EncodedString::new(
-                        "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
-                    )),
-                    Argument::Numeric("20"),
-                    Argument::Enum("MSG_NOSIGNAL"),
-                    Argument::Null,
-                    Argument::Numeric("0"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(20)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "sendto",
+            arguments: vec![
+                Argument::Numeric("3"),
+                Argument::String(EncodedString::new(
+                    "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
+                )),
+                Argument::Numeric("20"),
+                Argument::Enum("MSG_NOSIGNAL"),
+                Argument::Null,
+                Argument::Numeric("0"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(20)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(r"tgkill(4143934, 4144060, SIGUSR1)       = 0")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "tgkill",
-                arguments: vec![
-                    Argument::Numeric("4143934"),
-                    Argument::Numeric("4144060"),
-                    Argument::Enum("SIGUSR1"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "tgkill",
+            arguments: vec![
+                Argument::Numeric("4143934"),
+                Argument::Numeric("4144060"),
+                Argument::Enum("SIGUSR1"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
-            "openat(AT_FDCWD, \"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)"
+            "openat(AT_FDCWD, \"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "openat",
-                arguments: vec![
-                    Argument::Enum("AT_FDCWD"),
-                    Argument::String(
-                        EncodedString::new("/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"),
-                    ),
-                    Argument::Enum("O_RDONLY|O_CLOEXEC"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "openat",
+            arguments: vec![
+                Argument::Enum("AT_FDCWD"),
+                Argument::String(EncodedString::new(
+                    "/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"
+                ),),
+                Argument::Enum("O_RDONLY|O_CLOEXEC"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r"read(17, 0x7fb0f00111d6, 122)   = -1 EAGAIN (Resource temporarily unavailable)",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![
-                    Argument::Numeric("17"),
-                    Argument::Pointer("0x7fb0f00111d6"),
-                    Argument::Numeric("122"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Failure(-1, "EAGAIN (Resource temporarily unavailable)")
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![
+                Argument::Numeric("17"),
+                Argument::Pointer("0x7fb0f00111d6"),
+                Argument::Numeric("122"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Failure(-1, "EAGAIN (Resource temporarily unavailable)")
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r#"connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "connect",
-                arguments: vec![
-                    Argument::Numeric("3"),
-                    Argument::Structure(r#"{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}"#),
-                    Argument::Numeric("110"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "connect",
+            arguments: vec![
+                Argument::Numeric("3"),
+                Argument::Structure(r#"{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}"#),
+                Argument::Numeric("110"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r"clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "clone",
-                arguments: vec![
-                    Argument::Named("child_stack", Box::new(Argument::Null)),
-                    Argument::Named(
-                        "flags",
-                        Box::new(Argument::Enum(
-                            "CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD"
-                        ))
-                    ),
-                    Argument::Named(
-                        "child_tidptr",
-                        Box::new(Argument::Pointer("0x7f9f93f88a10"))
-                    ),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(337_653)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "clone",
+            arguments: vec![
+                Argument::Named("child_stack", Box::new(Argument::Null)),
+                Argument::Named(
+                    "flags",
+                    Box::new(Argument::Enum(
+                        "CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD"
+                    ))
+                ),
+                Argument::Named(
+                    "child_tidptr",
+                    Box::new(Argument::Pointer("0x7f9f93f88a10"))
+                ),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(337_653)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r"clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0} => {parent_tid=[1343642]}, 88) = 1343642",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "clone3",
-                arguments: vec![
-                    Argument::WrittenStructure(
-                        "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}",
-                        "{parent_tid=[1343642]}"
-                    ),
-                    Argument::Numeric("88"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(1_343_642)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "clone3",
+            arguments: vec![
+                Argument::WrittenStructure(
+                    "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}",
+                    "{parent_tid=[1343642]}"
+                ),
+                Argument::Numeric("88"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(1_343_642)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r#"execve("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", ["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"], 0x7ffdf2244ed8 /* 218 vars */) = 0"#,
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "execve",
-                arguments: vec![
-                    Argument::String(
-                        EncodedString::new("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"),
-                    ),
-                    Argument::Structure(r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#),
-                    Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "execve",
+            arguments: vec![
+                Argument::String(EncodedString::new(
+                    "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
+                ),),
+                Argument::Structure(
+                    r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#
+                ),
+                Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */"),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall(
             r"waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
         )?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "waitid",
-                arguments: vec![
-                    Argument::Enum("P_PIDFD"),
-                    Argument::Numeric("184"),
-                    Argument::Structure("{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}"),
-                    Argument::Enum("WEXITED"),
-                    Argument::Structure("{ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}"),
-                ],
-                outcome: CallOutcome::Complete {
-                    retval: Retval::Success(0)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "waitid",
+            arguments: vec![
+                Argument::Enum("P_PIDFD"),
+                Argument::Numeric("184"),
+                Argument::Structure(
+                    "{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}"
+                ),
+                Argument::Enum("WEXITED"),
+                Argument::Structure(
+                    "{ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}"
+                ),
+            ],
+            outcome: CallOutcome::Complete {
+                retval: Retval::Success(0)
             }
-        );
+        });
 
         Ok(())
     }
@@ -1158,13 +1068,10 @@ mod tests {
         assert_eq!(v, vec![0, 1, 255]);
         assert_eq!(rem, "");
         let (rem, v) = parse_encoded_string(" dquote: \\\"  more text")?;
-        assert_eq!(
-            v,
-            vec![
-                32, 100, 113, 117, 111, 116, 101, 58, 32, 34, 32, 32, 109, 111, 114, 101, 32, 116,
-                101, 120, 116
-            ]
-        );
+        assert_eq!(v, vec![
+            32, 100, 113, 117, 111, 116, 101, 58, 32, 34, 32, 32, 109, 111, 114, 101, 32, 116, 101,
+            120, 116
+        ]);
         assert_eq!(rem, "");
         Ok(())
     }
@@ -1183,50 +1090,41 @@ mod tests {
     #[test]
     fn test_resumed_addt_arguments() -> Result<()> {
         let tokenized = tokenize_syscall(r#"<... read resumed>"abc"..., 1140) = 792"#)?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "read",
-                arguments: vec![
-                    Argument::PartialString(EncodedString::new("abc")),
-                    Argument::Numeric("1140")
-                ],
-                outcome: CallOutcome::Resumed {
-                    retval: Retval::Success(792)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "read",
+            arguments: vec![
+                Argument::PartialString(EncodedString::new("abc")),
+                Argument::Numeric("1140")
+            ],
+            outcome: CallOutcome::Resumed {
+                retval: Retval::Success(792)
             }
-        );
+        });
 
         let tokenized =
             tokenize_syscall("<... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "clone",
-                arguments: vec![Argument::Named(
-                    "child_tidptr",
-                    Box::new(Argument::Pointer("0x7f9f93f88a10"))
-                ),],
-                outcome: CallOutcome::Resumed {
-                    retval: Retval::Success(337_654)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "clone",
+            arguments: vec![Argument::Named(
+                "child_tidptr",
+                Box::new(Argument::Pointer("0x7f9f93f88a10"))
+            ),],
+            outcome: CallOutcome::Resumed {
+                retval: Retval::Success(337_654)
             }
-        );
+        });
 
         let tokenized = tokenize_syscall("<... clone3 resumed> => {parent_tid=[0]}, 88) = 15620")?;
-        assert_eq!(
-            tokenized,
-            SyscallSegment {
-                function: "clone3",
-                arguments: vec![
-                    Argument::WrittenStructureResumed("{parent_tid=[0]}"),
-                    Argument::Numeric("88")
-                ],
-                outcome: CallOutcome::Resumed {
-                    retval: Retval::Success(15_620)
-                }
+        assert_eq!(tokenized, SyscallSegment {
+            function: "clone3",
+            arguments: vec![
+                Argument::WrittenStructureResumed("{parent_tid=[0]}"),
+                Argument::Numeric("88")
+            ],
+            outcome: CallOutcome::Resumed {
+                retval: Retval::Success(15_620)
             }
-        );
+        });
 
         Ok(())
     }
@@ -1249,7 +1147,9 @@ mod tests {
 
     #[test]
     fn test_parse_signal() -> Result<()> {
-        let (rem, exit) = parse_signal("--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---")?;
+        let (rem, exit) = parse_signal(
+            "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
+        )?;
         assert_eq!(rem, "");
         assert_eq!(exit, SignalRecv { signal: "SIGCHLD" });
         Ok(())
@@ -1275,12 +1175,16 @@ mod tests {
         );
         let res = tokenize("+++ exited with 0 ++");
         assert!(res.is_err());
-        let res = tokenize("--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---")?;
+        let res = tokenize(
+            "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
+        )?;
         assert_eq!(
             res,
             TokenizerOutput::Signal(SignalRecv { signal: "SIGCHLD" })
         );
-        let res = tokenize("--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=9564, si_uid=0, si_status=0, si_utime=2 /* 0.02 s */, si_stime=4 /* 0.04 s */} ---")?;
+        let res = tokenize(
+            "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=9564, si_uid=0, si_status=0, si_utime=2 /* 0.02 s */, si_stime=4 /* 0.04 s */} ---",
+        )?;
         assert_eq!(
             res,
             TokenizerOutput::Signal(SignalRecv { signal: "SIGCHLD" })

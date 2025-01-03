@@ -9,7 +9,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use nix::sys::socket::AddressFamily;
 #[cfg(test)]
 use protocol::PwResponseHeader;
@@ -165,8 +165,8 @@ mod tests {
     use anyhow::Result;
 
     use crate::nsncd::{
-        protocol::{AiResponseHeader, PwResponseHeader, RequestType},
         AiResponse, PwResponse,
+        protocol::{AiResponseHeader, PwResponseHeader, RequestType},
     };
 
     use super::{protocol::Request, read_response_getai, read_response_getpwbyuid};
@@ -235,27 +235,24 @@ mod tests {
 
         let mut slice = &reader[..];
         let pwresponse = read_response_getpwbyuid(&mut slice)?;
-        assert_eq!(
-            pwresponse,
-            PwResponse {
-                header: PwResponseHeader {
-                    version: 2,
-                    found: 1,
-                    pw_name_len: 9,
-                    pw_passwd_len: 2,
-                    pw_uid: 1000,
-                    pw_gid: 100,
-                    pw_gecos_len: 16,
-                    pw_dir_len: 15,
-                    pw_shell_len: 31,
-                },
-                name: CString::new(b"mfenniak")?,
-                passwd: CString::new(b"x")?,
-                gecos: CString::new(b"Mathieu Fenniak")?,
-                dir: CString::new(b"/home/mfenniak")?,
-                shell: CString::new(b"/run/current-system/sw/bin/zsh")?,
-            }
-        );
+        assert_eq!(pwresponse, PwResponse {
+            header: PwResponseHeader {
+                version: 2,
+                found: 1,
+                pw_name_len: 9,
+                pw_passwd_len: 2,
+                pw_uid: 1000,
+                pw_gid: 100,
+                pw_gecos_len: 16,
+                pw_dir_len: 15,
+                pw_shell_len: 31,
+            },
+            name: CString::new(b"mfenniak")?,
+            passwd: CString::new(b"x")?,
+            gecos: CString::new(b"Mathieu Fenniak")?,
+            dir: CString::new(b"/home/mfenniak")?,
+            shell: CString::new(b"/run/current-system/sw/bin/zsh")?,
+        });
 
         Ok(())
     }
@@ -267,26 +264,23 @@ mod tests {
 
         let mut slice = &reader[..];
         let airesponse = read_response_getai(&mut slice)?;
-        assert_eq!(
-            airesponse,
-            AiResponse {
-                header: AiResponseHeader {
-                    version: 2,
-                    found: 1,
-                    naddrs: 2,
-                    addrslen: 20,
-                    canonlen: 10,
-                    error: 0,
-                },
-                content: crate::nsncd::protocol::AiResponse {
-                    addrs: vec![
-                        IpAddr::from_str("2607:f8b0:400a:801::2003")?,
-                        IpAddr::from_str("172.217.14.195")?,
-                    ],
-                    canon_name: String::from("google.ca"),
-                }
+        assert_eq!(airesponse, AiResponse {
+            header: AiResponseHeader {
+                version: 2,
+                found: 1,
+                naddrs: 2,
+                addrslen: 20,
+                canonlen: 10,
+                error: 0,
+            },
+            content: crate::nsncd::protocol::AiResponse {
+                addrs: vec![
+                    IpAddr::from_str("2607:f8b0:400a:801::2003")?,
+                    IpAddr::from_str("172.217.14.195")?,
+                ],
+                canon_name: String::from("google.ca"),
             }
-        );
+        });
 
         Ok(())
     }
