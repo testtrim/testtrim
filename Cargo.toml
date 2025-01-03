@@ -8,6 +8,10 @@ description = "Intelligently select automated tests to run via code coverage ana
 version = "0.7.0"
 edition = "2024"
 authors = ["Mathieu Fenniak <mathieu@fenniak.net>"]
+repository = "https://codeberg.org/testtrim/testtrim"
+license = "GPL-3.0-or-later"
+categories = ["development-tools::testing", "command-line-utilities"]
+rust-version = "1.85" # pushed for async_closures stabilization
 
 [dependencies]
 actix-web = "4.9.0"

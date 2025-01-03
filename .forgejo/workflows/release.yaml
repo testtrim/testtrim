@@ -86,3 +86,6 @@ jobs:
               \"tag_name\": \"$NEW_VERSION\",
               \"target_commitish\": \"$NEW_VERSION\"
             }"
+
+      - run: |
+          nix develop .# --command cargo publish --no-verify --token ${{ secrets.CRATES_IO_TESTTRIM_TOKEN }}
