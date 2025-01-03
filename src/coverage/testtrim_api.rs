@@ -80,6 +80,112 @@ impl TesttrimApiCoverageDatabase {
                 .context("creating reqwest client for TesttrimApiCoverageDatabase")
         })
     }
+
+    async fn internal_save_coverage_data<TP>(
+        &self,
+        project_name: &str,
+        coverage_data: &CommitCoverageData<TP::TI, TP::CI>,
+        commit_identifier: &str,
+        ancestor_commit_identifier: Option<&str>,
+        tags: &[Tag],
+        retries_available: u8,
+    ) -> Result<(), CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
+        Box::pin(async move {
+            let mut url = self.api_url.clone();
+            url.path_segments_mut()
+                .map_err(|()| {
+                    CoverageDatabaseError::ParsingError(String::from(
+                        "testtrim API URL is bad; cannot append segments",
+                    ))
+                })
+                .context("parse configured API URL")?
+                .push(TP::platform_identifier())
+                .push("coverage-data")
+                .push(project_name)
+                .push(commit_identifier);
+
+            let post_request = PostCoverageDataRequest {
+                ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
+                tags: tags.to_vec(),
+                all_existing_test_set: coverage_data.existing_test_set().clone(),
+                executed_test_set: coverage_data.executed_test_set().clone(),
+                executed_test_to_files_map: coverage_data.executed_test_to_files_map().clone(),
+                executed_test_to_functions_map: coverage_data
+                    .executed_test_to_functions_map()
+                    .clone(),
+                executed_test_to_coverage_identifier_map: coverage_data
+                    .executed_test_to_coverage_identifier_map()
+                    .clone(),
+                file_references_files_map: coverage_data.file_references_files_map().clone(),
+            };
+            let post_request = serde_json::to_string(&post_request)?;
+            let post_request = post_request.as_bytes();
+            debug!("POST request size (uncompressed): {}", post_request.len());
+
+            let start = Instant::now();
+            let mut zstd = ZstdEncoder::new(post_request);
+            let mut buf = Vec::with_capacity(post_request.len() / 10); // about 1/10 compression ratio expected
+            zstd.read_to_end(&mut buf).await.expect("zstd fail");
+            let duration = Instant::now().duration_since(start);
+            debug!(
+                "POST request size (compressed): {} (compressed in {} ms)",
+                buf.len(),
+                duration.as_millis()
+            );
+
+            let client = self.client()?;
+            let request = client
+                .post(url)
+                .header("Content-Type", "application/json")
+                .header("Content-Encoding", "zstd")
+                .body(buf)
+                .build()
+                .context("building request for coverage data POST")?;
+            let response = client
+                .execute(request)
+                .await
+                .context("sending request for coverage data POST")?;
+
+            debug!("HTTP response: {response:?}");
+            if response.status().is_server_error() && retries_available > 0 {
+                // slight wait... this is pretty unsophisticated retry but it's better than nothing
+                warn!(
+                    "HTTP response {} received from remote server; retrying in 2 seconds",
+                    response.status()
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                return self
+                    .internal_save_coverage_data::<TP>(
+                        project_name,
+                        coverage_data,
+                        commit_identifier,
+                        ancestor_commit_identifier,
+                        tags,
+                        retries_available - 1,
+                    )
+                    .await;
+            } else if response.status() != 200 {
+                return Err(CoverageDatabaseError::DatabaseError(format!(
+                    "remote server returned unexpected status {}",
+                    response.status()
+                )))
+                .context("reading response for coverage data POST");
+            }
+
+            response
+                .json::<Option<String>>()
+                .await
+                .context("parsing response body for coverage data POST")?;
+
+            Ok(())
+        })
+        .await
+    }
 }
 
 impl CoverageDatabase for TesttrimApiCoverageDatabase {
@@ -96,74 +202,15 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
         TP::TI: TestIdentifier + Serialize + DeserializeOwned,
         TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
     {
-        let mut url = self.api_url.clone();
-        url.path_segments_mut()
-            .map_err(|()| {
-                CoverageDatabaseError::ParsingError(String::from(
-                    "testtrim API URL is bad; cannot append segments",
-                ))
-            })
-            .context("parse configured API URL")?
-            .push(TP::platform_identifier())
-            .push("coverage-data")
-            .push(project_name)
-            .push(commit_identifier);
-
-        let post_request = PostCoverageDataRequest {
-            ancestor_commit_identifier: ancestor_commit_identifier.map(String::from),
-            tags: tags.to_vec(),
-            all_existing_test_set: coverage_data.existing_test_set().clone(),
-            executed_test_set: coverage_data.executed_test_set().clone(),
-            executed_test_to_files_map: coverage_data.executed_test_to_files_map().clone(),
-            executed_test_to_functions_map: coverage_data.executed_test_to_functions_map().clone(),
-            executed_test_to_coverage_identifier_map: coverage_data
-                .executed_test_to_coverage_identifier_map()
-                .clone(),
-            file_references_files_map: coverage_data.file_references_files_map().clone(),
-        };
-        let post_request = serde_json::to_string(&post_request)?;
-        let post_request = post_request.as_bytes();
-        debug!("POST request size (uncompressed): {}", post_request.len());
-
-        let start = Instant::now();
-        let mut zstd = ZstdEncoder::new(post_request);
-        let mut buf = Vec::with_capacity(post_request.len() / 10); // about 1/10 compression ratio expected
-        zstd.read_to_end(&mut buf).await.expect("zstd fail");
-        let duration = Instant::now().duration_since(start);
-        debug!(
-            "POST request size (compressed): {} (compressed in {} ms)",
-            buf.len(),
-            duration.as_millis()
-        );
-
-        let client = self.client()?;
-        let request = client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("Content-Encoding", "zstd")
-            .body(buf)
-            .build()
-            .context("building request for coverage data POST")?;
-        let response = client
-            .execute(request)
-            .await
-            .context("sending request for coverage data POST")?;
-
-        debug!("HTTP response: {response:?}");
-        if response.status() != 200 {
-            return Err(CoverageDatabaseError::DatabaseError(format!(
-                "remote server returned unexpected status {}",
-                response.status()
-            )))
-            .context("reading response for coverage data POST");
-        }
-
-        response
-            .json::<Option<String>>()
-            .await
-            .context("parsing response body for coverage data POST")?;
-
-        Ok(())
+        self.internal_save_coverage_data::<TP>(
+            project_name,
+            coverage_data,
+            commit_identifier,
+            ancestor_commit_identifier,
+            tags,
+            3, // retry if required
+        )
+        .await
     }
 
     async fn read_coverage_data<TP>(
@@ -329,13 +376,15 @@ mod tests {
     use actix_test::TestServer;
     use actix_web::{
         App, Error, HttpResponse, Responder,
-        body::MessageBody,
+        body::{BoxBody, MessageBody},
         dev::{ServiceRequest, ServiceResponse},
+        http::StatusCode,
         middleware::{self, Next, from_fn},
         web,
     };
     use anyhow::Result;
     use lazy_static::lazy_static;
+    use std::str::FromStr;
     use std::{collections::HashMap, sync::Mutex};
 
     use crate::{
@@ -363,13 +412,27 @@ mod tests {
     struct TestInterceptState {
         last_req_headers: Mutex<Option<HashMap<String, String>>>,
         last_resp_headers: Mutex<Option<HashMap<String, String>>>,
+        next_request_fail: Mutex<Option<StatusCode>>,
     }
 
     async fn testing_intercept_middleware(
         data: web::Data<TestInterceptState>,
         req: ServiceRequest,
-        next: Next<impl MessageBody>,
-    ) -> Result<ServiceResponse<impl MessageBody>, Error> {
+        next: Next<impl MessageBody + 'static>,
+    ) -> Result<ServiceResponse<impl MessageBody + 'static>, Error> {
+        {
+            let mut lock = data.next_request_fail.lock().unwrap();
+            if let Some(status_code) = *lock {
+                // reset next_request_fail
+                *lock = None;
+                // don't call the `next`; override the response
+                let (req, _payload) = req.into_parts();
+                return Ok(ServiceResponse::new(
+                    req,
+                    HttpResponse::with_body(status_code, BoxBody::new("abc")),
+                ));
+            }
+        }
         {
             let mut header_map = HashMap::new();
             for (key, value) in req.headers() {
@@ -393,7 +456,7 @@ mod tests {
             let mut last_resp_headers = data.last_resp_headers.lock().unwrap();
             *last_resp_headers = Some(header_map);
         }
-        resp
+        resp.map(|resp| resp.map_body(|_head, body| BoxBody::new(body)))
     }
 
     async fn get_last_request_headers(data: web::Data<TestInterceptState>) -> impl Responder {
@@ -408,6 +471,18 @@ mod tests {
         HttpResponse::Ok().json(value)
     }
 
+    async fn make_next_request_fail(
+        data: web::Data<TestInterceptState>,
+        path: web::Path<String>,
+    ) -> impl Responder {
+        let status_code = path.into_inner();
+        let status_code = StatusCode::from_u16(u16::from_str(&status_code).unwrap()).unwrap();
+
+        let mut lock = data.next_request_fail.lock().unwrap();
+        (*lock) = Some(status_code);
+        HttpResponse::Ok().json("woot!")
+    }
+
     fn create_test_server() -> TestServer {
         let coverage_db = crate::coverage::create_test_db().unwrap();
         let factory = web::Data::new(coverage_db);
@@ -415,6 +490,7 @@ mod tests {
         let test_state = web::Data::new(TestInterceptState {
             last_req_headers: Mutex::new(None),
             last_resp_headers: Mutex::new(None),
+            next_request_fail: Mutex::new(None),
         });
         actix_test::start(move || {
             App::new()
@@ -435,6 +511,10 @@ mod tests {
                 .route(
                     "/last-response-headers",
                     web::get().to(get_last_response_headers),
+                )
+                .route(
+                    "/make-next-request-fail/{status_code}",
+                    web::get().to(make_next_request_fail),
                 )
         })
     }
@@ -632,6 +712,54 @@ mod tests {
             response_headers.get("content-encoding"),
             Some(&String::from("zstd"))
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_resilient() -> Result<()> {
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (srv, db) = create_test_db();
+
+        // Set the next request to generate a 404 error; as a 4xx class we expect that the API client will just try it
+        // once and then understand that its request is bad and not retry.
+        reqwest::get(srv.url("/make-next-request-fail/404"))
+            .await
+            .context("GET /make-next-request-fail/404")?
+            .json::<String>()
+            .await
+            .context("parsing response body for GET /make-next-request-fail/404")?;
+
+        // Make a save_coverage_data; expect failure.
+        let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
+        let result = db
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &data1, "c1", None, &[])
+            .await;
+        assert!(result.is_err(), "result = {result:?}");
+        let result = result.unwrap_err();
+        assert_eq!(
+            "database error: `remote server returned unexpected status 404 Not Found` (reading response for coverage data POST)",
+            format!("{result}")
+        );
+
+        // Set the next request to generate a 500 error; we expect this class of error to be retried transparently by
+        // the API client.
+        reqwest::get(srv.url("/make-next-request-fail/500"))
+            .await
+            .context("GET /make-next-request-fail/500")?
+            .json::<String>()
+            .await
+            .context("parsing response body for GET /make-next-request-fail/500")?;
+
+        // Make a save_coverage_data; expect failure.
+        let data1 = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
+        let result = db
+            .save_coverage_data::<RustTestPlatform>("testtrim-tests", &data1, "c1", None, &[])
+            .await;
+        assert!(result.is_ok(), "result = {result:?}");
+
+        // FIXME: create a network-level error as well for retry
 
         Ok(())
     }
