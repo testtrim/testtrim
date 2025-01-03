@@ -87,5 +87,7 @@ jobs:
               \"target_commitish\": \"$NEW_VERSION\"
             }"
 
+          rm ./this-release-notes.md
+
       - run: |
           nix develop .# --command cargo publish --no-verify --token ${{ secrets.CRATES_IO_TESTTRIM_TOKEN }}
