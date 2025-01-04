@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{Context, Result, anyhow};
-use cargo_lock::Lockfile;
+use cargo_lock::{Lockfile, Version};
 use cargo_toml::Manifest;
 use dashmap::DashSet;
 use lazy_static::lazy_static;
@@ -176,6 +176,58 @@ impl RustTestPlatform {
         }
     }
 
+    // fixme: don't take references, then we don't have to clone
+    fn diff_cargo_lock(
+        ancestor_lock: &Lockfile,
+        current_lock: &Lockfile,
+    ) -> HashSet<RustPackageDependency> {
+        let mut current_lock_map: HashMap<String, HashSet<Version>> = HashMap::new();
+        for p in &current_lock.packages {
+            current_lock_map
+                .entry(String::from(p.name.clone()))
+                .or_default()
+                .insert(p.version.clone());
+        }
+
+        let mut relevant_changes = HashSet::new();
+
+        // Cases to consider:
+        // - Packages with same version in both: Ignore.
+        // - Packages that have changed from one version to another: search for coverage data based upon old version,
+        //   add tests.
+        // - Packages that have were present in ancestor_lock and aren't in current_lock: I think also search and add
+        //   those tests?
+        // - New packages in current_lock that aren't in ancestor_lock aren't relevant -- they wouldn't be part of the
+        //   ancestor's coverage data.
+
+        for old in &ancestor_lock.packages {
+            let relevant_change =
+                if let Some(current_versions) = current_lock_map.get(old.name.as_str()) {
+                    if current_versions.contains(&old.version) {
+                        false
+                    } else {
+                        trace!(
+                            "Cargo.lock package changed {}, old: {}, current: {:?}",
+                            old.name, old.version, current_versions
+                        );
+                        true
+                    }
+                } else {
+                    trace!("Cargo.lock package removed {}", old.name);
+                    true
+                };
+
+            if relevant_change {
+                relevant_changes.insert(RustPackageDependency {
+                    package_name: String::from(old.name.as_str()),
+                    version: old.version.to_string(),
+                });
+            }
+        }
+
+        relevant_changes
+    }
+
     fn rust_cargo_deps_test_cases<Commit: ScmCommit, MyScm: Scm<Commit>>(
         eval_target_test_cases: &HashSet<RustTestIdentifier>,
         scm: &MyScm,
@@ -191,65 +243,30 @@ impl RustTestPlatform {
         let ancestor_lock = scm.fetch_file_content(ancestor_commit, Path::new("Cargo.lock"))?;
         let ancestor_lock = String::from_utf8(ancestor_lock)?;
         let ancestor_lock = Lockfile::from_str(&ancestor_lock)?;
-
-        // FIXME: This doesn't handle the fact that Cargo.lock could have multiple versions of the same dependency...
-        // not sure what to do in that case...
         let current_lock = Lockfile::load("Cargo.lock")?;
-        let mut current_lock_map = HashMap::new();
-        for p in current_lock.packages {
-            current_lock_map.insert(String::from(p.name), p.version);
-        }
 
-        // Cases to consider:
-        // - Packages with same version in both: Ignore.
-        // - Packages that have changed from one version to another: search for coverage data based upon old version,
-        //   add tests.
-        // - Packages that have were present in ancestor_lock and aren't in current_lock: I think also search and add
-        //   those tests?
-        // - New packages in current_lock that aren't in ancestor_lock aren't relevant -- they wouldn't be part of the
-        //   ancestor's coverage data.
+        let relevant_changes = Self::diff_cargo_lock(&ancestor_lock, &current_lock);
 
         let mut changed_external_dependencies = 0;
-        for old in ancestor_lock.packages {
-            let relevant_change =
-                if let Some(current_version) = current_lock_map.get(old.name.as_str()) {
-                    if *current_version == old.version {
-                        false
-                    } else {
-                        trace!(
-                            "Cargo.lock package changed {}, old: {}, current: {}",
-                            old.name, old.version, current_version
-                        );
-                        true
-                    }
-                } else {
-                    trace!("Cargo.lock package removed {}", old.name);
-                    true
-                };
+        for relevant_change in relevant_changes {
+            info!(
+                "Change to dependency {}; will run all tests that touched it",
+                relevant_change.package_name
+            );
+            changed_external_dependencies += 1;
+            let coverage_identifier = RustCoverageIdentifier::PackageDependency(relevant_change);
 
-            if relevant_change {
-                info!(
-                    "Change to dependency {}; will run all tests that touched it",
-                    old.name
-                );
-                changed_external_dependencies += 1;
-                let coverage_identifier =
-                    RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-                        package_name: String::from(old.name.as_str()),
-                        version: old.version.to_string(),
-                    });
-
-                if let Some(tests) = coverage_data
-                    .coverage_identifier_to_test_map()
-                    .get(&coverage_identifier)
-                {
-                    for test in tests {
-                        if eval_target_test_cases.contains(test) {
-                            debug!("test {test:?} needs rerun");
-                            test_cases.entry(test.clone()).or_default().insert(
-                                TestReason::CoverageIdentifier(coverage_identifier.clone()),
-                            );
-                        }
+            if let Some(tests) = coverage_data
+                .coverage_identifier_to_test_map()
+                .get(&coverage_identifier)
+            {
+                for test in tests {
+                    if eval_target_test_cases.contains(test) {
+                        debug!("test {test:?} needs rerun");
+                        test_cases
+                            .entry(test.clone())
+                            .or_default()
+                            .insert(TestReason::CoverageIdentifier(coverage_identifier.clone()));
                     }
                 }
             }
@@ -446,9 +463,9 @@ impl RustTestPlatform {
                 }
             } else {
                 // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
-                // the coverage library can't fetch data about it (eg. the else path)... it might (should?) never
-                // happen, so let's log a warning.
-                warn!("coverage point {point:?} could not be found in the coverage library");
+                // the coverage library can't fetch data about it.  It seems to occur routinely but I haven't identified
+                // any functional problem from it.  I'm going to low-level log this until a noticeable problem arises...
+                trace!("coverage point {point:?} could not be found in the coverage library");
             }
         }
 
@@ -829,11 +846,17 @@ fn parse_cargo_package(path: &OsStr) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, ffi::OsStr, path::PathBuf};
+    use std::{collections::HashSet, ffi::OsStr, path::PathBuf, str::FromStr};
+
+    use anyhow::Result;
+    use cargo_lock::Lockfile;
 
     use crate::{
         coverage::commit_coverage_data::CommitCoverageData,
-        platform::{TestPlatform, rust::RustTestPlatform},
+        platform::{
+            TestPlatform,
+            rust::{RustPackageDependency, RustTestPlatform},
+        },
     };
 
     use super::parse_cargo_package;
@@ -914,5 +937,37 @@ mod tests {
                 .unwrap()
                 .contains(&PathBuf::from("tests/test_data/Factorial_Vec.txt"))
         );
+    }
+
+    #[test]
+    fn cargo_lock_equal() -> Result<()> {
+        let lock = Lockfile::from_str(include_str!("../../tests/test_data/Cargo-newer.lock"))?;
+        let relevant_changes = RustTestPlatform::diff_cargo_lock(&lock, &lock);
+        assert_eq!(
+            relevant_changes.len(),
+            0,
+            "checking no changes in the same file, but was: {relevant_changes:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cargo_lock_updated() -> Result<()> {
+        let ancestor_lock =
+            Lockfile::from_str(include_str!("../../tests/test_data/Cargo-older.lock"))?;
+        let current_lock =
+            Lockfile::from_str(include_str!("../../tests/test_data/Cargo-newer.lock"))?;
+        let mut relevant_changes = RustTestPlatform::diff_cargo_lock(&ancestor_lock, &current_lock);
+        println!("relevant_changes: {relevant_changes:?}");
+        assert_eq!(relevant_changes.len(), 2);
+        assert!(relevant_changes.remove(&RustPackageDependency {
+            package_name: String::from("reqwest"),
+            version: String::from("0.12.11")
+        }));
+        assert!(relevant_changes.remove(&RustPackageDependency {
+            package_name: String::from("testtrim"),
+            version: String::from("0.6.6")
+        }));
+        Ok(())
     }
 }
