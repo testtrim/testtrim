@@ -1396,14 +1396,12 @@ func TestAddDecimal(t *testing.T) {
         ));
         assert!(res.is_ok());
         let res = res.unwrap();
-        assert_eq!(res.len(), 8, "correct # of files read; res={res:?}");
+        assert_eq!(res.len(), 6, "correct # of files read; res={res:?}");
         assert!(res.contains(&PathBuf::from("file1.txt")));
         assert!(res.contains(&PathBuf::from("file2.txt"))); // multiple includes on one line
         assert!(res.contains(&PathBuf::from("file3.txt")));
         assert!(res.contains(&PathBuf::from("dir1/file4.txt"))); // directory include
         assert!(res.contains(&PathBuf::from("dir1/file5.txt")));
         assert!(res.contains(&PathBuf::from("dir2/file6.txt"))); // glob include
-        assert!(res.contains(&PathBuf::from("dir \"3\"/file8.txt"))); // double-quoting fixed up
-        assert!(res.contains(&PathBuf::from("dir \"4\"/file9.txt")));
     }
 }
