@@ -104,9 +104,12 @@ pub struct DieselCoverageDatabase {
 
 impl DieselCoverageDatabase {
     pub fn new_sqlite_from_default_url() -> Result<DieselCoverageDatabase, DefaultDatabaseError> {
-        let target = match env::var("XDG_CACHE_HOME") {
-            Ok(xdg) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
-            Err(_) => Path::new(&env::var("HOME")?)
+        let target = match (env::var("XDG_CACHE_HOME"), env::var("LOCALAPPDATA")) {
+            (Ok(xdg), _) => Path::new(&xdg).join("testtrim").join("testtrim.db"),
+            (Err(_), Ok(localappdata)) => Path::new(&localappdata)
+                .join("testtrim")
+                .join("testtrim.db"),
+            (Err(_), Err(_)) => Path::new(&env::var("HOME")?)
                 .join(".cache")
                 .join("testtrim")
                 .join("testtrim.db"),

@@ -562,7 +562,8 @@ impl RustTestPlatform {
             .context("Failed to create coverage directory")?;
 
         let profile_file = coverage_dir
-            .join(&test_case.test_identifier.test_name)
+            // FIXME: ':' -> '_' is because ':' isn't supported in Windows paths; this is an incomplete support of restricted filenames
+            .join(test_case.test_identifier.test_name.replace(':', "_"))
             .with_extension("profraw");
         let strace_file = coverage_dir
             .join(&test_case.test_identifier.test_name)

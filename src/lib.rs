@@ -19,6 +19,7 @@ pub mod cmd;
 pub mod coverage;
 pub mod errors;
 mod network;
+#[cfg(target_family = "unix")]
 mod nsncd;
 pub mod platform;
 mod repo_config;

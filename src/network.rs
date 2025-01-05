@@ -9,15 +9,18 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+#[cfg(target_family = "unix")]
+use anyhow::anyhow;
 use ipnet::IpNet;
 use log::{debug, trace, warn};
 use regex::Regex;
 use serde::Deserialize;
 
+#[cfg(target_family = "unix")]
+use crate::nsncd::parse_nscd_interchange;
 use crate::{
     coverage::full_coverage_data::FullCoverageData,
-    nsncd::parse_nscd_interchange,
     platform::{TestPlatform, TestReason},
     sys_trace::trace::{
         ResolvedSocketAddr, SocketCapture, SocketCaptureState, SocketOperation, UnifiedSocketAddr,
@@ -302,12 +305,15 @@ pub fn analyze_socket_captures(
     let mut retval = HashMap::new();
 
     for capture in socket_captures {
-        let result = analyze_nscd(capture, &mut retval)?;
-        if let DnsCaptureAnalysisResult::IncompleteCapture = result {
-            warn!(
-                "network stream to {:?} was not fully captured, preventing nscd protocol decode for DNS analysis",
-                capture.socket_addr
-            );
+        #[cfg(target_family = "unix")]
+        {
+            let result = analyze_nscd(capture, &mut retval)?;
+            if let DnsCaptureAnalysisResult::IncompleteCapture = result {
+                warn!(
+                    "network stream to {:?} was not fully captured, preventing nscd protocol decode for DNS analysis",
+                    capture.socket_addr
+                );
+            }
         }
 
         let result = analyze_dns(capture, &mut retval)?;
@@ -381,6 +387,7 @@ fn consolidate_chunks(operations: &[SocketOperation]) -> Vec<SocketOperation> {
     retval
 }
 
+#[cfg(target_family = "unix")]
 fn analyze_nscd(
     socket_capture: &SocketCapture,
     dns_resolutions: &mut HashMap<IpAddr, HashSet<String>>,
