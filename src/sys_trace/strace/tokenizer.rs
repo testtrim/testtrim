@@ -5,13 +5,11 @@
 use std::cell::OnceCell;
 
 use anyhow::{Result, anyhow};
-use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, take_until1, take_while, take_while_m_n, take_while1};
-use nom::character::complete::{self, digit1, hex_digit1, multispace1, none_of, one_of};
-use nom::combinator::{map, map_res, opt, recognize, value, verify};
-use nom::multi::{fold_many0, many0, separated_list0};
-use nom::sequence::{delimited, preceded, tuple};
-use nom::{IResult, Parser as _};
+use winnow::ascii::{dec_int, digit1, hex_digit1, multispace1};
+use winnow::combinator::{alt, delimited, opt, preceded, repeat, rest, separated};
+use winnow::token::{literal, none_of, one_of, take_until};
+use winnow::token::{take_till, take_while};
+use winnow::{PResult, Parser};
 
 #[derive(Debug, PartialEq)]
 pub struct EncodedString<'a> {
@@ -28,8 +26,9 @@ impl<'a> EncodedString<'a> {
     }
 
     fn do_decode(&self) -> Vec<u8> {
-        match parse_encoded_string(self.encoded) {
-            Ok((_rem, vec)) => vec,
+        let mut tmp_ref = self.encoded;
+        match parse_encoded_string(&mut tmp_ref) {
+            Ok(vec) => vec,
             Err(_) => unreachable!(
                 "parse_encoded_string must not be able to fail for a string in EncodedString; encoded was: {:?}",
                 self.encoded
@@ -131,9 +130,9 @@ pub struct SignalRecv<'a> {
     pub signal: &'a str,
 }
 
-pub fn tokenize(input: &str) -> Result<TokenizerOutput<'_>> {
+pub fn tokenize<'i>(input: &mut &'i str) -> Result<TokenizerOutput<'i>> {
     match internal_tokenize(input) {
-        Ok((input, function_call)) => {
+        Ok(function_call) => {
             if input.is_empty() {
                 Ok(function_call)
             } else {
@@ -146,41 +145,41 @@ pub fn tokenize(input: &str) -> Result<TokenizerOutput<'_>> {
     }
 }
 
-fn internal_tokenize(input: &str) -> IResult<&str, TokenizerOutput<'_>> {
+fn internal_tokenize<'i>(input: &mut &'i str) -> PResult<TokenizerOutput<'i>> {
     alt((
-        map(parse_syscall, TokenizerOutput::Syscall),
-        map(parse_proc_exit, TokenizerOutput::Exit),
-        map(parse_proc_killed, TokenizerOutput::Exit),
-        map(parse_signal, TokenizerOutput::Signal),
+        Parser::map(parse_syscall, TokenizerOutput::Syscall),
+        Parser::map(parse_proc_exit, TokenizerOutput::Exit),
+        Parser::map(parse_proc_killed, TokenizerOutput::Exit),
+        Parser::map(parse_signal, TokenizerOutput::Signal),
     ))
-    .parse(input)
+    .parse_next(input)
 }
 
-fn parse_proc_exit(input: &str) -> IResult<&str, ProcessExit<'_>> {
-    let (input, _) = tag("+++ exited with ")(input)?;
-    let (input, exit_code) = digit1(input)?;
-    let (input, _) = tag(" +++")(input)?;
-    Ok((input, ProcessExit { exit_code }))
+fn parse_proc_exit<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
+    let _ = literal("+++ exited with ").parse_next(input)?;
+    let exit_code = digit1(input)?;
+    let _ = literal(" +++").parse_next(input)?;
+    Ok(ProcessExit { exit_code })
 }
 
-fn parse_proc_killed(input: &str) -> IResult<&str, ProcessExit<'_>> {
-    let (input, _) = tag("+++ killed by SIGKILL +++")(input)?;
-    Ok((input, ProcessExit { exit_code: "-1" }))
+fn parse_proc_killed<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
+    let _ = literal("+++ killed by SIGKILL +++").parse_next(input)?;
+    Ok(ProcessExit { exit_code: "-1" })
 }
 
-fn parse_signal(input: &str) -> IResult<&str, SignalRecv<'_>> {
-    let (input, _) = tag("---")(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    let (input, signal) = take_while1(|c: char| c.is_ascii_uppercase())(input)?;
+fn parse_signal<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+    let _ = literal("---").parse_next(input)?;
+    let _ = consume_whitespace(input)?;
+    let signal = take_while(1.., |c: char| c.is_ascii_uppercase()).parse_next(input)?;
     // pretty lazy here but we don't do anything with signals yet, and may never
-    let (input, _) = take_while(|_| true)(input)?;
-    Ok((input, SignalRecv { signal }))
+    let _ = take_while(0.., |_| true).parse_next(input)?;
+    Ok(SignalRecv { signal })
 }
 
 #[cfg(test)]
-fn tokenize_syscall(input: &str) -> Result<SyscallSegment<'_>> {
+fn tokenize_syscall<'i>(input: &mut &'i str) -> Result<SyscallSegment<'i>> {
     match parse_syscall(input) {
-        Ok((input, function_call)) => {
+        Ok(function_call) => {
             if input.is_empty() {
                 Ok(function_call)
             } else {
@@ -193,8 +192,8 @@ fn tokenize_syscall(input: &str) -> Result<SyscallSegment<'_>> {
     }
 }
 
-fn parse_syscall(input: &str) -> IResult<&str, SyscallSegment<'_>> {
-    let (input, line_type) = parse_line_type(input)?;
+fn parse_syscall<'i>(input: &mut &'i str) -> PResult<SyscallSegment<'i>> {
+    let line_type = parse_line_type(input)?;
 
     match line_type {
         InternalLineType::Started {
@@ -206,16 +205,16 @@ fn parse_syscall(input: &str) -> IResult<&str, SyscallSegment<'_>> {
             function_name,
             arguments,
             outcome,
-        } => Ok((input, SyscallSegment {
+        } => Ok(SyscallSegment {
             function: function_name,
             arguments,
             outcome,
-        })),
-        InternalLineType::ResumedUnfinished { function_name } => Ok((input, SyscallSegment {
+        }),
+        InternalLineType::ResumedUnfinished { function_name } => Ok(SyscallSegment {
             function: function_name,
             arguments: Vec::new(),
             outcome: CallOutcome::ResumedUnfinished,
-        })),
+        }),
     }
 }
 
@@ -235,112 +234,116 @@ enum InternalLineType<'a> {
     },
 }
 
-fn parse_line_type(input: &str) -> IResult<&str, InternalLineType> {
+fn parse_line_type<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
     alt((
         parse_started_call,
         parse_resumed_call,
         parse_resumed_unfinished_call,
-    ))(input)
+    ))
+    .parse_next(input)
 }
 
-fn parse_started_call(input: &str) -> IResult<&str, InternalLineType> {
-    let (input, function_name) = parse_function_name(input)?;
-    let (input, _) = tag("(")(input)?;
-    let (input, arguments) = separated_list0(tag(", "), parse_argument)(input)?;
-    let (input, outcome) = parse_started_call_outcome(input)?;
-    Ok((input, InternalLineType::Started {
+fn parse_started_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+    let function_name = parse_function_name(input)?;
+    let _ = literal("(").parse_next(input)?;
+    let arguments = separated(0.., parse_argument, literal(", ")).parse_next(input)?;
+    let outcome = parse_started_call_outcome(input)?;
+    Ok(InternalLineType::Started {
         function_name,
         arguments,
         outcome,
-    }))
+    })
 }
 
-fn parse_resumed_call(input: &str) -> IResult<&str, InternalLineType> {
-    let (input, _) = tag("<... ")(input)?;
-    let (input, function_name) = parse_function_name(input)?;
-    let (input, _) = tag(" resumed>")(input)?;
-    let (input, _) = opt(tag(", "))(input)?; // sometimes "resumed>, ", somtimes straight into args -- can't quite see why it would be one or the other right now
-    let (input, resumed) = opt(tuple((parse_written_structure_resumed, opt(tag(", ")))))(input)?;
-    let (input, mut arguments) = separated_list0(tag(", "), parse_argument)(input)?;
+fn parse_resumed_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+    let _ = literal("<... ").parse_next(input)?;
+    let function_name = parse_function_name(input)?;
+    let _ = literal(" resumed>").parse_next(input)?;
+    let _ = opt(literal(", ")).parse_next(input)?; // sometimes "resumed>, ", somtimes straight into args -- can't quite see why it would be one or the other right now
+    let resumed = opt((parse_written_structure_resumed, opt(literal(", ")))).parse_next(input)?;
+    let mut arguments: Vec<Argument> =
+        separated(0.., parse_argument, literal(", ")).parse_next(input)?;
     if let Some((resumed_arg, _)) = resumed {
         // handles uncommon case of a structure write after a resumed; don't love inserting into the head of a vec but
         // it's probably OK given the rarity.
         // 15615 <... clone3 resumed> => {parent_tid=[0]}, 88) = 15620
         arguments.insert(0, resumed_arg);
     }
-    let (input, outcome) = parse_complete_outcome(input)?;
+    let outcome = parse_complete_outcome(input)?;
     let outcome = match outcome {
         CallOutcome::Complete { retval } => CallOutcome::Resumed { retval },
         CallOutcome::ResumedUnfinished => CallOutcome::ResumedUnfinished,
         _ => unreachable!(),
     };
-    Ok((input, InternalLineType::Resumed {
+    Ok(InternalLineType::Resumed {
         function_name,
         arguments,
         outcome,
-    }))
+    })
 }
 
-fn parse_resumed_unfinished_call(input: &str) -> IResult<&str, InternalLineType> {
+fn parse_resumed_unfinished_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
     alt((
         parse_terminating_process_case1,
         parse_terminating_process_case2,
         parse_terminating_process_case3,
         parse_terminating_process_case4,
-    ))(input)
+    ))
+    .parse_next(input)
 }
 
-fn parse_terminating_process_case1(input: &str) -> IResult<&str, InternalLineType> {
-    let (input, _) = tag("<... ")(input)?;
-    let (input, function_name) = parse_function_name(input)?;
-    let (input, _) = tag(" resumed>")(input)?;
-    let (input, _) = alt((
-        recognize(tuple((
+fn parse_terminating_process_case1<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+    let _ = literal("<... ").parse_next(input)?;
+    let function_name = parse_function_name(input)?;
+    let _ = literal(" resumed>").parse_next(input)?;
+    let _ = alt((
+        Parser::take((
             consume_whitespace,
-            tag("<unfinished ...>)"),
+            literal("<unfinished ...>)"),
             consume_whitespace,
-            tag("= ?"),
-        ))),
-        recognize(tuple((tag(")"), consume_whitespace, tag("= ?")))),
-    ))(input)?;
-    Ok((input, InternalLineType::ResumedUnfinished { function_name }))
+            literal("= ?"),
+        )),
+        Parser::take((literal(")"), consume_whitespace, literal("= ?"))),
+    ))
+    .parse_next(input)?;
+    Ok(InternalLineType::ResumedUnfinished { function_name })
 }
 
-fn parse_terminating_process_case2(input: &str) -> IResult<&str, InternalLineType> {
-    let (input, _) = tag("???( <unfinished ...>")(input)?;
-    Ok((input, InternalLineType::ResumedUnfinished {
+fn parse_terminating_process_case2<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+    let _ = literal("???( <unfinished ...>").parse_next(input)?;
+    Ok(InternalLineType::ResumedUnfinished {
         function_name: "???",
-    }))
+    })
 }
 
-fn parse_terminating_process_case3(input: &str) -> IResult<&str, InternalLineType> {
-    let (input, _) = tag("???()")(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    let (input, _) = tag("= ?")(input)?;
-    Ok((input, InternalLineType::ResumedUnfinished {
+fn parse_terminating_process_case3<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+    let _ = literal("???()").parse_next(input)?;
+    let _ = consume_whitespace(input)?;
+    let _ = literal("= ?").parse_next(input)?;
+    Ok(InternalLineType::ResumedUnfinished {
         function_name: "???",
-    }))
+    })
 }
 
-fn parse_terminating_process_case4(input: &str) -> IResult<&str, InternalLineType> {
-    let (input, function_name) = parse_function_name(input)?;
-    let (input, _) = tag("(")(input)?;
-    let (input, _) = separated_list0(tag(", "), parse_argument)(input)?;
-    let (input, _) = tag(", )")(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    let (input, _) = tag("= ? <unavailable>")(input)?;
-    Ok((input, InternalLineType::ResumedUnfinished { function_name }))
+fn parse_terminating_process_case4<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+    let function_name = parse_function_name(input)?;
+    let _ = literal("(").parse_next(input)?;
+    let _: Vec<Argument> = separated(0.., parse_argument, literal(", ")).parse_next(input)?;
+    let _ = literal(", )").parse_next(input)?;
+    let _ = consume_whitespace(input)?;
+    let _ = literal("= ? <unavailable>").parse_next(input)?;
+    Ok(InternalLineType::ResumedUnfinished { function_name })
 }
 
-fn consume_whitespace(input: &str) -> IResult<&str, &str> {
+fn consume_whitespace<'i>(input: &mut &'i str) -> PResult<&'i str> {
     multispace1(input)
 }
 
-fn parse_function_name(input: &str) -> IResult<&str, &str> {
-    take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)
+fn parse_function_name<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)
 }
 
-fn parse_argument(input: &str) -> IResult<&str, Argument<'_>> {
+fn parse_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
     alt((
         parse_named_argument,
         parse_null_argument,
@@ -352,233 +355,258 @@ fn parse_argument(input: &str) -> IResult<&str, Argument<'_>> {
         parse_string_argument,
         parse_written_structure_argument,
         parse_structure_argument,
-    ))(input)
+    ))
+    .parse_next(input)
 }
 
-fn parse_named_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, name) = take_while1(|c: char| c.is_ascii_lowercase() || c == '_')(input)?;
-    let (input, _) = tag("=")(input)?;
-    let (input, arg) = parse_argument(input)?;
-    Ok((input, Argument::Named(name, Box::new(arg))))
+fn parse_named_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let name = take_while(1.., |c: char| c.is_ascii_lowercase() || c == '_').parse_next(input)?;
+    let _ = literal("=").parse_next(input)?;
+    let arg = parse_argument(input)?;
+    Ok(Argument::Named(name, Box::new(arg)))
 }
 
-fn parse_null_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, _) = tag("NULL")(input)?;
-    Ok((input, Argument::Null))
+fn parse_null_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let _ = literal("NULL").parse_next(input)?;
+    Ok(Argument::Null)
 }
 
-fn parse_enum_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, arg) = recognize(tuple((
-        one_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
-        take_while1(|c: char| c.is_ascii_uppercase() || c == '_' || c == '|' || c.is_numeric()),
-    )))(input)?;
-    Ok((input, Argument::Enum(arg)))
+fn parse_enum_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let arg = (
+        one_of(|c: char| c.is_ascii_uppercase()),
+        take_while(1.., |c: char| {
+            c.is_ascii_uppercase() || c == '_' || c == '|' || c.is_numeric()
+        }),
+    )
+        .take()
+        .parse_next(input)?;
+    Ok(Argument::Enum(arg))
 }
 
-fn parse_numeric_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, arg) = recognize(tuple((opt(tag("-")), digit1)))(input)?;
-    Ok((input, Argument::Numeric(arg)))
+fn parse_numeric_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let arg = (opt(literal("-")), digit1).take().parse_next(input)?;
+    Ok(Argument::Numeric(arg))
 }
 
-fn parse_string_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    // let (input, contents) = parse_string(input)?;
-    let (input, contents) = extract_encoded_string(input)?;
-    Ok((input, Argument::String(contents)))
+fn parse_string_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let contents = extract_encoded_string(input)?;
+    Ok(Argument::String(contents))
 }
 
-fn parse_partial_string_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, contents) = parse_string_argument(input)?;
-    let (input, _) = tag("...")(input)?;
+fn parse_partial_string_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let contents = parse_string_argument(input)?;
+    let _ = literal("...").parse_next(input)?;
     let Argument::String(inner_str) = contents else {
         unreachable!()
     };
-    Ok((input, Argument::PartialString(inner_str)))
+    Ok(Argument::PartialString(inner_str))
 }
 
-fn parse_pointer_with_comment_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, pointer) = recognize(tuple((tag("0x"), hex_digit1)))(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    let (input, comment) = recognize(tuple((tag("/*"), take_until1("*/"), tag("*/"))))(input)?;
-    Ok((input, Argument::PointerWithComment(pointer, comment)))
+fn parse_pointer_with_comment_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let pointer = (literal("0x"), hex_digit1).take().parse_next(input)?;
+    let _ = consume_whitespace(input)?;
+    let comment = (literal("/*"), take_until(1.., "*/"), literal("*/"))
+        .take()
+        .parse_next(input)?;
+    Ok(Argument::PointerWithComment(pointer, comment))
 }
 
-fn parse_pointer_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, something) = recognize(tuple((tag("0x"), hex_digit1)))(input)?;
-    Ok((input, Argument::Pointer(something)))
+fn parse_pointer_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let something = (literal("0x"), hex_digit1).take().parse_next(input)?;
+    Ok(Argument::Pointer(something))
 }
 
-fn parse_written_structure_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, orig_struct) = parse_structure_argument(input)?;
+fn parse_written_structure_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let orig_struct = parse_structure_argument(input)?;
     let Argument::Structure(orig_struct) = orig_struct else {
         unreachable!()
     };
-    let (input, Argument::WrittenStructureResumed(upd_struct)) =
-        parse_written_structure_resumed(input)?
+    let Argument::WrittenStructureResumed(upd_struct) = parse_written_structure_resumed(input)?
     else {
         unreachable!()
     };
-    Ok((input, Argument::WrittenStructure(orig_struct, upd_struct)))
+    Ok(Argument::WrittenStructure(orig_struct, upd_struct))
 }
 
-fn parse_written_structure_resumed(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, _) = tag(" => ")(input)?;
-    let (input, upd_struct) = parse_structure_argument(input)?;
+fn parse_written_structure_resumed<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let _ = literal(" => ").parse_next(input)?;
+    let upd_struct = parse_structure_argument(input)?;
     let Argument::Structure(upd_struct) = upd_struct else {
         unreachable!()
     };
-    Ok((input, Argument::WrittenStructureResumed(upd_struct)))
+    Ok(Argument::WrittenStructureResumed(upd_struct))
 }
 
-fn parse_structure_argument(input: &str) -> IResult<&str, Argument<'_>> {
-    let (input, structure) = alt((nested_brackets, nested_braces))(input)?;
-    Ok((input, Argument::Structure(structure)))
+fn parse_structure_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+    let structure = alt((nested_brackets, nested_braces)).parse_next(input)?;
+    Ok(Argument::Structure(structure))
 }
 
-fn nested_brackets(input: &str) -> IResult<&str, &str> {
-    recognize(delimited(
-        tag("["),
-        many0(alt((recognize(none_of("[]")), nested_brackets))),
-        tag("]"),
-    ))(input)
+fn nested_brackets<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    delimited(
+        literal("["),
+        repeat::<_, _, Vec<_>, _, _>(
+            0..,
+            alt((none_of(|c| c == '[' || c == ']').take(), nested_brackets)),
+        ),
+        literal("]"),
+    )
+    .take()
+    .parse_next(input)
 }
 
-fn nested_braces(input: &str) -> IResult<&str, &str> {
-    recognize(delimited(
-        tag("{"),
-        many0(alt((recognize(none_of("{}")), nested_braces))),
-        tag("}"),
-    ))(input)
+fn nested_braces<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    delimited(
+        literal("{"),
+        repeat::<_, _, Vec<_>, _, _>(
+            0..,
+            alt((none_of(|c| c == '{' || c == '}').take(), nested_braces)),
+        ),
+        literal("}"),
+    )
+    .take()
+    .parse_next(input)
 }
 
-fn parse_started_call_outcome(input: &str) -> IResult<&str, CallOutcome<'_>> {
-    alt((parse_complete_outcome, parse_unfinished_outcome))(input)
+fn parse_started_call_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+    alt((parse_complete_outcome, parse_unfinished_outcome)).parse_next(input)
 }
 
-fn parse_complete_outcome(input: &str) -> IResult<&str, CallOutcome<'_>> {
-    let (input, _) = tag(")")(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    let (input, _) = tag("=")(input)?;
+fn parse_complete_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+    let _ = literal(")").parse_next(input)?;
+    let _ = consume_whitespace(input)?;
+    let _ = literal("=").parse_next(input)?;
 
-    alt((parse_end_with_retval, parse_end_with_qmark))(input)
+    alt((parse_end_with_retval, parse_end_with_qmark)).parse_next(input)
 }
 
-fn parse_end_with_retval(input: &str) -> IResult<&str, CallOutcome<'_>> {
-    let (input, _) = consume_whitespace(input)?;
-    let (input, retval) = parse_retval(input)?;
-    Ok((input, CallOutcome::Complete { retval }))
+fn parse_end_with_retval<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+    let _ = consume_whitespace(input)?;
+    let retval = parse_retval(input)?;
+    Ok(CallOutcome::Complete { retval })
 }
 
-fn parse_end_with_qmark(input: &str) -> IResult<&str, CallOutcome<'_>> {
-    let (input, _) = consume_whitespace(input)?;
-    let (input, _) = tag("?")(input)?;
-    Ok((input, CallOutcome::ResumedUnfinished))
+fn parse_end_with_qmark<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+    let _ = consume_whitespace(input)?;
+    let _ = literal("?").parse_next(input)?;
+    Ok(CallOutcome::ResumedUnfinished)
 }
 
-fn parse_retval(input: &str) -> IResult<&str, Retval<'_>> {
+fn parse_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
     alt((
         parse_error_retval,
         parse_success_retval,
         parse_restart_retval,
-    ))(input)
+    ))
+    .parse_next(input)
 }
 
-fn parse_success_retval(input: &str) -> IResult<&str, Retval<'_>> {
-    let (input, arg) = complete::i32(input)?;
-    Ok((input, Retval::Success(arg)))
+fn parse_success_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+    let arg = dec_int(input)?;
+    Ok(Retval::Success(arg))
 }
 
-fn parse_error_retval(input: &str) -> IResult<&str, Retval<'_>> {
-    let (input, value) = complete::i32(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    Ok(("", Retval::Failure(value, input)))
+fn parse_error_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+    let value = dec_int(input)?;
+    let _ = consume_whitespace(input)?;
+    let err = rest(input)?;
+    Ok(Retval::Failure(value, err))
 }
 
-fn parse_restart_retval(input: &str) -> IResult<&str, Retval<'_>> {
-    let (input, _) = tag("? ")(input)?;
-    Ok(("", Retval::Restart(input)))
+fn parse_restart_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+    let _ = literal("? ").parse_next(input)?;
+    let rem = rest(input)?;
+    Ok(Retval::Restart(rem))
 }
 
-fn parse_unfinished_outcome(input: &str) -> IResult<&str, CallOutcome<'_>> {
+fn parse_unfinished_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
     // sometimes the last argument has a ",", then whitespace, then "<unfinished ...>".  Not sure why -- have observed
     // (and have test case covering) `read` doing this.
-    let (input, _) = opt(tag(","))(input)?;
-    let (input, _) = consume_whitespace(input)?;
-    let (input, _) = tag("<unfinished ...>")(input)?;
-    let (input, opt) = opt(tuple((tag(")"), consume_whitespace, tag("= ?"))))(input)?;
+    let _ = opt(literal(",")).parse_next(input)?;
+    let _ = consume_whitespace(input)?;
+    let _ = literal("<unfinished ...>").parse_next(input)?;
+    let opt = opt((literal(")"), consume_whitespace, literal("= ?"))).parse_next(input)?;
     match opt {
-        Some(_) => Ok((input, CallOutcome::ResumedUnfinished)),
-        None => Ok((input, CallOutcome::Unfinished)),
+        Some(_) => Ok(CallOutcome::ResumedUnfinished),
+        None => Ok(CallOutcome::Unfinished),
     }
 }
 
-fn extract_encoded_string(input: &str) -> IResult<&str, EncodedString<'_>> {
+fn extract_encoded_string<'i>(input: &mut &'i str) -> PResult<EncodedString<'i>> {
     // FIXME: not supporting backslash-escaped double-quotes here yet
-    let (input, matched) = delimited(
-        complete::char('"'),
-        recognize(many0(alt((extract_str_literal, extract_str_escape)))),
-        complete::char('"'),
+    let matched = delimited(
+        one_of('"'),
+        Parser::take(repeat::<_, _, Vec<_>, _, _>(
+            0..,
+            alt((extract_str_literal, extract_str_escape)),
+        )),
+        one_of('"'),
     )
-    .parse(input)?;
-    Ok((input, EncodedString::new(matched)))
+    .parse_next(input)?;
+    Ok(EncodedString::new(matched))
 }
 
 // Two string escape methods; "extract" will just return the range of the string for fast parsing, and "parse" will
 // convert to u8 when the actual data is needed.  The separation is because often the data isn't really needed.
-fn extract_str_escape(input: &str) -> IResult<&str, &str> {
-    recognize(preceded(
-        complete::char('\\'),
+fn extract_str_escape<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    preceded(
+        one_of('\\'),
         alt((
             // hex: \x00
             extract_hex_byte,
             // `man strace` -> \t, \n, \v, \f, \r are all possible
-            complete::char('t'),  // Tab
-            complete::char('n'),  // Newline
-            complete::char('v'),  // Vertical tab
-            complete::char('f'),  // form feed page break
-            complete::char('r'),  // Carriage return
-            complete::char('"'),  // Escaped double-quote
-            complete::char('\\'), // Backslash escaped
+            one_of('t'),  // Tab
+            one_of('n'),  // Newline
+            one_of('v'),  // Vertical tab
+            one_of('f'),  // form feed page break
+            one_of('r'),  // Carriage return
+            one_of('"'),  // Escaped double-quote
+            one_of('\\'), // Backslash escaped
         )),
-    ))(input)
+    )
+    .take()
+    .parse_next(input)
 }
 
 /// Parse an escaped character: \n, \t, \r, \u{00AC}, etc.
-fn parse_escaped_char(input: &str) -> IResult<&str, u8> {
+fn parse_escaped_char(input: &mut &str) -> PResult<u8> {
     preceded(
-        complete::char('\\'),
+        one_of('\\'),
         alt((
             // hex: \x00
             parse_hex_byte,
             // `man strace` -> \t, \n, \v, \f, \r are all possible
-            value(b'\t', complete::char('t')),  // Tab
-            value(b'\n', complete::char('n')),  // Newline
-            value(0x0b, complete::char('v')),   // Vertical tab
-            value(0x0c, complete::char('f')),   // form feed page break
-            value(b'\r', complete::char('r')),  // Carriage return
-            value(b'"', complete::char('"')),   // Escaped double-quote
-            value(b'\\', complete::char('\\')), // Backslash escaped
+            one_of('t').value(b'\t'),  // Tab
+            one_of('n').value(b'\n'),  // Newline
+            one_of('v').value(0x0b),   // Vertical tab
+            one_of('f').value(0x0c),   // form feed page break
+            one_of('r').value(b'\r'),  // Carriage return
+            one_of('"').value(b'"'),   // Escaped double-quote
+            one_of('\\').value(b'\\'), // Backslash escaped
         )),
     )
-    .parse(input)
+    .parse_next(input)
 }
 
-fn extract_hex_byte(input: &str) -> IResult<&str, char> {
-    let parse_hex = take_while_m_n(2, 2, |c: char| c.is_ascii_hexdigit());
-    preceded(complete::char('x'), parse_hex)
+fn extract_hex_byte(input: &mut &str) -> PResult<char> {
+    let parse_hex = take_while(2..=2, |c: char| c.is_ascii_hexdigit());
+    preceded(one_of('x'), parse_hex)
         .map(|_| ' ')
-        .parse(input)
+        .parse_next(input)
 }
 
-fn parse_hex_byte(input: &str) -> IResult<&str, u8> {
-    let parse_hex = take_while_m_n(2, 2, |c: char| c.is_ascii_hexdigit());
-    let parse_delimited_hex = preceded(complete::char('x'), parse_hex);
-    let mut parse_u8 = map_res(parse_delimited_hex, move |hex| u8::from_str_radix(hex, 16));
-    parse_u8.parse(input)
+fn parse_hex_byte(input: &mut &str) -> PResult<u8> {
+    let parse_hex = take_while(2..=2, |c: char| c.is_ascii_hexdigit());
+    let parse_delimited_hex = preceded(one_of('x'), parse_hex);
+    let mut parse_u8 = Parser::try_map(parse_delimited_hex, move |hex| u8::from_str_radix(hex, 16));
+    parse_u8.parse_next(input)
 }
 
-fn extract_str_literal(input: &str) -> IResult<&str, &str> {
-    let not_quote_slash = is_not("\"\\");
-    verify(not_quote_slash, |s: &str| !s.is_empty()).parse(input)
+fn extract_str_literal<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    let not_quote_slash = take_till(1.., |c| c == '"' || c == '\\');
+    not_quote_slash
+        .verify(|s: &str| !s.is_empty())
+        .parse_next(input)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -587,26 +615,27 @@ enum StringFragment<'a> {
     EscapedChar(u8),
 }
 
-fn parse_str_fragment(input: &str) -> IResult<&str, StringFragment<'_>> {
+fn parse_str_fragment<'i>(input: &mut &'i str) -> PResult<StringFragment<'i>> {
     alt((
-        map(extract_str_literal, StringFragment::Literal),
-        map(parse_escaped_char, StringFragment::EscapedChar),
+        Parser::map(extract_str_literal, StringFragment::Literal),
+        Parser::map(parse_escaped_char, StringFragment::EscapedChar),
     ))
-    .parse(input)
+    .parse_next(input)
 }
 
-fn parse_encoded_string(input: &str) -> IResult<&str, Vec<u8>> {
-    fold_many0(
-        parse_str_fragment,
-        || Vec::<u8>::with_capacity(input.len()), // capacity guess
-        |mut bytes, fragment| {
-            match fragment {
-                StringFragment::Literal(s) => bytes.extend(s.as_bytes()),
-                StringFragment::EscapedChar(c) => bytes.push(c),
-            }
-            bytes
-        },
-    )(input)
+fn parse_encoded_string(input: &mut &str) -> PResult<Vec<u8>> {
+    repeat(0.., parse_str_fragment)
+        .fold(
+            || Vec::<u8>::with_capacity(input.len()), // capacity guess
+            |mut bytes, fragment| {
+                match fragment {
+                    StringFragment::Literal(s) => bytes.extend(s.as_bytes()),
+                    StringFragment::EscapedChar(c) => bytes.push(c),
+                }
+                bytes
+            },
+        )
+        .parse_next(input)
 }
 
 #[cfg(test)]
@@ -625,7 +654,8 @@ mod tests {
 
     #[test]
     fn start_all_retval_states() -> Result<()> {
-        let tokenized = tokenize_syscall(r"close(3)                                = 0")?;
+        let strace = String::from(r"close(3)                                = 0");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "close",
             arguments: vec![Argument::Numeric("3")],
@@ -634,8 +664,9 @@ mod tests {
             }
         });
 
-        let tokenized =
-            tokenize_syscall(r"close(3)                        = -1 EBADF (Bad file descriptor)")?;
+        let strace =
+            String::from(r"close(3)                        = -1 EBADF (Bad file descriptor)");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "close",
             arguments: vec![Argument::Numeric("3")],
@@ -644,22 +675,25 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(r"close(17 <unfinished ...>")?;
+        let strace = String::from(r"close(17 <unfinished ...>");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "close",
             arguments: vec![Argument::Numeric("17")],
             outcome: CallOutcome::Unfinished,
         });
 
-        let tokenized = tokenize_syscall(r"read(7,  <unfinished ...>")?;
+        let strace = String::from(r"read(7,  <unfinished ...>");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![Argument::Numeric("7")],
             outcome: CallOutcome::Unfinished,
         });
 
-        let tokenized =
-            tokenize_syscall(r"close(3)                        = ? ERESTARTSYS (To be restarted)")?;
+        let strace =
+            String::from(r"close(3)                        = ? ERESTARTSYS (To be restarted)");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "close",
             arguments: vec![Argument::Numeric("3")],
@@ -671,26 +705,29 @@ mod tests {
         // The cases where I've seen this behavior -- "resumed> <unfinished...>" AND "resumed>) = ?" have both occurred
         // right before the process exited.  I'm combining both of these into one "ResumedUnfinished" state because, at
         // least for now, it doesn't seem like I need to do anything differently with them.
-        let tokenized = tokenize_syscall(r"<... read resumed> <unfinished ...>) = ?")?;
+        let strace = String::from(r"<... read resumed> <unfinished ...>) = ?");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let tokenized = tokenize_syscall(r"<... openat resumed>)           = ?")?;
+        let strace = String::from(r"<... openat resumed>)           = ?");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "openat",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let tokenized = tokenize_syscall(r"read(3,  <unfinished ...>)              = ?")?;
+        let strace = String::from(r"read(3,  <unfinished ...>)              = ?");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![Argument::Numeric("3")],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let tokenized =
-            tokenize_syscall(r"read(7, )                               = ? <unavailable>")?;
+        let strace = String::from(r"read(7, )                               = ? <unavailable>");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
@@ -701,22 +738,25 @@ mod tests {
         // Another unrecognizable mess right before a process exit.  Again since ResumedUnfinished is just suppressed at
         // the sequencer layer, I'll output it like that... but maybe "ResumedUnfinished" is just becoming "terminated
         // during process exit"?
-        let tokenized = tokenize_syscall(r"???( <unfinished ...>")?;
+        let strace = String::from(r"???( <unfinished ...>");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "???",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let tokenized = tokenize_syscall(r"???()                                   = ?")?;
+        let strace = String::from(r"???()                                   = ?");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "???",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
         // basically anything ending with a ? seems to happen at the end of a process... even a completed call?
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r#"openat(AT_FDCWD, "/proc/sys/vm/overcommit_memory", O_RDONLY|O_CLOEXEC) = ?"#,
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "openat",
             arguments: vec![
@@ -727,7 +767,8 @@ mod tests {
             outcome: CallOutcome::ResumedUnfinished
         });
 
-        let tokenized = tokenize_syscall(r"exit_group(0)                           = ?")?;
+        let strace = String::from(r"exit_group(0)                           = ?");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "exit_group",
             arguments: vec![Argument::Numeric("0"),],
@@ -739,7 +780,8 @@ mod tests {
 
     #[test]
     fn resumed_all_retval_states() -> Result<()> {
-        let tokenized = tokenize_syscall(r"<... chdir resumed>)             = 0")?;
+        let strace = String::from(r"<... chdir resumed>)             = 0");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "chdir",
             arguments: vec![],
@@ -748,9 +790,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r"<... chdir resumed>)             = -1 ENOENT (No such file or directory)",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "chdir",
             arguments: vec![],
@@ -764,7 +807,8 @@ mod tests {
 
     #[test]
     fn various_arguments() -> Result<()> {
-        let tokenized = tokenize_syscall(r#"read(3, "", 4096)               = 0"#)?;
+        let strace = String::from(r#"read(3, "", 4096)               = 0"#);
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![
@@ -777,9 +821,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r"wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WNOHANG, NULL) = 4187946",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "wait4",
             arguments: vec![
@@ -793,7 +838,8 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(r#"read(3, ""..., 4096)               = 0"#)?;
+        let strace = String::from(r#"read(3, ""..., 4096)               = 0"#);
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![
@@ -806,9 +852,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r#"sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#,
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "sendto",
             arguments: vec![
@@ -826,7 +873,8 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(r"tgkill(4143934, 4144060, SIGUSR1)       = 0")?;
+        let strace = String::from(r"tgkill(4143934, 4144060, SIGUSR1)       = 0");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "tgkill",
             arguments: vec![
@@ -839,9 +887,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             "openat(AT_FDCWD, \"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "openat",
             arguments: vec![
@@ -856,9 +905,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r"read(17, 0x7fb0f00111d6, 122)   = -1 EAGAIN (Resource temporarily unavailable)",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![
@@ -871,9 +921,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r#"connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "connect",
             arguments: vec![
@@ -886,9 +937,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r"clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "clone",
             arguments: vec![
@@ -909,9 +961,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r"clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0} => {parent_tid=[1343642]}, 88) = 1343642",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "clone3",
             arguments: vec![
@@ -926,15 +979,16 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r#"execve("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", ["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"], 0x7ffdf2244ed8 /* 218 vars */) = 0"#,
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "execve",
             arguments: vec![
                 Argument::String(EncodedString::new(
                     "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
-                ),),
+                )),
                 Argument::Structure(
                     r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#
                 ),
@@ -945,9 +999,10 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall(
+        let strace = String::from(
             r"waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
-        )?;
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "waitid",
             arguments: vec![
@@ -970,105 +1025,114 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_encoded_string() -> Result<()> {
-        let (rem, v) = extract_encoded_string("\"abc\"")?;
+    fn test_extract_encoded_string() {
+        let strace = String::from("\"abc\"");
+        let v = extract_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, EncodedString::new("abc"));
-        assert_eq!(rem, "");
-        let (rem, v) = extract_encoded_string("\"\"")?;
+        let strace = String::from("\"\"");
+        let v = extract_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, EncodedString::new(""));
-        assert_eq!(rem, "");
-        let (rem, v) = extract_encoded_string("\"abc\\\"def\"")?;
+        let strace = String::from("\"abc\\\"def\"");
+        let v = extract_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, EncodedString::new("abc\\\"def"));
-        assert_eq!(rem, "");
-        let (rem, v) = extract_encoded_string("\"abc\\x00def\"")?;
+        let strace = String::from("\"abc\\x00def\"");
+        let v = extract_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, EncodedString::new("abc\\x00def"));
-        assert_eq!(rem, "");
-        Ok(())
     }
 
     #[test]
-    fn test_parse_escaped_char() -> Result<()> {
-        let (_, v) = parse_escaped_char("\\t")?;
+    fn test_parse_escaped_char() {
+        let strace = String::from("\\t");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, b'\t');
-        let (_, v) = parse_escaped_char("\\n")?;
+        let strace = String::from("\\n");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, b'\n');
-        let (_, v) = parse_escaped_char("\\v")?;
+        let strace = String::from("\\v");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, 0x0b);
-        let (_, v) = parse_escaped_char("\\f")?;
+        let strace = String::from("\\f");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, 0x0c);
-        let (_, v) = parse_escaped_char("\\r")?;
+        let strace = String::from("\\r");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, b'\r');
-        let (_, v) = parse_escaped_char("\\\"")?;
+        let strace = String::from("\\\"");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, b'\"');
-        let (_, v) = parse_escaped_char("\\\\")?;
+        let strace = String::from("\\\\");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, b'\\');
-        let (_, v) = parse_escaped_char("\\x00")?;
+        let strace = String::from("\\x00");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, 0x00);
-        let (_, v) = parse_escaped_char("\\xFF")?;
+        let strace = String::from("\\xFF");
+        let v = parse_escaped_char(&mut strace.as_str()).unwrap();
         assert_eq!(v, 0xFF);
-        Ok(())
     }
 
     #[test]
-    fn test_parse_pointer_with_comment_argument() -> Result<()> {
-        let (rem, arg) = parse_pointer_with_comment_argument("0x7ffdf2244ed8 /* 218 vars */")?;
-        assert_eq!(rem, "");
+    fn test_parse_pointer_with_comment_argument() {
+        let strace = String::from("0x7ffdf2244ed8 /* 218 vars */");
+        let arg = parse_pointer_with_comment_argument(&mut strace.as_str()).unwrap();
         assert_eq!(
             arg,
             Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */")
         );
-        Ok(())
     }
 
     #[test]
-    fn test_nested_brackets() -> Result<()> {
-        let (_, v) = nested_brackets("[input]")?;
+    fn test_nested_brackets() {
+        let strace = String::from("[input]");
+        let v = nested_brackets(&mut strace.as_str()).unwrap();
         assert_eq!(v, "[input]");
-        let (_, v) = nested_brackets("[inp[ [abc] u]t]")?;
+        let strace = String::from("[inp[ [abc] u]t]");
+        let v = nested_brackets(&mut strace.as_str()).unwrap();
         assert_eq!(v, "[inp[ [abc] u]t]");
-        let (_, v) = nested_brackets("[inp]ut")?;
+        let strace = String::from("[inp]ut");
+        let v = nested_brackets(&mut strace.as_str()).unwrap();
         assert_eq!(v, "[inp]");
-        Ok(())
     }
 
     #[test]
-    fn test_nested_braces() -> Result<()> {
-        let (_, v) = nested_braces("{input}")?;
+    fn test_nested_braces() {
+        let strace = String::from("{input}");
+        let v = nested_braces(&mut strace.as_str()).unwrap();
         assert_eq!(v, "{input}");
-        let (_, v) = nested_braces("{inp{ {abc} u}t}")?;
+        let strace = String::from("{inp{ {abc} u}t}");
+        let v = nested_braces(&mut strace.as_str()).unwrap();
         assert_eq!(v, "{inp{ {abc} u}t}");
-        let (_, v) = nested_braces("{inp}ut")?;
+        let strace = String::from("{inp}ut");
+        let v = nested_braces(&mut strace.as_str()).unwrap();
         assert_eq!(v, "{inp}");
-        Ok(())
     }
 
     #[test]
-    fn test_parse_encoded_string() -> Result<()> {
-        let (rem, v) = parse_encoded_string("abc")?;
+    fn test_parse_encoded_string() {
+        let strace = String::from("abc");
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, Vec::from(b"abc"));
-        assert_eq!(rem, "");
-        let (rem, v) = parse_encoded_string("")?;
+        let strace = String::new();
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, Vec::from(b""));
-        assert_eq!(rem, "");
-        let (rem, v) = parse_encoded_string("abc\\\"def")?;
+        let strace = String::from("abc\\\"def");
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, Vec::from(b"abc\"def"));
-        assert_eq!(rem, "");
-        let (rem, v) = parse_encoded_string("abc\\x00def")?;
+        let strace = String::from("abc\\x00def");
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, Vec::from(b"abc\x00def"));
-        assert_eq!(rem, "");
-        let (rem, v) = parse_encoded_string("Hello!")?;
+        let strace = String::from("Hello!");
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, vec![72, 101, 108, 108, 111, 33]);
-        assert_eq!(rem, "");
-        let (rem, v) = parse_encoded_string("\\x00\\x01\\xFF")?;
+        let strace = String::from("\\x00\\x01\\xFF");
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, vec![0, 1, 255]);
-        assert_eq!(rem, "");
-        let (rem, v) = parse_encoded_string(" dquote: \\\"  more text")?;
+        let strace = String::from(" dquote: \\\"  more text");
+        let v = parse_encoded_string(&mut strace.as_str()).unwrap();
         assert_eq!(v, vec![
             32, 100, 113, 117, 111, 116, 101, 58, 32, 34, 32, 32, 109, 111, 114, 101, 32, 116, 101,
             120, 116
         ]);
-        assert_eq!(rem, "");
-        Ok(())
     }
 
     #[test]
@@ -1084,7 +1148,9 @@ mod tests {
 
     #[test]
     fn test_resumed_addt_arguments() -> Result<()> {
-        let tokenized = tokenize_syscall(r#"<... read resumed>"abc"..., 1140) = 792"#)?;
+        let strace = String::from(r#"<... read resumed>"abc"..., 1140) = 792"#);
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+
         assert_eq!(tokenized, SyscallSegment {
             function: "read",
             arguments: vec![
@@ -1096,8 +1162,8 @@ mod tests {
             }
         });
 
-        let tokenized =
-            tokenize_syscall("<... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654")?;
+        let strace = String::from("<... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             function: "clone",
             arguments: vec![Argument::Named(
@@ -1109,7 +1175,9 @@ mod tests {
             }
         });
 
-        let tokenized = tokenize_syscall("<... clone3 resumed> => {parent_tid=[0]}, 88) = 15620")?;
+        let strace = String::from("<... clone3 resumed> => {parent_tid=[0]}, 88) = 15620");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+
         assert_eq!(tokenized, SyscallSegment {
             function: "clone3",
             arguments: vec![
@@ -1125,39 +1193,39 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_proc_exit() -> Result<()> {
-        let (rem, exit) = parse_proc_exit("+++ exited with 0 +++")?;
-        assert_eq!(rem, "");
+    fn test_parse_proc_exit() {
+        let strace = String::from("+++ exited with 0 +++");
+        let exit = parse_proc_exit(&mut strace.as_str()).unwrap();
         assert_eq!(exit, ProcessExit { exit_code: "0" });
-        Ok(())
     }
 
     #[test]
-    fn test_parse_proc_killed() -> Result<()> {
-        let (rem, exit) = parse_proc_killed("+++ killed by SIGKILL +++")?;
-        assert_eq!(rem, "");
+    fn test_parse_proc_killed() {
+        let strace = String::from("+++ killed by SIGKILL +++");
+        let exit = parse_proc_killed(&mut strace.as_str()).unwrap();
         assert_eq!(exit, ProcessExit { exit_code: "-1" });
-        Ok(())
     }
 
     #[test]
-    fn test_parse_signal() -> Result<()> {
-        let (rem, exit) = parse_signal(
+    fn test_parse_signal() {
+        let strace = String::from(
             "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
-        )?;
-        assert_eq!(rem, "");
+        );
+        let exit = parse_signal(&mut strace.as_str()).unwrap();
         assert_eq!(exit, SignalRecv { signal: "SIGCHLD" });
-        Ok(())
     }
 
     #[test]
-    fn test_parse_all_results() -> Result<()> {
-        let res = tokenize("+++ exited with 0 +++")?;
+    fn test_parse_all_results() {
+        let strace = String::from("+++ exited with 0 +++");
+        let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(res, TokenizerOutput::Exit(ProcessExit { exit_code: "0" }));
-        let res = tokenize("+++ killed by SIGKILL +++")?;
+        let strace = String::from("+++ killed by SIGKILL +++");
+        let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(res, TokenizerOutput::Exit(ProcessExit { exit_code: "-1" }));
 
-        let res = tokenize(r"close(3)                        = 0")?;
+        let strace = String::from(r"close(3)                        = 0");
+        let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(
             res,
             TokenizerOutput::Syscall(SyscallSegment {
@@ -1168,22 +1236,24 @@ mod tests {
                 }
             })
         );
-        let res = tokenize("+++ exited with 0 ++");
+        let strace = String::from("+++ exited with 0 ++");
+        let res = tokenize(&mut strace.as_str());
         assert!(res.is_err());
-        let res = tokenize(
+        let strace = String::from(
             "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
-        )?;
+        );
+        let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(
             res,
             TokenizerOutput::Signal(SignalRecv { signal: "SIGCHLD" })
         );
-        let res = tokenize(
+        let strace = String::from(
             "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=9564, si_uid=0, si_status=0, si_utime=2 /* 0.02 s */, si_stime=4 /* 0.04 s */} ---",
-        )?;
+        );
+        let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(
             res,
             TokenizerOutput::Signal(SignalRecv { signal: "SIGCHLD" })
         );
-        Ok(())
     }
 }

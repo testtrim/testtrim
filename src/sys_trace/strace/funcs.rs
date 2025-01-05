@@ -135,7 +135,8 @@ impl FunctionExtractor {
     }
 
     pub fn extract<'a>(&mut self, input: &'a str) -> Result<Option<FunctionTrace<'a>>> {
-        let trace_output = tokenize(input)?;
+        let mut my_input = input;
+        let trace_output = tokenize(&mut my_input)?;
         // let Some(trace_output) = trace_output else {
         //     return Ok(None);
         // };

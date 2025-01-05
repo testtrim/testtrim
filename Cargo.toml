@@ -35,7 +35,6 @@ lazy_static = "1.5.0"
 llvm_profparser = "0.7.0"
 log = "0.4.22"
 nix = { version = "^0.29.0", features = ["socket", "user"]}
-nom = "7.1.3"
 num_cpus = "1.16.0"
 num-derive = "0.4.2"
 num-traits = "^0.2"
@@ -56,10 +55,8 @@ toml = "0.8.19"
 tracing = "0.1.41"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["v4"] }
+winnow = "0.6"
 
 [dev-dependencies]
 actix-test = "0.1.5"
 named-lock = "0.4.1"
-
-[profile.dev.package.sqlx-macros]
-opt-level = 3
