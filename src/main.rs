@@ -56,6 +56,17 @@ fn main() -> Result<()> {
 
             // sync with exec
             let _ = wait()?;
+
+            // Note: I considered, at one point, splitting the tracer into multiple threads so that each thread could
+            // trace one subprocess.  The thought was that this would allow multiple processes to be suspended
+            // simultaneously without blocking on each other by being part of the same "wait" syscall.  However, the
+            // kernel maps the tracer process and the tracee process, and you can't make any tracing syscalls from
+            // another pid (eg. another thread).  It would still be theoretically possible to do this if we could avoid
+            // using P_TRACE_O_TRACE{FORK/VFORK/CLONE} which automatically attaches to the same process -- but I'm not
+            // sure if there's another feasible way to trace subprocesses (intercept syscalls and PTRACE_ME within the
+            // new processes somehow?).  Anyway, we'll have to just maximize efficiency in other means, as there's no
+            // reason to believe this would have worked well anyway -- the context switches would've still been present
+            // (or worse).
             ptrace::setoptions(
                 original_child,
                 ptrace::Options::PTRACE_O_TRACESYSGOOD
@@ -96,12 +107,6 @@ fn main() -> Result<()> {
                         println!("[PARENT]: PtraceEvent other {child_pid:?}, {signal:?}, {e:?}");
                         ptrace::syscall(child_pid, None)?; // allow child to continue
                     }
-                    // WaitStatus::PtraceFork(pid, child_pid) |
-                    // WaitStatus::PtraceClone(pid, child_pid) |
-                    // WaitStatus::PtraceVfork(pid, child_pid) => {
-                    //     println!("New process spawned: {} -> {}", pid, child_pid);
-                    //     traced_pids.insert(child_pid);
-                    // }
                     WaitStatus::Exited(pid, _) => {
                         println!("[PARENT]: Child {pid} exited");
                         if !traced_pids.remove(&pid) {
