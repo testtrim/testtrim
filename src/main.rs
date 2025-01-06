@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{os::fd::AsRawFd as _, process::ExitCode};
+use std::{collections::{HashMap, HashSet}, os::fd::AsRawFd as _, process::ExitCode};
 
 use anyhow::Result;
-use nix::libc::PTRACE_O_EXITKILL;
+use nix::{libc::{PTRACE_EVENT_CLONE, PTRACE_EVENT_FORK, PTRACE_EVENT_VFORK, PTRACE_O_EXITKILL, SIGTRAP}, sys::signal::Signal, unistd::Pid};
 use testtrim::cmd::cli::run_cli;
 
 // #[tokio::main]
@@ -13,21 +13,20 @@ use testtrim::cmd::cli::run_cli;
 //     run_cli().await
 // }
 
-
-
 // #[test]
+// #[tokio::main]
 fn main() -> Result<()> {
     use nix::sys::ptrace;
-    use nix::sys::wait::{wait, WaitStatus};
-    use nix::unistd::{close, fork, pipe, read, ForkResult};
+    use nix::sys::wait::{WaitStatus, wait};
+    use nix::unistd::{ForkResult, close, fork, pipe, read};
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let (read_fd, write_fd) = pipe()?;
 
     match unsafe { fork()? } {
-        ForkResult::Parent { child } => {
-            println!("[PARENT]: Parent process tracing child PID: {}", child);
+        ForkResult::Parent { child: original_child } => {
+            println!("[PARENT]: Parent process tracing child PID: {}", original_child);
 
             // Close write end in parent
             drop(write_fd);
@@ -57,7 +56,19 @@ fn main() -> Result<()> {
 
             // sync with exec
             let _ = wait()?;
-            ptrace::setoptions(child, ptrace::Options::PTRACE_O_EXITKILL)?;
+            ptrace::setoptions(
+                original_child,
+                ptrace::Options::PTRACE_O_TRACESYSGOOD
+                | ptrace::Options::PTRACE_O_TRACEEXIT
+                | ptrace::Options::PTRACE_O_TRACEEXEC
+                | ptrace::Options::PTRACE_O_TRACEFORK
+                | ptrace::Options::PTRACE_O_TRACEVFORK
+                | ptrace::Options::PTRACE_O_TRACECLONE
+            )?;
+            ptrace::syscall(original_child, None)?; // restart after setting options
+
+            let mut traced_pids = HashSet::new();
+            traced_pids.insert(original_child);
 
             // // Wait for child to be ready for tracing
             // match wait()? {
@@ -67,32 +78,79 @@ fn main() -> Result<()> {
             //     _ => panic!("Unexpected wait status"),
             // }
 
-            let mut in_syscall = false;
+            // let mut in_syscall = false;
+            let mut in_syscall: HashMap<Pid, bool> = HashMap::new();
+            // in_syscall.insert(original_child, false);
 
             // Main tracing loop
             loop {
-                // Restart the child and stop at the next syscall
-                ptrace::syscall(child, None)?;
-
                 match wait()? {
-                    WaitStatus::Exited(_, _) => {
-                        println!("[PARENT]: Child exited");
-                        break;
+                    WaitStatus::PtraceEvent(child_pid, _signal, e @ PTRACE_EVENT_FORK)
+                    | WaitStatus::PtraceEvent(child_pid, _signal, e @ PTRACE_EVENT_CLONE)
+                    | WaitStatus::PtraceEvent(child_pid, _signal, e @ PTRACE_EVENT_VFORK) => {
+                        println!("[PARENT]: New child: ({}, {})", child_pid, e);
+                        traced_pids.insert(child_pid);
+                        ptrace::syscall(child_pid, None)?; // allow child to continue
                     }
-                    WaitStatus::Stopped(pid, _signal) => {
-                        if !in_syscall {
+                    WaitStatus::PtraceEvent(child_pid, signal, e) => {
+                        println!("[PARENT]: PtraceEvent other {child_pid:?}, {signal:?}, {e:?}");
+                        ptrace::syscall(child_pid, None)?; // allow child to continue
+                    }
+                    // WaitStatus::PtraceFork(pid, child_pid) |
+                    // WaitStatus::PtraceClone(pid, child_pid) |
+                    // WaitStatus::PtraceVfork(pid, child_pid) => {
+                    //     println!("New process spawned: {} -> {}", pid, child_pid);
+                    //     traced_pids.insert(child_pid);
+                    // }
+                    WaitStatus::Exited(pid, _) => {
+                        println!("[PARENT]: Child {pid} exited");
+                        if !traced_pids.remove(&pid) {
+                            println!(
+                                "[PARENT]: Disaster!  Exited({pid}) but that pid was not in traced_pids!"
+                            );
+                        }
+                        if pid == original_child {
+                            println!("[PARENT]: original child exited; remaining pids are {traced_pids:?}");
+                            break;
+                        }
+                        if traced_pids.is_empty() {
+                            break;
+                        }
+                    }
+                    WaitStatus::PtraceSyscall(pid) => {
+                        let entry = in_syscall.entry(pid);
+                        let pid_in_syscall = entry.or_insert(false); // in_syscall.get(&pid).unwrap_or(&false);
+
+                        if !*pid_in_syscall {
                             // Get the syscall number from the registers
                             let regs = ptrace::getregs(pid)?;
-                            println!("[PARENT]: Syscall began: {}", regs.orig_rax);
-                            in_syscall = true;
-
+                            println!("[PARENT]: Syscall began in pid {pid:?}: {}", regs.orig_rax);
+                            *pid_in_syscall = true;
                             // [A more complete strace would know which arguments are pointers and use
                             // process_vm_readv(2) to read those buffers from the tracee in order to print them
                             // appropriately.]
                         } else {
                             let regs = ptrace::getregs(pid)?;
-                            println!("[PARENT] Syscall finished: = {}", regs.rax);
-                            in_syscall = false;
+                            println!("[PARENT]: Syscall finished in pid {pid:?}: = {}", regs.rax);
+                            *pid_in_syscall = false;
+                        }
+
+                        // Restart the child and stop at the next syscall
+                        ptrace::syscall(pid, None)?;
+                    }
+                    WaitStatus::Stopped(pid, signal) => {
+                        println!("[PARENT]: stopped received {pid:?} w/ signal {signal:?}");
+                        if signal == Signal::SIGTRAP {
+                            // FIXME: cloning lurk's logic without understanding
+                            ptrace::syscall(pid, None)?;
+                        } else if signal == Signal::SIGSTOP {
+                            // FIXME: cloning lurk's logic without understanding
+                            ptrace::syscall(pid, None)?;
+                        } else if signal == Signal::SIGCHLD {
+                            // FIXME: cloning lurk's logic without understanding
+                            ptrace::syscall(pid, Some(signal))?;
+                        } else {
+                            ptrace::cont(pid, signal)?;
                         }
                     }
                     other => {
@@ -106,7 +164,7 @@ fn main() -> Result<()> {
 
             // // Wait for child to finish
             // let _ = wait()?;
-            println!("[PARENT]: Child process completed");
+            println!("[PARENT]: All child processes completed");
 
             reader_thread.join().unwrap();
         }
@@ -116,7 +174,8 @@ fn main() -> Result<()> {
             // Duplicate write_fd to stdout
             // if write_fd != 1 {
             // 1 is stdout
-            nix::unistd::dup2(write_fd.as_raw_fd(), 1)?;
+            nix::unistd::dup2(write_fd.as_raw_fd(), 1)?; // stdout
+            nix::unistd::dup2(write_fd.as_raw_fd(), 2)?; // stderr
             // close(write_fd)?;
             // }
 
@@ -126,10 +185,7 @@ fn main() -> Result<()> {
             println!("[CHILD]: Child invoked traceme");
 
             // Execute a test command
-            return Err(Command::new("echo")
-                .arg("Hello from traced process!")
-                .exec()
-                .into());
+            return Err(Command::new("/home/mfenniak/Dev/testtrim-test-projects/go-micro-app/go-micro-app").arg("--version").exec().into());
             // // We won't reach here as exec replaces the process
             // unreachable!();
         }
