@@ -131,18 +131,9 @@ pub struct SignalRecv<'a> {
 }
 
 pub fn tokenize<'i>(input: &mut &'i str) -> Result<TokenizerOutput<'i>> {
-    match internal_tokenize(input) {
-        Ok(function_call) => {
-            if input.is_empty() {
-                Ok(function_call)
-            } else {
-                Err(anyhow!(
-                    "strace tokenize had unexpected remaining results {input:?}"
-                ))
-            }
-        }
-        Err(e) => Err(anyhow!("error occurred in strace tokenize: {e:?}")),
-    }
+    internal_tokenize
+        .parse(input)
+        .map_err(|e| anyhow!("error occurred in strace tokenize: {e:?}"))
 }
 
 fn internal_tokenize<'i>(input: &mut &'i str) -> PResult<TokenizerOutput<'i>> {
@@ -178,18 +169,9 @@ fn parse_signal<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
 
 #[cfg(test)]
 fn tokenize_syscall<'i>(input: &mut &'i str) -> Result<SyscallSegment<'i>> {
-    match parse_syscall(input) {
-        Ok(function_call) => {
-            if input.is_empty() {
-                Ok(function_call)
-            } else {
-                Err(anyhow!(
-                    "strace tokenize had unexpected remaining results {input:?}"
-                ))
-            }
-        }
-        Err(e) => Err(anyhow!("error occurred in strace tokenize: {e:?}")),
-    }
+    parse_syscall
+        .parse(input)
+        .map_err(|e| anyhow!("error occurred in strace parse_syscall: {e:?}"))
 }
 
 fn parse_syscall<'i>(input: &mut &'i str) -> PResult<SyscallSegment<'i>> {
