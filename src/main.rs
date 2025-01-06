@@ -89,6 +89,7 @@ fn main() -> Result<()> {
             //     _ => panic!("Unexpected wait status"),
             // }
 
+
             // let mut in_syscall = false;
             let mut in_syscall: HashMap<Pid, bool> = HashMap::new();
             // in_syscall.insert(original_child, false);
@@ -99,23 +100,23 @@ fn main() -> Result<()> {
                     WaitStatus::PtraceEvent(child_pid, _signal, e @ PTRACE_EVENT_FORK)
                     | WaitStatus::PtraceEvent(child_pid, _signal, e @ PTRACE_EVENT_CLONE)
                     | WaitStatus::PtraceEvent(child_pid, _signal, e @ PTRACE_EVENT_VFORK) => {
-                        println!("[PARENT]: New child: ({}, {})", child_pid, e);
+                        // println!("[PARENT]: New child: ({}, {})", child_pid, e);
                         traced_pids.insert(child_pid);
                         ptrace::syscall(child_pid, None)?; // allow child to continue
                     }
                     WaitStatus::PtraceEvent(child_pid, signal, e) => {
-                        println!("[PARENT]: PtraceEvent other {child_pid:?}, {signal:?}, {e:?}");
+                        // println!("[PARENT]: PtraceEvent other {child_pid:?}, {signal:?}, {e:?}");
                         ptrace::syscall(child_pid, None)?; // allow child to continue
                     }
                     WaitStatus::Exited(pid, _) => {
-                        println!("[PARENT]: Child {pid} exited");
+                        // println!("[PARENT]: Child {pid} exited");
                         if !traced_pids.remove(&pid) {
-                            println!(
-                                "[PARENT]: Disaster!  Exited({pid}) but that pid was not in traced_pids!"
-                            );
+                            // println!(
+                            //     "[PARENT]: Disaster!  Exited({pid}) but that pid was not in traced_pids!"
+                            // );
                         }
                         if pid == original_child {
-                            println!("[PARENT]: original child exited; remaining pids are {traced_pids:?}");
+                            // println!("[PARENT]: original child exited; remaining pids are {traced_pids:?}");
                             break;
                         }
                         if traced_pids.is_empty() {
@@ -123,28 +124,28 @@ fn main() -> Result<()> {
                         }
                     }
                     WaitStatus::PtraceSyscall(pid) => {
-                        let entry = in_syscall.entry(pid);
-                        let pid_in_syscall = entry.or_insert(false); // in_syscall.get(&pid).unwrap_or(&false);
+                        // let entry = in_syscall.entry(pid);
+                        // let pid_in_syscall = entry.or_insert(false); // in_syscall.get(&pid).unwrap_or(&false);
 
-                        if !*pid_in_syscall {
-                            // Get the syscall number from the registers
-                            let regs = ptrace::getregs(pid)?;
-                            println!("[PARENT]: Syscall began in pid {pid:?}: {}", regs.orig_rax);
-                            *pid_in_syscall = true;
-                            // [A more complete strace would know which arguments are pointers and use
-                            // process_vm_readv(2) to read those buffers from the tracee in order to print them
-                            // appropriately.]
-                        } else {
-                            let regs = ptrace::getregs(pid)?;
-                            println!("[PARENT]: Syscall finished in pid {pid:?}: = {}", regs.rax);
-                            *pid_in_syscall = false;
-                        }
+                        // if !*pid_in_syscall {
+                        //     // Get the syscall number from the registers
+                        //     let regs = ptrace::getregs(pid)?;
+                        //     // println!("[PARENT]: Syscall began in pid {pid:?}: {}", regs.orig_rax);
+                        //     *pid_in_syscall = true;
+                        //     // [A more complete strace would know which arguments are pointers and use
+                        //     // process_vm_readv(2) to read those buffers from the tracee in order to print them
+                        //     // appropriately.]
+                        // } else {
+                        //     let regs = ptrace::getregs(pid)?;
+                        //     // println!("[PARENT]: Syscall finished in pid {pid:?}: = {}", regs.rax);
+                        //     *pid_in_syscall = false;
+                        // }
 
                         // Restart the child and stop at the next syscall
                         ptrace::syscall(pid, None)?;
                     }
                     WaitStatus::Stopped(pid, signal) => {
-                        println!("[PARENT]: stopped received {pid:?} w/ signal {signal:?}");
+                        // println!("[PARENT]: stopped received {pid:?} w/ signal {signal:?}");
                         if signal == Signal::SIGTRAP {
                             // FIXME: cloning lurk's logic without understanding
                             ptrace::syscall(pid, None)?;
@@ -159,13 +160,37 @@ fn main() -> Result<()> {
                         }
                     }
                     other => {
-                        println!("[PARENT]: wait received {other:?}");
+                        // println!("[PARENT]: wait received {other:?}");
                     }
                 }
             }
 
             // // Continue the child process
             // ptrace::cont(child, None)?;
+
+            /*
+            Performance notes, running the "go-micro-app" which reads all files in the CWD:
+            on testtrim directory:
+            raw:
+            3.483
+            2.852
+            3.416
+
+            rust ptrace v1:
+            8.208
+            7.980
+            8.505
+
+            strace:
+            6.468
+            6.262
+            6.173
+
+            // This is disappointing... and this has all println!() removed... so I'm not sure what possible difference
+            // in performance there is here that degrades when compared to strace. :-(  This needs to be at least in the
+            // same range before this is even feasible.
+
+            */
 
             // // Wait for child to finish
             // let _ = wait()?;
