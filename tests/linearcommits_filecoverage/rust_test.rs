@@ -2,51 +2,20 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{Result, anyhow};
-use log::info;
-use std::collections::HashSet;
+use anyhow::Result;
 use std::sync::Arc;
-use tempdir::TempDir;
-use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
-use testtrim::cmd::get_test_identifiers::{self, AncestorSearchMode, get_target_test_cases};
-use testtrim::cmd::run_tests::run_tests;
-use testtrim::coverage::{CoverageDatabase, create_test_db};
-use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
 use testtrim::platform::rust::RustTestPlatform;
-use testtrim::scm::git::GitScm;
 use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
-use tracing::instrument::WithSubscriber;
+use tracing::instrument::WithSubscriber as _;
 
-use crate::util::ChangeWorkingDirectory;
-use crate::{CWD_MUTEX, assert_performance_tracing, git_checkout, git_clone};
+use crate::assert_performance_tracing;
+use crate::linearcommits_filecoverage::{CommitTestData, execute_test, setup_test};
 
 #[tokio::test]
-async fn rust_linearcommits_filecoverage() -> Result<()> {
-    simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())?;
+async fn add_new_test() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
 
-    let _cwd_mutex = CWD_MUTEX.lock();
-
-    let tmp_dir = TempDir::new("testtrim-test")?;
-    let _tmp_dir_cwd = ChangeWorkingDirectory::new(tmp_dir.path());
-
-    git_clone("rust-coverage-specimen")?;
-    let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("rust-coverage-specimen")); // FIXME: hack assumes folder name
-
-    let coverage_db = create_test_db()?;
-    coverage_db
-        .clear_project_data::<RustTestPlatform>("rust-coverage-specimen")
-        .await?;
-
-    // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
-    // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a
-    // shell and read .envrc, for any future commands?
-
-    struct CommitTestData<'a> {
-        test_commit: &'a str,
-        all_test_cases: Vec<&'a str>,
-        relevant_test_cases: Vec<&'a str>,
-        expected_failing_test_cases: Vec<&'a str>,
-    }
     let test_commits = vec![
         CommitTestData {
             test_commit: "base",
@@ -64,6 +33,27 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["sequences::tests::test_fibonacci"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn modify_single_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-2",
             all_test_cases: vec![
@@ -159,6 +149,51 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
             ],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remove_test() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
+        CommitTestData {
+            test_commit: "check-6",
+            all_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_fibonacci_memo",
+            ],
+            relevant_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_fibonacci_memo",
+            ],
+            expected_failing_test_cases: vec![],
+        },
         CommitTestData {
             test_commit: "check-7",
             all_test_cases: vec![
@@ -176,6 +211,27 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
             ],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_external_dependency() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-8",
             all_test_cases: vec![
@@ -215,6 +271,27 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["basic_ops::tests::test_add_decimal"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_read_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-10",
             all_test_cases: vec![
@@ -229,6 +306,12 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
                 "sequences::tests::test_factorial",
             ],
             relevant_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
                 "sequences::tests::test_fibonacci",
                 "sequences::tests::test_fibonacci_sequence",
                 "sequences::tests::test_factorial",
@@ -251,6 +334,27 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["sequences::tests::test_fibonacci_sequence"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_embed_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-12",
             all_test_cases: vec![
@@ -266,6 +370,12 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
                 "sequences::tests::test_factorial_include",
             ],
             relevant_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
                 "sequences::tests::test_fibonacci",
                 "sequences::tests::test_fibonacci_sequence",
                 "sequences::tests::test_factorial",
@@ -295,6 +405,27 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
             ],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_constants() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-14",
             all_test_cases: vec![
@@ -314,6 +445,16 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
                 "constant_using_tests::tests::test_using_lazy_static",
             ],
             relevant_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_factorial_include",
                 "constant_using_tests::tests::test_using_const",
                 "constant_using_tests::tests::test_using_const_fn",
                 "constant_using_tests::tests::test_using_inline",
@@ -352,6 +493,27 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
                 // "constant_using_tests::tests::test_using_lazy_static", // FIXME: broken -- should be considered relevant but isn't
             ],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_test_rerun() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<RustTestPlatform>("rust-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-16",
             all_test_cases: vec![
@@ -370,7 +532,22 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
                 "constant_using_tests::tests::test_using_inline",
                 "constant_using_tests::tests::test_using_lazy_static",
             ],
-            relevant_test_cases: vec![],
+            relevant_test_cases: vec![
+                "basic_ops::tests::test_add",
+                "basic_ops::tests::test_sub",
+                "basic_ops::tests::test_mul",
+                "basic_ops::tests::test_div",
+                "basic_ops::tests::test_power",
+                "basic_ops::tests::test_add_decimal",
+                "sequences::tests::test_fibonacci",
+                "sequences::tests::test_fibonacci_sequence",
+                "sequences::tests::test_factorial",
+                "sequences::tests::test_factorial_include",
+                "constant_using_tests::tests::test_using_const",
+                "constant_using_tests::tests::test_using_const_fn",
+                "constant_using_tests::tests::test_using_inline",
+                "constant_using_tests::tests::test_using_lazy_static",
+            ],
             expected_failing_test_cases: vec![],
         },
         CommitTestData {
@@ -419,121 +596,9 @@ async fn rust_linearcommits_filecoverage() -> Result<()> {
         },
     ];
 
-    async fn execute_test(
-        commit_test_data: &CommitTestData<'_>,
-        coverage_db: &impl CoverageDatabase,
-    ) -> Result<()> {
-        let scm = GitScm {};
-        let tags = &get_test_identifiers::tags::<RustTestPlatform>(
-            &Vec::new(),
-            PlatformTaggingMode::Automatic,
-        );
-
-        info!("checking out {}", commit_test_data.test_commit);
-        git_checkout(commit_test_data.test_commit)?;
-
-        let all_test_cases = get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
-            GetTestIdentifierMode::All,
-            &scm,
-            AncestorSearchMode::AllCommits,
-            tags,
-            coverage_db,
-        )
-        .await?
-        .target_test_cases;
-        assert_eq!(
-            all_test_cases.len(),
-            commit_test_data.all_test_cases.len(),
-            "unexpected count of all tests in {} commit",
-            commit_test_data.test_commit,
-        );
-        for expected_test_name in commit_test_data.all_test_cases.iter() {
-            assert_eq!(
-                all_test_cases
-                    .keys()
-                    .filter(|tc| tc.test_identifier.test_name == *expected_test_name)
-                    .count(),
-                1
-            );
-        }
-
-        let relevant_test_cases = get_target_test_cases::<_, _, _, _, _, _, RustTestPlatform>(
-            GetTestIdentifierMode::Relevant,
-            &scm,
-            AncestorSearchMode::AllCommits,
-            tags,
-            coverage_db,
-        )
-        .await?
-        .target_test_cases;
-        assert_eq!(
-            relevant_test_cases.len(),
-            commit_test_data.relevant_test_cases.len(),
-            "unexpected count of tests-to-run in {} commit",
-            commit_test_data.test_commit,
-        );
-        for expected_test_name in commit_test_data.relevant_test_cases.iter() {
-            assert_eq!(
-                relevant_test_cases
-                    .keys()
-                    .filter(|tc| tc.test_identifier.test_name == *expected_test_name)
-                    .count(),
-                1
-            );
-        }
-
-        match run_tests::<_, _, _, _, _, _, RustTestPlatform>(
-            GetTestIdentifierMode::Relevant,
-            &scm,
-            SourceMode::Automatic,
-            0,
-            tags,
-            coverage_db,
-        )
-        .await
-        {
-            Ok(_) if commit_test_data.expected_failing_test_cases.is_empty() => Ok(()),
-            Ok(_) => Err(anyhow!(
-                "expected {} failed tests in {} commit, but had zero",
-                commit_test_data.expected_failing_test_cases.len(),
-                commit_test_data.test_commit
-            )),
-            Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
-                failures,
-            ))) => {
-                let mut expected = commit_test_data
-                    .expected_failing_test_cases
-                    .iter()
-                    .map(|s| String::from(*s))
-                    .collect::<HashSet<_>>();
-                for failure in failures {
-                    // lightly_unique_name is a dumb hack, but just makes it so that our test cases in this test don't
-                    // have to be RustTestIdentifier instances and can be &str.  It makes these tests slightly easier to
-                    // write & maintain.
-                    let test_name = failure.test_identifier.lightly_unique_name();
-                    if !expected.remove(&test_name) {
-                        return Err(anyhow!(
-                            "test {test_name} failed in commit {}, but wasn't expected to fail: {failure:?}",
-                            commit_test_data.test_commit
-                        ));
-                    }
-                }
-                if !expected.is_empty() {
-                    Err(anyhow!(
-                        "tests were expected to fail in commit {} but did not fail: {expected:?}",
-                        commit_test_data.test_commit
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
-        execute_test(&commit_test_data, &coverage_db)
+        execute_test::<RustTestPlatform>(&commit_test_data, &coverage_db)
             .with_subscriber(PerformanceStoringTracingSubscriber::new(
                 perf_storage.clone(),
             ))

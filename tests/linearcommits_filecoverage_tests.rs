@@ -4,11 +4,12 @@
 
 use anyhow::Result;
 use lazy_static::lazy_static;
+use std::env;
 use std::process::Command;
 use std::time::Duration;
-use std::{env, sync::Mutex};
 use testtrim::timing_tracer::RunTestTiming;
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 mod linearcommits_filecoverage;
 mod util;

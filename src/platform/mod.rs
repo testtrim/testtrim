@@ -32,7 +32,7 @@ mod util;
 ///
 /// It must contain data such that, if it was serialized between machines, it could be picked up and contain relevant
 /// data to find and execute the test on another host.
-pub trait TestIdentifier: Eq + Hash + Clone + Debug + Serialize {}
+pub trait TestIdentifier: Eq + Hash + Clone + Debug + Serialize + TestIdentifierCore {}
 
 /// An alternate trait of `TestIdentifier` which can be used with dynamic dispatch.  Test identifiers must implement
 /// both traits.

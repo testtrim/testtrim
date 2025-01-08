@@ -2,52 +2,20 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{Result, anyhow};
-use log::info;
-use std::collections::HashSet;
+use anyhow::Result;
 use std::sync::Arc;
-use tempdir::TempDir;
-use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
-use testtrim::cmd::get_test_identifiers::{self, AncestorSearchMode, get_target_test_cases};
-use testtrim::cmd::run_tests::run_tests;
-use testtrim::coverage::{CoverageDatabase, create_test_db};
-use testtrim::errors::{RunTestsCommandErrors, RunTestsErrors};
-use testtrim::platform::ConcreteTestIdentifier as _;
 use testtrim::platform::golang::GolangTestPlatform;
-use testtrim::scm::git::GitScm;
 use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
 use tracing::instrument::WithSubscriber as _;
 
-use crate::util::ChangeWorkingDirectory;
-use crate::{CWD_MUTEX, assert_performance_tracing, git_checkout, git_clone};
+use crate::assert_performance_tracing;
+use crate::linearcommits_filecoverage::{CommitTestData, execute_test, setup_test};
 
 #[tokio::test]
-async fn golang_linearcommits_filecoverage() -> Result<()> {
-    simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())?;
+async fn add_new_test() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
 
-    let _cwd_mutex = CWD_MUTEX.lock();
-
-    let tmp_dir = TempDir::new("testtrim-test")?;
-    let _tmp_dir_cwd = ChangeWorkingDirectory::new(tmp_dir.path());
-
-    git_clone("go-coverage-specimen")?;
-    let _tmp_dir_cwd2 = ChangeWorkingDirectory::new(&tmp_dir.path().join("go-coverage-specimen")); // FIXME: hack assumes folder name
-
-    let coverage_db = create_test_db()?;
-    coverage_db
-        .clear_project_data::<GolangTestPlatform>("go-coverage-specimen")
-        .await?;
-
-    // FIXME: This will run with the env of the testtrim project, which is OK for the short-term -- but it would make
-    // sense that we pick up the right rust tooling from the checked out repo.  Probably from here we need to start a
-    // shell and read .envrc, for any future commands?
-
-    struct CommitTestData<'a> {
-        test_commit: &'a str,
-        all_test_cases: Vec<&'a str>,
-        relevant_test_cases: Vec<&'a str>,
-        expected_failing_test_cases: Vec<&'a str>,
-    }
     let test_commits = vec![
         CommitTestData {
             test_commit: "base",
@@ -61,6 +29,27 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["TestFibonacci"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn modify_single_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-2",
             all_test_cases: vec!["TestAdd", "TestSub", "TestMul", "TestDiv", "TestFibonacci"],
@@ -133,6 +122,51 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["TestFibonacci", "TestFactorial", "TestFibonacciMemo"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remove_test() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
+        CommitTestData {
+            test_commit: "check-6",
+            all_test_cases: vec![
+                "TestAdd",
+                "TestSub",
+                "TestMul",
+                "TestDiv",
+                "TestPower",
+                "TestFibonacci",
+                "TestFactorial",
+                "TestFibonacciMemo",
+            ],
+            relevant_test_cases: vec![
+                "TestAdd",
+                "TestSub",
+                "TestMul",
+                "TestDiv",
+                "TestPower",
+                "TestFibonacci",
+                "TestFactorial",
+                "TestFibonacciMemo",
+            ],
+            expected_failing_test_cases: vec![],
+        },
         CommitTestData {
             test_commit: "check-7",
             all_test_cases: vec![
@@ -147,6 +181,27 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["TestFibonacci", "TestFactorial"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_external_dependency() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-8",
             all_test_cases: vec![
@@ -186,6 +241,27 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["TestAddDecimal"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_read_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-10",
             all_test_cases: vec![
@@ -199,7 +275,17 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
                 "TestFibonacciSequence",
                 "TestFactorial",
             ],
-            relevant_test_cases: vec!["TestFibonacci", "TestFibonacciSequence", "TestFactorial"],
+            relevant_test_cases: vec![
+                "TestAdd",
+                "TestSub",
+                "TestMul",
+                "TestDiv",
+                "TestPower",
+                "TestAddDecimal",
+                "TestFibonacci",
+                "TestFibonacciSequence",
+                "TestFactorial",
+            ],
             expected_failing_test_cases: vec![],
         },
         CommitTestData {
@@ -218,6 +304,27 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             relevant_test_cases: vec!["TestFibonacciSequence"],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_embed_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-12",
             all_test_cases: vec![
@@ -233,6 +340,12 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
                 "TestFactorialInclude",
             ],
             relevant_test_cases: vec![
+                "TestAdd",
+                "TestSub",
+                "TestMul",
+                "TestDiv",
+                "TestPower",
+                "TestAddDecimal",
                 "TestFibonacci",
                 "TestFibonacciSequence",
                 "TestFactorial",
@@ -262,6 +375,27 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
             ],
             expected_failing_test_cases: vec![],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_constants() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-14",
             all_test_cases: vec![
@@ -280,6 +414,16 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
                 "TestUsingModuleInit",
             ],
             relevant_test_cases: vec![
+                "TestAdd",
+                "TestSub",
+                "TestMul",
+                "TestDiv",
+                "TestPower",
+                "TestAddDecimal",
+                "TestFibonacci",
+                "TestFibonacciSequence",
+                "TestFactorial",
+                "TestFactorialInclude",
                 "TestUsingConst",
                 "TestUsingFunctionInit",
                 "TestUsingModuleInit",
@@ -316,6 +460,27 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
                 // "TestUsingConst", "TestUsingFunctionInit", "TestUsingModuleInit",
             ],
         },
+    ];
+
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(PerformanceStoringTracingSubscriber::new(
+                perf_storage.clone(),
+            ))
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_test_rerun() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<GolangTestPlatform>("go-coverage-specimen").await?;
+
+    let test_commits = vec![
         CommitTestData {
             test_commit: "check-16",
             all_test_cases: vec![
@@ -333,7 +498,21 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
                 "TestUsingFunctionInit",
                 "TestUsingModuleInit",
             ],
-            relevant_test_cases: vec![],
+            relevant_test_cases: vec![
+                "TestAdd",
+                "TestSub",
+                "TestMul",
+                "TestDiv",
+                "TestPower",
+                "TestAddDecimal",
+                "TestFibonacci",
+                "TestFibonacciSequence",
+                "TestFactorial",
+                "TestFactorialInclude",
+                "TestUsingConst",
+                "TestUsingFunctionInit",
+                "TestUsingModuleInit",
+            ],
             expected_failing_test_cases: vec![],
         },
         CommitTestData {
@@ -380,121 +559,9 @@ async fn golang_linearcommits_filecoverage() -> Result<()> {
         },
     ];
 
-    async fn execute_test(
-        commit_test_data: &CommitTestData<'_>,
-        coverage_db: &impl CoverageDatabase,
-    ) -> Result<()> {
-        let scm = GitScm {};
-        let tags = &get_test_identifiers::tags::<GolangTestPlatform>(
-            &Vec::new(),
-            PlatformTaggingMode::Automatic,
-        );
-
-        info!("checking out {}", commit_test_data.test_commit);
-        git_checkout(commit_test_data.test_commit)?;
-
-        let all_test_cases = get_target_test_cases::<_, _, _, _, _, _, GolangTestPlatform>(
-            GetTestIdentifierMode::All,
-            &scm,
-            AncestorSearchMode::AllCommits,
-            tags,
-            coverage_db,
-        )
-        .await?
-        .target_test_cases;
-        assert_eq!(
-            all_test_cases.len(),
-            commit_test_data.all_test_cases.len(),
-            "unexpected count of all tests in {} commit",
-            commit_test_data.test_commit,
-        );
-        for expected_test_name in commit_test_data.all_test_cases.iter() {
-            assert_eq!(
-                all_test_cases
-                    .keys()
-                    .filter(|tc| tc.test_identifier().test_name == *expected_test_name)
-                    .count(),
-                1
-            );
-        }
-
-        let relevant_test_cases = get_target_test_cases::<_, _, _, _, _, _, GolangTestPlatform>(
-            GetTestIdentifierMode::Relevant,
-            &scm,
-            AncestorSearchMode::AllCommits,
-            tags,
-            coverage_db,
-        )
-        .await?
-        .target_test_cases;
-        assert_eq!(
-            relevant_test_cases.len(),
-            commit_test_data.relevant_test_cases.len(),
-            "unexpected count of tests-to-run in {} commit",
-            commit_test_data.test_commit,
-        );
-        for expected_test_name in commit_test_data.relevant_test_cases.iter() {
-            assert_eq!(
-                relevant_test_cases
-                    .keys()
-                    .filter(|tc| tc.test_identifier().test_name == *expected_test_name)
-                    .count(),
-                1
-            );
-        }
-
-        match run_tests::<_, _, _, _, _, _, GolangTestPlatform>(
-            GetTestIdentifierMode::Relevant,
-            &scm,
-            SourceMode::Automatic,
-            0,
-            tags,
-            coverage_db,
-        )
-        .await
-        {
-            Ok(_) if commit_test_data.expected_failing_test_cases.is_empty() => Ok(()),
-            Ok(_) => Err(anyhow!(
-                "expected {} failed tests in {} commit, but had zero",
-                commit_test_data.expected_failing_test_cases.len(),
-                commit_test_data.test_commit
-            )),
-            Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
-                failures,
-            ))) => {
-                let mut expected = commit_test_data
-                    .expected_failing_test_cases
-                    .iter()
-                    .map(|s| String::from(*s))
-                    .collect::<HashSet<_>>();
-                for failure in failures {
-                    // lightly_unique_name is a dumb hack, but just makes it so that our test cases in this test don't
-                    // have to be RustTestIdentifier instances and can be &str.  It makes these tests slightly easier to
-                    // write & maintain.
-                    let test_name = failure.test_identifier.lightly_unique_name();
-                    if !expected.remove(&test_name) {
-                        return Err(anyhow!(
-                            "test {test_name} failed in commit {}, but wasn't expected to fail: {failure:?}",
-                            commit_test_data.test_commit
-                        ));
-                    }
-                }
-                if !expected.is_empty() {
-                    Err(anyhow!(
-                        "tests were expected to fail in commit {} but did not fail: {expected:?}",
-                        commit_test_data.test_commit
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
-        execute_test(&commit_test_data, &coverage_db)
+        execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
             .with_subscriber(PerformanceStoringTracingSubscriber::new(
                 perf_storage.clone(),
             ))
