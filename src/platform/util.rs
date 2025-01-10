@@ -8,13 +8,9 @@ use std::{
     sync::Arc,
 };
 
-use tokio::{
-    sync::{AcquireError, Semaphore},
-    task::JoinSet,
-};
+use futures::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::Semaphore;
 use tracing::instrument::WithSubscriber as _;
-
-use crate::errors::SpawnError;
 
 /// Given a path which is referenced from `relative_to` (eg. "src/module/lib.rs"), normalize it to a relative
 /// reference within the absolute path `repo_root` where the files exist.
@@ -65,24 +61,22 @@ pub fn normalize_path<T: FnOnce(&str)>(
 }
 
 /// Run any number of futures, but limited in concurrency by `max_concurrency`.
-pub async fn spawn_limited_concurrency<F>(
-    max_concurrency: usize,
-    futures: Vec<F>,
-) -> Result<Vec<F::Output>, SpawnError>
+pub async fn spawn_limited_concurrency<F>(max_concurrency: usize, futures: Vec<F>) -> Vec<F::Output>
 where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
+    F: Future + Send, // Note: no more 'static bound!
+    F::Output: Send,
 {
     let mut results = Vec::with_capacity(futures.len());
     let semaphore = Arc::new(Semaphore::new(max_concurrency));
-    let mut set = JoinSet::new();
+    let mut pending = FuturesUnordered::new();
 
+    // Wrap each future with semaphore acquisition
     for future in futures {
-        let my_semaphore = semaphore.clone();
-        set.spawn(
+        let sem = semaphore.clone();
+        pending.push(
             async move {
-                let _permit = my_semaphore.acquire().await?;
-                Ok::<_, AcquireError>(future.await)
+                let _permit = sem.acquire().await.unwrap();
+                future.await
             }
             // propogate our task subscriber into the new spawn(); normally a `spawn` it would have no subscriber and
             // lose all instrumentation from this point.
@@ -90,10 +84,10 @@ where
         );
     }
 
-    while let Some(res) = set.join_next().await {
-        let run_task_response = res??;
-        results.push(run_task_response);
+    // Process results as they complete
+    while let Some(result) = pending.next().await {
+        results.push(result);
     }
 
-    Ok(results)
+    results
 }

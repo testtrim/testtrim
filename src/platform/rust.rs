@@ -752,7 +752,7 @@ impl TestPlatform for RustTestPlatform {
         } else {
             jobs.into()
         };
-        let results = spawn_limited_concurrency(concurrency, futures).await?;
+        let results = spawn_limited_concurrency(concurrency, futures).await;
 
         let mut failed_test_results = vec![];
         for result in results {

@@ -622,11 +622,6 @@ impl GolangTestPlatform {
     ) -> Result<()> {
         let repo_root = env::current_dir()?;
 
-        // FIXME: This doesn't work right now because the current test execution method runs a build on every individual
-        // test.  We'll have to change this to do a build once (go test -c -o test-binary) and then run test-binary
-        // separately for each test.  This should be much faster too, and experimental testing shows it will isolate the
-        // `strace` to just the specific test.
-
         for path in trace.get_open_paths() {
             if path.is_relative() || path.starts_with(&repo_root) {
                 debug!(
@@ -688,15 +683,6 @@ impl GolangTestPlatform {
     fn parse_module_info() -> Result<ModuleInfo> {
         let contents = read_to_string("go.mod")?;
         let gomod = parse_gomod(&contents)?;
-
-        /*
-        01:29:22 [DEBUG] (2) testtrim::platform::golang: gomod = [
-        Context { range: (Location { line: 1, offset: 0 }, Location { line: 2, offset: 50 }), comments: [], value: Module { module_path: "codeberg.org/testtrim/go-coverage-specimen" } },
-        Context { range: (Location { line: 3, offset: 51 }, Location { line: 4, offset: 61 }), comments: [], value: Go { version: Raw("1.23.3") } },
-        Context { range: (Location { line: 5, offset: 62 }, Location { line: 6, offset: 107 }), comments: [], value:
-            Require { specs: [Context { range: (Location { line: 5, offset: 70 }, Location { line: 6, offset: 107 }), comments: [], value: ("github.com/shopspring/decimal", Raw("v1.3.1"))
-        }] } }]
-        */
 
         let mut module_path: Option<String> = None;
         let mut dependencies: Vec<ModuleDependency> = vec![];
@@ -1217,11 +1203,8 @@ impl TestPlatform for GolangTestPlatform {
     {
         let tmp_dir = TempDir::new("testtrim")?;
 
-        // FIXME: little confused why I need an Arc here since I want to just send an immutable reference to the
-        // threads; that should be doable in some lighter way.
-        let module_info = Arc::new(
-            Self::parse_module_info().map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
-        );
+        let module_info =
+            Self::parse_module_info().map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?;
 
         // Will need to collect get_baseline_ext for each module being tested... (At least, I think so?  Dependency
         // access and initialization seems like something that wouldn't be constant across the entire project?)
@@ -1238,16 +1221,16 @@ impl TestPlatform for GolangTestPlatform {
             }
             vec_test_cases.push(test_case);
         }
-        let package_baseline = Arc::new(package_baseline); // FIXME: can this be done without an Arc since it will be immutable?
+        let package_baseline_ref = &package_baseline;
 
         let mut futures = vec![];
         for test_case in vec_test_cases {
             let tc = test_case.clone();
             let tmp_path = PathBuf::from(tmp_dir.path());
-            let module_info = module_info.clone();
-            let package_baseline = package_baseline.clone();
+            let module_info_ref = &module_info;
             futures.push(async move {
-                GolangTestPlatform::run_test(&tc, &tmp_path, &module_info, &package_baseline).await
+                GolangTestPlatform::run_test(&tc, &tmp_path, module_info_ref, package_baseline_ref)
+                    .await
             });
         }
 
@@ -1256,7 +1239,7 @@ impl TestPlatform for GolangTestPlatform {
         } else {
             jobs.into()
         };
-        let results = spawn_limited_concurrency(concurrency, futures).await?;
+        let results = spawn_limited_concurrency(concurrency, futures).await;
 
         let mut failed_test_results = vec![];
         let mut coverage_data = CommitCoverageData::new();
