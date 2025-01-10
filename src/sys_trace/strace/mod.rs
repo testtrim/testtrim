@@ -212,7 +212,7 @@ impl STraceSysTraceCommand {
                 }
                 Function::Sendto {
                     socket_fd,
-                    data: StringArgument::Complete(mut data),
+                    data: StringArgument::Complete(data),
                 } => {
                     let socket_capture = pid_socket_fd_captures.get_mut(socket_fd);
                     if let Some(socket_capture) = socket_capture {
@@ -229,11 +229,11 @@ impl STraceSysTraceCommand {
                 }
                 Function::Read {
                     fd,
-                    data: StringArgument::Complete(mut data),
+                    data: StringArgument::Complete(data),
                 }
                 | Function::Recv {
                     socket_fd: fd,
-                    data: StringArgument::Complete(mut data),
+                    data: StringArgument::Complete(data),
                 } => {
                     let socket_capture = pid_socket_fd_captures.get_mut(fd);
                     if let Some(socket_capture) = socket_capture {

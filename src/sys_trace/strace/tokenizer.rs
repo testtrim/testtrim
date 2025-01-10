@@ -42,7 +42,7 @@ impl<'a> EncodedString<'a> {
     }
 
     #[must_use]
-    pub fn take(&mut self) -> Vec<u8> {
+    pub fn take(mut self) -> Vec<u8> {
         self.decoded.get_or_init(|| self.do_decode());
         self.decoded.take().unwrap()
     }
