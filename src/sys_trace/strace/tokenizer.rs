@@ -6,8 +6,8 @@ use std::cell::OnceCell;
 
 use anyhow::{Result, anyhow};
 use winnow::ascii::{dec_int, digit1, hex_digit1, multispace1};
-use winnow::combinator::{alt, delimited, opt, preceded, repeat, rest, separated};
-use winnow::token::{literal, none_of, one_of, take_until};
+use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated};
+use winnow::token::{literal, none_of, one_of, rest, take_until};
 use winnow::token::{take_till, take_while};
 use winnow::{PResult, Parser};
 
