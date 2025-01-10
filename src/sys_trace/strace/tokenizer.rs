@@ -159,11 +159,22 @@ fn parse_proc_killed<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
 }
 
 fn parse_signal<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+    alt((parse_signal_format1, parse_signal_format2)).parse_next(input)
+}
+
+fn parse_signal_format1<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
     let _ = literal("---").parse_next(input)?;
     let _ = consume_whitespace(input)?;
     let signal = take_while(1.., |c: char| c.is_ascii_uppercase()).parse_next(input)?;
     // pretty lazy here but we don't do anything with signals yet, and may never
     let _ = take_while(0.., |_| true).parse_next(input)?;
+    Ok(SignalRecv { signal })
+}
+
+fn parse_signal_format2<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+    let _ = literal("--- stopped by ").parse_next(input)?;
+    let signal = take_while(1.., |c: char| c.is_ascii_uppercase()).parse_next(input)?;
+    let _ = literal(" ---").parse_next(input)?;
     Ok(SignalRecv { signal })
 }
 
@@ -1195,6 +1206,10 @@ mod tests {
         );
         let exit = parse_signal(&mut strace.as_str()).unwrap();
         assert_eq!(exit, SignalRecv { signal: "SIGCHLD" });
+
+        let strace = String::from("--- stopped by SIGURG ---");
+        let exit = parse_signal(&mut strace.as_str()).unwrap();
+        assert_eq!(exit, SignalRecv { signal: "SIGURG" });
     }
 
     #[test]
