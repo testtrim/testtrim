@@ -72,8 +72,6 @@ impl InstallCoverageDataHandlers for Scope {
 
 #[derive(Error, Debug)]
 pub enum GetCoverageDataError {
-    // FIXME: we don't want to leak details of this error to the end-user, and hence the error itself isn't printed; but
-    // it would be great to log this on the internal logger...
     #[error("internal server misconfiguration")]
     CreateDatabase(#[from] crate::coverage::CreateDatabaseError),
     #[error("internal server error accessing coverage databaase")]
@@ -155,8 +153,6 @@ pub struct PostCoverageDataRequest<TI: TestIdentifier, CI: CoverageIdentifier> {
 
 #[derive(Error, Debug)]
 enum PostCoverageDataError {
-    // FIXME: we don't want to leak details of this error to the end-user, and hence the error itself isn't printed; but
-    // it would be great to log this on the internal logger...
     #[error("internal server misconfiguration")]
     CreateDatabase(#[from] crate::coverage::CreateDatabaseError),
     #[error("internal server error accessing coverage databaase")]
@@ -243,8 +239,6 @@ async fn post_coverage_data<TP: TestPlatform>(
 
 #[derive(Error, Debug)]
 enum DeleteCoverageDataError {
-    // FIXME: we don't want to leak details of this error to the end-user, and hence the error itself isn't printed; but
-    // it would be great to log this on the internal logger...
     #[error("internal server misconfiguration")]
     CreateDatabase(#[from] crate::coverage::CreateDatabaseError),
     #[error("internal server error accessing coverage databaase")]
