@@ -68,6 +68,7 @@ async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
     tokio::spawn(intermittent_cleanup());
     HttpServer::new(|| {
         App::new()
+            .wrap(middleware::Logger::default())
             // WARN: Do not change without adjusting test_zstd_compression; see FIXME comment there
             .wrap(middleware::Compress::default())
             .service(index)

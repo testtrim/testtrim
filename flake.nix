@@ -162,7 +162,10 @@
               # Default bind is localhost; but for port forwards to work correctly containers are expected to listen on
               # 0.0.0.0.
               "--bind-socket=0.0.0.0:8080"
-              "-vv"
+              # Bump output up to DEBUG level -- the actix-web logger middleware only logs internal error details at
+              # the DEBUG level.  This seems weird to me, but arguably could make sense -- some errors are not
+              # internal server errors that you would treat as such.
+              "-vvv"
             ];
             Env = [];
             ExposedPorts = {
