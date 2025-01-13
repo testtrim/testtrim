@@ -526,7 +526,6 @@ fn parse_unfinished_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>>
 }
 
 fn extract_encoded_string<'i>(input: &mut &'i str) -> PResult<EncodedString<'i>> {
-    // FIXME: not supporting backslash-escaped double-quotes here yet
     let matched = delimited(
         one_of('"'),
         Parser::take(repeat::<_, _, Vec<_>, _, _>(

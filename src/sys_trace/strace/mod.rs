@@ -144,7 +144,6 @@ impl STraceSysTraceCommand {
     ) -> Result<HashSet<(u32, Option<PathBuf>)>> {
         let file = File::open(trace_file)
             .context(format!("failed to open strace output file {trace_file:?}"))?;
-        // FIXME: this assumes that the contents of the trace are UTF-8; this probably isn't right
         let lines = BufReader::new(file).lines();
 
         let mut child_pids: HashSet<(u32, Option<PathBuf>)> = HashSet::new();

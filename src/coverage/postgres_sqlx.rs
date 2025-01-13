@@ -77,10 +77,6 @@ impl PostgresCoverageDatabase {
                     .max_connections(5)
                     .connect(&self.database_url)
                     .await?;
-                // FIXME: since create_db keeps creating new instances of this pretty frequently (eg. when used in
-                // simulate_history, or when used in the API server), this migration keeps re-running... and our
-                // connection pool is lost and recreated over and over again.  A smarter shared cache of some kind
-                // should be used?
                 sqlx::migrate!("./db/postgres/migrations")
                     .run(&pool)
                     .await?;
