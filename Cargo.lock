@@ -854,9 +854,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "compiler_builtins"
-version = "0.1.140"
+version = "0.1.142"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df14d41c5d172a886df3753d54238eefb0f61c96cbd8b363c33ccc92c457bee3"
+checksum = "78013b42e2946a76d348a858fa5a06ca7d6b5cccdfccd660ea7a0aa4a44d40ca"
 
 [[package]]
 name = "concurrent-queue"
