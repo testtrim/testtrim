@@ -65,7 +65,7 @@ toml = "0.8.19"
 tracing = "0.1.41"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["v4"] }
-which = { version = "6.0.0", default-features = false }
+which = { version = "7.0.0", default-features = false }
 winnow = "0.6"
 
 # These dependencies aren't needed directly -- but they are required by the testtrim-ebpf-program cross-compile and if
