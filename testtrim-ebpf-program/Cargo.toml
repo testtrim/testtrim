@@ -23,6 +23,7 @@ dlmalloc = { workspace = true }
 fortanix-sgx-abi = { workspace = true }
 getopts = { workspace = true }
 hermit-abi = { workspace = true }
+miniz_oxide = { workspace = true }
 r-efi = { workspace = true }
 r-efi-alloc = { workspace = true }
 unwinding = { workspace = true }

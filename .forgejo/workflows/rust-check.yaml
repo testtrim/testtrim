@@ -96,3 +96,11 @@ jobs:
           TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
         run: nix develop .# --command cargo nextest run
+
+      # This should more-or-less guarantee that the release artifact of the OCI container continues to build.  It sucks
+      # to add another build of testtrim here in rust-checks.yaml, but the flake build is currently different-enough
+      # because it has only access to the packages listed in `Cargo.lock`, and the eBPF program uses some dynamic
+      # references that need to be manually managed in there.  So as-is, this is the only way to guarantee that the
+      # release artifact build doesn't break.
+      - name: nix build .#testtrim
+        run: nix build .#testtrim

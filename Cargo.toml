@@ -71,11 +71,12 @@ winnow = "0.6"
 # These dependencies aren't needed directly -- but they are required by the testtrim-ebpf-program cross-compile and if
 # they aren't included here, then they won't be listed in Cargo.lock, and then they won't get into the nix build (which
 # is restricted with the `cargoLock` setting).
-compiler_builtins = "=0.1.142"
+compiler_builtins = "=0.1.140"
 dlmalloc = "=0.2.7"
 fortanix-sgx-abi = "=0.5.0"
 getopts = "=0.2.21"
 hermit-abi = "^0.4.0"
+miniz_oxide = "=0.8.2"
 r-efi = "=4.5.0"
 r-efi-alloc = "=1.0.0"
 unwinding = "=0.2.5"

@@ -854,9 +854,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "compiler_builtins"
-version = "0.1.142"
+version = "0.1.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78013b42e2946a76d348a858fa5a06ca7d6b5cccdfccd660ea7a0aa4a44d40ca"
+checksum = "df14d41c5d172a886df3753d54238eefb0f61c96cbd8b363c33ccc92c457bee3"
 
 [[package]]
 name = "concurrent-queue"
@@ -2138,9 +2138,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "miniz_oxide"
-version = "0.8.3"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8402cab7aefae129c6977bb0ff1b8fd9a04eb5b51efc50a70bea51cda0c7924"
+checksum = "4ffbe83022cedc1d264172192511ae958937694cd57ce297164951b8b3568394"
 dependencies = [
  "adler2",
 ]
@@ -3508,6 +3508,7 @@ dependencies = [
  "fortanix-sgx-abi",
  "getopts",
  "hermit-abi 0.4.0",
+ "miniz_oxide",
  "r-efi",
  "r-efi-alloc",
  "testtrim-ebpf-common",
