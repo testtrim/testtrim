@@ -37,7 +37,7 @@ use super::{
     CoverageDatabase, CoverageDatabaseDetailedError, CoverageDatabaseError, ResultWithContext, Tag,
 };
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./db/sqlite/migrations");
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("../db/sqlite/migrations");
 
 struct DbLogger;
 

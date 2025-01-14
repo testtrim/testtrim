@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "testtrim-ebpf-program"
+version = "0.7.5"
+edition = "2024"
+
+[dependencies]
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+testtrim-ebpf-common = { path = "../testtrim-ebpf-common" }
+
+[build-dependencies]
+which = { workspace = true }
+
+# These dependencies aren't needed directly -- but they are required by the testtrim-ebpf-program cross-compile and if
+# they aren't included here, then they won't be listed in Cargo.lock, and then they won't get into the nix build (which
+# is restricted with the `cargoLock` setting).
+compiler_builtins = { workspace = true }
+dlmalloc = { workspace = true }
+fortanix-sgx-abi = { workspace = true }
+getopts = { workspace = true }
+hermit-abi = { workspace = true }
+r-efi = { workspace = true }
+r-efi-alloc = { workspace = true }
+unwinding = { workspace = true }
+
+[[bin]]
+name = "testtrim-ebpf-program-output"
+path = "src/main.rs"

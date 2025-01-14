@@ -60,7 +60,7 @@ jobs:
           DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
         run: |
           nix develop .# --command sqlx migrate run --source ./db/postgres/migrations
-          nix develop .# --command cargo sqlx prepare -- --tests
+          nix develop .# --command cargo sqlx prepare --workspace -- --tests
           if [ -z "$(git status --porcelain)" ]; then
             echo "Clean working directory. 👍"
           else
@@ -70,7 +70,7 @@ jobs:
           fi
 
       - run: |
-          VERSION=$(nix develop .# --command dasel -f ./Cargo.toml -r toml .package.version -w -)
+          VERSION=$(nix develop .# --command dasel -f ./testtrim-cli/Cargo.toml -r toml .package.version -w -)
           echo "Will use testtrim $VERSION:"
           FLAKE="git+https://codeberg.org/testtrim/testtrim.git?ref=refs/tags/v${VERSION}"
           nix run $FLAKE#testtrim -- --version

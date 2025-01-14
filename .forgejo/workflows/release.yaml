@@ -65,8 +65,14 @@ jobs:
           # which has a `cargo set-version ...` command, but that doesn't update the lock file
           # (https://github.com/killercup/cargo-edit/issues/698) itself, leaving you in a position of needing to do a
           # build or upgrade, which I don't want the release process to do.
-          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-cli/Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-ebpf-common/Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-ebpf-program/Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-ebpf-tracing/Cargo.toml
           sed -i "/name = \"testtrim\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
+          sed -i "/name = \"testtrim-ebpf-common\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
+          sed -i "/name = \"testtrim-ebpf-program\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
+          sed -i "/name = \"testtrim-ebpf-tracing\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
 
           git config --global user.name "release-workflow"
           git config --global user.email "release-workflow@testtrim.org"
@@ -90,4 +96,4 @@ jobs:
           rm ./this-release-notes.md
 
       - run: |
-          nix develop .# --command cargo publish --no-verify --token ${{ secrets.CRATES_IO_TESTTRIM_TOKEN }}
+          nix develop .# --command cargo publish --no-verify -p testtrim --token ${{ secrets.CRATES_IO_TESTTRIM_TOKEN }}

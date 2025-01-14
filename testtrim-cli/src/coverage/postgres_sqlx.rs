@@ -77,7 +77,7 @@ impl PostgresCoverageDatabase {
                     .max_connections(5)
                     .connect(&self.database_url)
                     .await?;
-                sqlx::migrate!("./db/postgres/migrations")
+                sqlx::migrate!("../db/postgres/migrations")
                     .run(&pool)
                     .await?;
                 Ok(pool)

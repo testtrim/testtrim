@@ -27,7 +27,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # have another good reason I'll mark them as GPL.
 [[annotations]]
 path = [
-    "tests/test_data/*.strace.*",
+    "testtrim-cli/tests/test_data/*.strace.*",
 ]
 SPDX-FileCopyrightText = "2024 Mathieu Fenniak <mathieu@fenniak.net>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
