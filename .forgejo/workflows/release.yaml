@@ -65,35 +65,44 @@ jobs:
           # which has a `cargo set-version ...` command, but that doesn't update the lock file
           # (https://github.com/killercup/cargo-edit/issues/698) itself, leaving you in a position of needing to do a
           # build or upgrade, which I don't want the release process to do.
-          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-cli/Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-ebpf-common/Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-ebpf-program/Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" testtrim-ebpf-tracing/Cargo.toml
-          sed -i "/name = \"testtrim\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
-          sed -i "/name = \"testtrim-ebpf-common\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
-          sed -i "/name = \"testtrim-ebpf-program\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
-          sed -i "/name = \"testtrim-ebpf-tracing\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION#v}\"/" ./**/Cargo.toml
+          sed -i "/name = \"testtrim[^\"]\"/,/version =/s/version = \".*\"/version = \"${NEW_VERSION#v}\"/" Cargo.lock
 
           git config --global user.name "release-workflow"
           git config --global user.email "release-workflow@testtrim.org"
-          git add ./CHANGELOG.md ./Cargo.toml ./Cargo.lock
+          git add ./CHANGELOG.md ./**/Cargo.toml ./Cargo.lock
           git commit -m"chore(release): prepare for $NEW_VERSION"
           git tag $NEW_VERSION -F ./this-release-notes.md
           git push
           git push --tag
-
-          curl -X 'POST' \
-            --fail-with-body \
-            'https://codeberg.org/api/v1/repos/testtrim/testtrim/releases' \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -d "{
-              \"tag_name\": \"$NEW_VERSION\",
-              \"target_commitish\": \"$NEW_VERSION\"
-            }"
-
+          # Need a clean working directory for the cargo publish
           rm ./this-release-notes.md
+
+          # Retry function for the release creation -- the codeberg API seems to have errors intermittently which I'd
+          # guess (w/ no evidence) is due to trying to create the release so quickly after the tag is uploaded.
+          for i in {1..3}; do
+            if curl -X 'POST' \
+              --fail-with-body \
+              'https://codeberg.org/api/v1/repos/testtrim/testtrim/releases' \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -d "{
+                \"tag_name\": \"$NEW_VERSION\",
+                \"target_commitish\": \"$NEW_VERSION\"
+              }"; then
+              echo "Release creation successful"
+              break
+            else
+              if [ $i -lt 3 ]; then
+                echo "Release creation failed, attempt $i of 3. Retrying in 10 seconds..."
+                sleep 10
+              else
+                echo "Release creation failed after 3 attempts"
+                exit 1
+              fi
+            fi
+          done
 
       - run: |
           nix develop .# --command cargo publish --no-verify -p testtrim --token ${{ secrets.CRATES_IO_TESTTRIM_TOKEN }}
