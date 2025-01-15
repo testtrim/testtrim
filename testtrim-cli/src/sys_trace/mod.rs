@@ -15,12 +15,13 @@ use trace::{DraftTrace, Trace};
 use crate::errors::SubcommandErrors;
 
 #[cfg(target_os = "linux")]
-mod strace;
+pub mod strace;
 pub mod trace;
 
 /// Allows execution of a command in a manner that traces relevant system calls and provides access to the trace for
 /// analysis.
 #[enum_dispatch]
+#[allow(async_fn_in_trait)] // should be fine to the extent that this is only used internally to this project
 pub trait SysTraceCommand {
     /// Run the command `cmd` under syscall tracing, utilizing the file path `tmp` as temporary storage if necessary.
     ///

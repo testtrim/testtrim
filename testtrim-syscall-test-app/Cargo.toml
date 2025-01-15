@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "testtrim-syscall-test-app"
+version = "0.8.2"
+edition = "2024"
+
+[dependencies]
+clap = { workspace = true }
+nix = { workspace = true, features = ["fs", "process"] }

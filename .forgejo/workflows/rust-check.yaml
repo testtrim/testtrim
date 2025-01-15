@@ -77,6 +77,8 @@ jobs:
           echo "TESTTRIM=$FLAKE#testtrim" >> $GITHUB_ENV
       - name: get-test-identifiers -- output tests that will be run, and why
         run: nix develop .# --command nix run $TESTTRIM -- get-test-identifiers -vv
+      - name: build testtrim-syscall-test-app
+        run: nix develop .# --command cargo build --bin testtrim-syscall-test-app
       - name: run-tests
         run: nix develop .# --command nix run $TESTTRIM -- run-tests -vv --source-mode=clean-commit
         env:

@@ -26,7 +26,7 @@ mod repo_config;
 mod schema;
 pub mod scm;
 mod server;
-mod sys_trace;
+pub mod sys_trace;
 pub mod timing_tracer;
 mod util;
 

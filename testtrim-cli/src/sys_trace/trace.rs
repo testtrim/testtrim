@@ -63,7 +63,14 @@ pub enum SocketOperation {
     Read(Vec<u8>),
 }
 
+impl Default for DraftTrace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DraftTrace {
+    #[must_use]
     pub fn new() -> DraftTrace {
         DraftTrace {
             open_paths: HashSet::new(),

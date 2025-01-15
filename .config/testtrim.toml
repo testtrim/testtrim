@@ -98,3 +98,14 @@ name = "test-internal network access"
 apply = "ignore"
 [[network-policy.match]]
 host-port = ["google.com", 80]
+
+# test_access_network_strace (maybe other syscall tracers in the future as well) performs network access in a subprocess
+# in order to perform syscall trace testing.  All of this access can be ignored as it doesn't reach out to real
+# dependencies.
+[[network-policy]]
+name = "syscall trace testing network access"
+apply = "ignore"
+[[network-policy.match]]
+port = 9999
+[[network-policy.match]]
+host = "example.com"

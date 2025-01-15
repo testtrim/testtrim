@@ -128,6 +128,7 @@
             ./testtrim-ebpf-common
             ./testtrim-ebpf-program
             ./testtrim-ebpf-tracing
+            ./testtrim-syscall-test-app
             ./Cargo.lock
             ./Cargo.toml
           ];

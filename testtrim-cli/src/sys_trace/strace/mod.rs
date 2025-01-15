@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument};
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -30,11 +30,19 @@ mod tokenizer;
 /// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
 pub struct STraceSysTraceCommand;
 
+impl Default for STraceSysTraceCommand {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl STraceSysTraceCommand {
+    #[must_use]
     pub fn new() -> Self {
         Self {}
     }
 
+    #[must_use]
     pub fn is_available() -> bool {
         let output = SyncCommand::new("strace").arg("--help").output();
         match output {
@@ -170,6 +178,7 @@ impl STraceSysTraceCommand {
                 // basically a match but keeping `function` in scope for remainder...
                 unreachable!()
             };
+            trace!("strace function: {function:?}");
 
             match function {
                 Function::Openat { path: open_path } => {

@@ -3540,6 +3540,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "testtrim-syscall-test-app"
+version = "0.8.2"
+dependencies = [
+ "clap 4.5.26",
+ "nix",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

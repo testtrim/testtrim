@@ -7,10 +7,12 @@ members = [
     "testtrim-cli",
     "testtrim-ebpf-tracing",
     "testtrim-ebpf-program",
+    "testtrim-syscall-test-app",
 ]
 default-members = [
     "testtrim-cli",
     "testtrim-ebpf-tracing",
+    "testtrim-syscall-test-app",
 ]
 resolver = "3"
 
@@ -44,7 +46,7 @@ libc = { version = "0.2.159", default-features = false }
 llvm_profparser = "0.7.0"
 log = "0.4.22"
 named-lock = "0.4.1"
-nix = { version = "^0.29.0", features = ["socket", "user"]}
+nix = "^0.29.0"
 num_cpus = "1.16.0"
 num-derive = "0.4.2"
 num-traits = "^0.2"
