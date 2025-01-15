@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "testtrim"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "actix-test",
  "actix-web",
@@ -3501,11 +3501,11 @@ dependencies = [
 
 [[package]]
 name = "testtrim-ebpf-common"
-version = "0.8.0"
+version = "0.8.1"
 
 [[package]]
 name = "testtrim-ebpf-program"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
@@ -3524,7 +3524,7 @@ dependencies = [
 
 [[package]]
 name = "testtrim-ebpf-tracing"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "aya",
