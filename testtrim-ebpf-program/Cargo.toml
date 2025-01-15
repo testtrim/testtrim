@@ -4,7 +4,7 @@
 
 [package]
 name = "testtrim-ebpf-program"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 
 [dependencies]
