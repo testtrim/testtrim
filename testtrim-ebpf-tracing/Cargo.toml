@@ -16,6 +16,7 @@ log = { workspace = true }
 nix = { workspace = true, features = ["process", "user"]}
 simplelog = { workspace = true }
 testtrim-ebpf-common = { path = "../testtrim-ebpf-common" }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "signal", "time"] }
 
 [build-dependencies]
@@ -34,7 +35,3 @@ aya-build = { workspace = true }
 # workflows with stable cargo; stable cargo outright refuses to load manifests that use unstable
 # features.
 testtrim-ebpf-program = { path = "../testtrim-ebpf-program" }
-
-[[bin]]
-name = "testtrim-ebpf-tracing"
-path = "src/main.rs"

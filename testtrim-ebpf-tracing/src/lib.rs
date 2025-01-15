@@ -2,18 +2,128 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![feature(once_cell_try)]
+
 use std::ffi::OsStr;
+use std::ffi::c_int;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::pin::pin;
+use std::sync::OnceLock;
 
-use aya::maps::HashMap;
-use aya::maps::RingBuf;
-use aya::programs::TracePoint;
+use aya::{
+    Ebpf, EbpfError,
+    maps::{HashMap, MapData, MapError, RingBuf},
+    programs::{ProgramError, TracePoint},
+};
 use log::{debug, warn};
 use testtrim_ebpf_common::{Event, EventData};
+use thiserror::Error;
 use tokio::io::unix::AsyncFd;
 use tokio::signal;
+
+static MEMLOCK: OnceLock<()> = OnceLock::new();
+
+#[derive(Error, Debug)]
+pub enum EbpfTracerError {
+    #[error("remove limit on locked memory failed, ret is: {0}")]
+    MemlockLimit(c_int),
+
+    #[error(transparent)]
+    EbpfError(#[from] EbpfError),
+
+    #[error(transparent)]
+    EbpfLoggingError(#[from] aya_log::Error),
+
+    #[error(transparent)]
+    EbpfProgramError(#[from] ProgramError),
+
+    #[error("eBPF program `{0}` could not be found")]
+    EbpfProgramMissing(String),
+
+    #[error("eBPF map `{0}` could not be found")]
+    EbpfMapMissing(String),
+
+    #[error(transparent)]
+    EbpfMapError(#[from] MapError),
+}
+
+pub struct EbpfTracer {
+    ebpf: Ebpf,
+    monitored_pids: HashMap<MapData, u32, u32>,
+    trace_events: RingBuf<MapData>,
+    monitor_events: RingBuf<MapData>,
+}
+
+impl EbpfTracer {
+    pub fn new() -> Result<Self, EbpfTracerError> {
+        MEMLOCK.get_or_try_init(|| {
+            // Bump the memlock rlimit. This is needed for older kernels that don't use the new memcg based accounting, see
+            // https://lwn.net/Articles/837122/
+            let rlim = libc::rlimit {
+                rlim_cur: libc::RLIM_INFINITY,
+                rlim_max: libc::RLIM_INFINITY,
+            };
+            let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
+            if ret != 0 {
+                Err(EbpfTracerError::MemlockLimit(ret))
+            } else {
+                Ok(())
+            }
+        })?;
+
+        let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
+            env!("OUT_DIR"),
+            "/testtrim-ebpf-program-output"
+        )))?;
+        // This can happen if you remove all log statements from your eBPF program; maybe shouldn't be treated as an
+        // error but it's a good start.
+        aya_log::EbpfLogger::init(&mut ebpf)?;
+
+        let program: &mut TracePoint = ebpf
+            .program_mut("sys_enter_openat")
+            .ok_or_else(|| EbpfTracerError::EbpfProgramMissing(String::from("sys_enter_openat")))?
+            .try_into()?;
+        program.load()?;
+        program.attach("syscalls", "sys_enter_openat")?;
+
+        let program: &mut TracePoint = ebpf
+            .program_mut("sched_process_fork")
+            .ok_or_else(|| EbpfTracerError::EbpfProgramMissing(String::from("sched_process_fork")))?
+            .try_into()?;
+        program.load()?;
+        program.attach("sched", "sched_process_fork")?;
+
+        let program: &mut TracePoint = ebpf
+            .program_mut("sched_process_exit")
+            .ok_or_else(|| EbpfTracerError::EbpfProgramMissing(String::from("sched_process_exit")))?
+            .try_into()?;
+        program.load()?;
+        program.attach("sched", "sched_process_exit")?;
+
+        let monitored_pids = HashMap::try_from(
+            ebpf.take_map("MONITORED_PIDS")
+                .ok_or_else(|| EbpfTracerError::EbpfMapMissing(String::from("MONITORED_PIDS")))?,
+        )?;
+
+        let trace_events = RingBuf::try_from(
+            ebpf.take_map("EVENTS")
+                .ok_or_else(|| EbpfTracerError::EbpfMapMissing(String::from("EVENTS")))?,
+        )?;
+
+        let monitor_events =
+            RingBuf::try_from(ebpf.take_map("MONITORING_EVENTS").ok_or_else(|| {
+                EbpfTracerError::EbpfMapMissing(String::from("MONITORING_EVENTS"))
+            })?)?;
+
+        Ok(EbpfTracer {
+            ebpf,
+            monitored_pids,
+            trace_events,
+            monitor_events,
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
