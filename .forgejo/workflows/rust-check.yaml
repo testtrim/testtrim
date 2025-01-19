@@ -79,11 +79,11 @@ jobs:
         run: nix develop .# --command nix run $TESTTRIM -- get-test-identifiers -vv
       - name: build testtrim-syscall-test-app
         run: nix develop .# --command cargo build --bin testtrim-syscall-test-app
-      # - name: run-tests
-      #   run: nix develop .# --command nix run $TESTTRIM -- run-tests -vv --source-mode=clean-commit
-      #   env:
-      #     TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
-      #     RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
+      - name: run-tests
+        run: nix develop .# --command nix run $TESTTRIM -- run-tests -vv --source-mode=clean-commit
+        env:
+          TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
+          RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
 
       # There's always the risk that testtrim is broken and doesn't run all the necessary tests, especially when we're
       # using testtrim to test testtrim.  So as a backup, on the main branch only, also run all tests.  This will
@@ -93,7 +93,7 @@ jobs:
       # This isn't general advice to do for all users of testtrim -- there's an elevated risk here when considering
       # self-testing.
       - name: run all tests
-        # if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' }}
         env:
           TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
