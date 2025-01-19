@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::{
     fs::File,
-    io::{AsyncBufReadExt as _, AsyncReadExt, BufReader, unix::AsyncFd},
+    io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt as _, BufReader, unix::AsyncFd},
     process::Command,
 };
 
@@ -81,11 +81,32 @@ impl STraceSysTraceCommand {
         match first {
             Some(first) => {
                 // Expect to be one of these three, depending on exactly how the parent/child PIDs raced:
-                // 40835 read(11,  <unfinished ...>
-                // 40835 <... read resumed>"\\x00", 1)      = 1
-                // 40835 read(11,  "\\x00", 1)      = 1
-                if first.contains("read(") || first.contains("read resumed") {
-                    // Sure, close enough!
+                //
+                // - 40835 read(11,  <unfinished ...>
+                // - 40835 <... read resumed>"\\x00", 1)      = 1
+                // - 40835 read(11,  "\\x00", 1)      = 1
+                //
+                // But if it's "unfinished", then we're also going to need to consume the *second* line, because it will
+                // contain the resumed line that we can't let go into the sequencer.
+                if first.contains("read(") && first.contains("<unfinished") {
+                    let second = trace_client.next_line().await?;
+                    match second {
+                        Some(second) if second.contains("read resumed") => {
+                            // Great!
+                        }
+                        Some(second) => {
+                            return Err(anyhow!(
+                                "expected read resumed as second syscall line, but was: {second:?}"
+                            ));
+                        }
+                        None => {
+                            return Err(anyhow!(
+                                "unexpected EOF from TraceClient on second response"
+                            ));
+                        }
+                    }
+                } else if first.contains("read(") || first.contains("read resumed") {
+                    // Great!
                 } else {
                     return Err(anyhow!(
                         "expected read resumed as first syscall; but was {first:?}"
@@ -106,7 +127,7 @@ impl STraceSysTraceCommand {
 
     async fn read_strace_output<Rd: LineReader, Rcpt: ReceptionistFacade>(
         reader: &mut Rd,
-        mut receptionist: Rcpt,
+        receptionist: Rcpt,
     ) -> Result<Trace> {
         let mut trace = DraftTrace::new();
         let mut extractor = FunctionExtractor::new();
@@ -384,7 +405,7 @@ impl STraceSysTraceCommand {
         use nix::sys::wait::WaitStatus;
         use nix::unistd::{ForkResult, fork, pipe};
         use std::fs::File;
-        use std::io::{Read, Write};
+        use std::io::Read;
         use std::os::unix::process::CommandExt;
         use std::os::unix::process::ExitStatusExt;
         use std::process::ExitStatus;
@@ -401,58 +422,75 @@ impl STraceSysTraceCommand {
                 drop(stdout_write_fd);
                 drop(stderr_write_fd);
 
-                // It's safe to use tokio/async work in the Parent branch.
-                let mut stdout_read_file =
-                    unsafe { tokio::fs::File::from_raw_fd(stdout_read_fd.into_raw_fd()) };
-                let mut stderr_read_file =
-                    unsafe { tokio::fs::File::from_raw_fd(stderr_read_fd.into_raw_fd()) };
+                // FIXME: the continual error handling with waitpid() here is necessary, but dumbly implemented --
+                // should wrap child pid in a struct that would do this when dropped, and then "take" from it later --
+                // cleaner and less prone to error from future changes.
 
-                // Create a pidfd that we can use with tokio to wait for the child process.
-                let pidfd = Self::pidfd_open(child.as_raw())?;
-                let mut pidfd = AsyncFd::new(pidfd)?;
-
-                // Subscribe to the events of the child pid.
-                debug!("trace_command_remotely spawned child {child:?}");
+                // Subscribe to the syscall tracing of the child pid through TraceClient...
                 let trace_client =
-                    TraceClient::try_create(&receptionist_address, child.as_raw()).await?;
+                    match TraceClient::try_create(&receptionist_address, child.as_raw()).await {
+                        Ok(trace_client) => Ok(trace_client),
+                        Err(e) => {
+                            // Prevent zombie subprocess; waitpid the child even if the parent has error.
+                            tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
+                            Err(e)
+                        }
+                    }?;
                 let trace_reader =
                     tokio::task::spawn(Self::read_strace_output_from_trace_client(trace_client));
 
                 // Now we can let the child know to move forward.
                 let buf = [0u8; 1];
-                let mut write_file = File::from(write_goahead_fd);
-                loop {
-                    let bytes_written = write_file.write(&buf)?;
-                    if bytes_written != 0 {
-                        break;
-                    }
+                let mut write_file = tokio::fs::File::from(File::from(write_goahead_fd));
+                if let Err(e) = write_file.write_all(&buf).await {
+                    // Prevent zombie subprocess; waitpid the child even if the parent has error.
+                    tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
+                    return Err(e.into());
                 }
                 drop(write_file);
 
-                let mut stdout: Vec<u8> = Vec::with_capacity(4096);
-                let mut stdout_buf = [0u8; 4096];
-                let mut stderr: Vec<u8> = Vec::with_capacity(4096);
-                let mut stderr_buf = [0u8; 4096];
+                // Spawn tasks to read stdout & stderr; this should minimize the risk of any deadlocks between the
+                // process finishing and pipes being writeable/full as they'll be flushed to the Vec's continually.
+                let mut stdout_read_file =
+                    unsafe { tokio::fs::File::from_raw_fd(stdout_read_fd.into_raw_fd()) };
+                let mut stderr_read_file =
+                    unsafe { tokio::fs::File::from_raw_fd(stderr_read_fd.into_raw_fd()) };
+                let stdout_join = tokio::spawn(async move {
+                    let mut stdout: Vec<u8> = Vec::with_capacity(4096);
+                    stdout_read_file.read_to_end(&mut stdout).await?;
+                    Ok::<_, anyhow::Error>(stdout)
+                });
+                let stderr_join = tokio::spawn(async move {
+                    let mut stderr: Vec<u8> = Vec::with_capacity(4096);
+                    stderr_read_file.read_to_end(&mut stderr).await?;
+                    Ok::<_, anyhow::Error>(stderr)
+                });
 
-                loop {
-                    tokio::select! {
-                        read_result = stdout_read_file.read(&mut stdout_buf) => {
-                            let bytes_read = read_result?;
-                            debug!("trace_command_remotely recv'd stdout: {:?}", &stdout_buf[..bytes_read]);
-                            stdout.extend_from_slice(&stdout_buf[..bytes_read]);
-                        },
-                        read_result = stderr_read_file.read(&mut stderr_buf) => {
-                            let bytes_read = read_result?;
-                            debug!("trace_command_remotely recv'd stderr: {:?}", &stderr_buf[..bytes_read]);
-                            stderr.extend_from_slice(&stderr_buf[..bytes_read]);
-                        },
-                        _ = pidfd.readable_mut() => {
-                            // pidfd should become readable when the child process has exited.
-                            debug!("trace_command_remotely found pidfd readable");
-                            break;
-                        }
+                // Create a pidfd that we can use with tokio to wait for the child process.
+                let pidfd = match Self::pidfd_open(child.as_raw()) {
+                    Ok(pidfd) => pidfd,
+                    Err(e) => {
+                        // Prevent zombie subprocess; waitpid the child even if the parent has error.
+                        tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
+                        return Err(e);
                     }
+                };
+                let pidfd = match AsyncFd::new(pidfd) {
+                    Ok(pidfd) => pidfd,
+                    Err(e) => {
+                        // Prevent zombie subprocess; waitpid the child even if the parent has error.
+                        tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
+                        return Err(e.into());
+                    }
+                };
+                // AsyncFdReadyGuard is dropped without a care; we never read from this fd, just use it to identify if
+                // the child pid is ready for a wait that won't block.
+                if let Err(e) = pidfd.readable().await {
+                    // Prevent zombie subprocess; waitpid the child even if the parent has error.
+                    tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
+                    return Err(e.into());
                 }
+                debug!("trace_command_remotely found pidfd readable");
 
                 // This should be non-blocking because we only exited the loop above when the pidfd became readable.
                 let wait_status = waitpid(child, None)?;
@@ -463,14 +501,11 @@ impl STraceSysTraceCommand {
                 };
                 debug!("trace_command_remotely found child exit code: {exit_code:?}");
 
-                // Child process exited; but output pipes could still have some data to flush:
-                stdout_read_file.read_to_end(&mut stdout).await?;
-                stderr_read_file.read_to_end(&mut stderr).await?;
+                // Finish collecting any output data
+                let stdout = stdout_join.await??;
+                let stderr = stderr_join.await??;
 
-                debug!(
-                    "completed subprocess!  exit_code = {exit_code:?}; stdout = {stdout:?}; stderr = {stderr:?}"
-                );
-
+                debug!("completed subprocess!  exit_code = {exit_code:?}");
                 let output = Output {
                     status: ExitStatus::from_raw(exit_code),
                     stdout,
@@ -483,6 +518,9 @@ impl STraceSysTraceCommand {
             ForkResult::Child => {
                 // I don't think it's safe to use tokio/async in the Child branch... there should be no active tokio
                 // runtime and everything should be blocking.  Hopefully!
+                //
+                // It's also important that this branch never return -- which means never using `?` operators.  If
+                // something fails, we can panic so that the parent process notes our termination.
 
                 // Wait until the parent has subscribed upstream to our process.  This should be the first syscall in
                 // the child process because it will wait until the parent process has subscribed to the strace stream,
@@ -494,9 +532,9 @@ impl STraceSysTraceCommand {
                 drop(read_file);
 
                 // Connect stdout, stderr to the pipes
-                nix::unistd::close(0)?; // stdin
-                nix::unistd::dup2(stdout_write_fd.as_raw_fd(), 1)?; // stdout
-                nix::unistd::dup2(stderr_write_fd.as_raw_fd(), 2)?; // stderr
+                nix::unistd::close(0).expect("close(0)"); // stdin
+                nix::unistd::dup2(stdout_write_fd.as_raw_fd(), 1).expect("dup2(1)"); // stdout
+                nix::unistd::dup2(stderr_write_fd.as_raw_fd(), 2).expect("dup2(2)"); // stderr
 
                 // Drop all the unused pipe ends.
                 drop(write_goahead_fd);
@@ -518,6 +556,9 @@ impl SysTraceCommand for STraceSysTraceCommand {
     async fn trace_command(&self, orig_cmd: Command, tmp: &Path) -> Result<(Output, Trace)> {
         match env::var("__TESTTRIM_STRACE") {
             Ok(ref receptionist_address) => {
+                debug!(
+                    "__TESTTRIM_STRACE is set to {receptionist_address:?}; beginning trace_command_remotely"
+                );
                 self.trace_command_remotely(orig_cmd, PathBuf::from(receptionist_address))
                     .await
             }
@@ -547,7 +588,7 @@ impl Drop for Fifo {
 trait ReceptionistFacade {
     async fn peek_trace(&self, trace_line: &str);
     fn add_subprocess(&self, parent_pid: i32, child_pid: i32);
-    fn remove_process(&mut self, pid: i32);
+    fn remove_process(&self, pid: i32);
     async fn shutdown(self);
 }
 
@@ -555,11 +596,8 @@ struct NoopReceptionist {}
 
 impl ReceptionistFacade for NoopReceptionist {
     async fn peek_trace(&self, _trace_line: &str) {}
-
     fn add_subprocess(&self, _parent_pid: i32, _child_pid: i32) {}
-
-    fn remove_process(&mut self, _pid: i32) {}
-
+    fn remove_process(&self, _pid: i32) {}
     async fn shutdown(self) {}
 }
 
@@ -578,7 +616,7 @@ impl LineReader for TraceClient {
         let line = self.next_line().await?;
 
         // "Some(\"25315 <... read resumed>\\\"\\\\x00\\\", 1)      = 1\")";
-        debug!("LineReader for TraceClient: {line:?}");
+        trace!("LineReader for TraceClient: {line:?}");
         Ok(line)
     }
 }

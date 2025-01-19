@@ -307,7 +307,7 @@ fn parse_resumed_unfinished_call<'i>(input: &mut &'i str) -> PResult<InternalLin
 
 fn parse_terminating_process_case1<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
     let _ = literal("<... ").parse_next(input)?;
-    let function_name = parse_function_name(input)?;
+    let function_name = alt((parse_function_name, literal("???"))).parse_next(input)?;
     let _ = literal(" resumed>").parse_next(input)?;
     let _ = alt((
         Parser::take((
@@ -778,6 +778,14 @@ mod tests {
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
             pid: "1316971",
+            function: "???",
+            arguments: vec![],
+            outcome: CallOutcome::ResumedUnfinished
+        });
+        let strace = String::from(r"33453 <... ??? resumed>)                = ?");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(tokenized, SyscallSegment {
+            pid: "33453",
             function: "???",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished

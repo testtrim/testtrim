@@ -307,7 +307,8 @@ impl Sequencer {
                     )))
                 } else {
                     Err(anyhow::anyhow!(
-                        "Found resumed syscall without matching unfinished call"
+                        "Found resumed syscall without matching unfinished call; content was: {:?}",
+                        trace_line.borrow_input()
                     ))
                 }
             }

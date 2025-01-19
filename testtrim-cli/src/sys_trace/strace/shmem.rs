@@ -90,6 +90,7 @@ impl Receptionist {
                         }
                         let mut set = JoinSet::new();
                         for rem in remove {
+                            // safe: the only other modification paths to this map are not possible concurrently
                             let (_pid, subscriber) = subscribers.remove(&rem).unwrap();
                             set.spawn(subscriber.shutdown());
                         }
@@ -127,15 +128,24 @@ impl Receptionist {
                             Ok(operator) => operator,
                             Err(err) => {
                                 warn!("DedicatedOperator startup failed: {err:?}");
+                                // Seems reasonable to drop operator without shutdown if it didn't startup successfully
                                 continue;
                             },
                         };
-                        if let Err(err) = stream.write_all(operator.unique_id().as_bytes()).await {
-                            warn!("Receptionist stream.write_all had error: {err:?}");
-                            tokio::task::spawn(operator.shutdown());
-                            continue;
-                        }
+                        // Must store the operator, in order to begin getting events from peek_trace, before we tell the
+                        // client the unique_id -- can't let the client think it's ready and then potentially miss an
+                        // event.  On the other hand, have to tear down the operator if sending the ID fails, making
+                        // this a little ugly in the error handling.
+                        let unique_id = String::from(operator.unique_id());
+                        let subscribe_pid_copy = subscribe_pid.clone();
                         subscribers.insert(subscribe_pid, operator);
+                        if let Err(err) = stream.write_all(unique_id.as_bytes()).await {
+                            warn!("Receptionist stream.write_all had error: {err:?}");
+                            // theoretically remove_process could simultaneously remove
+                            if let Some((_pid, operator)) = subscribers.remove(&subscribe_pid_copy) {
+                                tokio::task::spawn(operator.shutdown());
+                            }
+                        }
                     }
                 }
             }
@@ -167,7 +177,7 @@ impl ReceptionistFacade for Receptionist {
         }
     }
 
-    fn remove_process(&mut self, pid: i32) {
+    fn remove_process(&self, pid: i32) {
         let mut remove = vec![];
         for mut subscriber in self.subscribers.iter_mut() {
             if subscriber.value_mut().remove_process(pid) {
@@ -175,17 +185,19 @@ impl ReceptionistFacade for Receptionist {
             }
         }
         for rem in remove {
-            // safe because func is &mut, removal from subscribers can only come from remove_process or shutdown which
-            // requires mut or owned access:
-            let (_pid, subscriber) = self.subscribers.remove(&rem).unwrap();
-            // shutdown is required for the transmission of the EOF marker... spawn is a bit of a strange approach here
-            // because we could end up shutting down the Receptionist while there are still DedicatedOperator instances
-            // that are now owned by the tokio spawn queue.  I guess that's OK?  The major problem is a lack of error
-            // reporting if anything in the shutdown process goes wrong -- it seems to be done from here, but might not
-            // be.  I could make remove_process async but run into errors with FutureExtractorOutput not being `Send`,
-            // and, it adds async operations into the `read_strace_output` which isn't ideal... but solving that error
-            // and making this async is probably the "right" thing to do.
-            tokio::spawn(subscriber.shutdown());
+            // Theoretically teardown in an error handler in the spawned task could do this remove simultaneously, so
+            // need to protect against trying to do it twice.
+            if let Some((_pid, subscriber)) = self.subscribers.remove(&rem) {
+                // shutdown is required for the transmission of the EOF marker... spawn is a bit of a strange approach
+                // here because we could end up shutting down the Receptionist while there are still DedicatedOperator
+                // instances that are now owned by the tokio spawn queue.  I guess that's OK?  The major problem is a
+                // lack of error reporting if anything in the shutdown process goes wrong -- it seems to be done from
+                // here, but might not be.  I could make remove_process async but run into errors with
+                // FutureExtractorOutput not being `Send`, and, it adds async operations into the `read_strace_output`
+                // which isn't ideal... but solving that error and making this async is probably the "right" thing to
+                // do.
+                tokio::spawn(subscriber.shutdown());
+            }
         }
     }
 
@@ -241,7 +253,7 @@ impl DedicatedOperator {
 
             loop {
                 tokio::select! {
-                    _ = (&mut shutdown_request_rx) => {
+                    shutdown_event = (&mut shutdown_request_rx) => {
                         // Before we can shutdown, we need to ensure that the channel is clear.  We must assume that any
                         // necessary writes to the channel are already done before the shutdown begins, and that all
                         // `Sender` (which should just be the one) are dropped, allowing recv to just flush the buffer
@@ -252,8 +264,20 @@ impl DedicatedOperator {
                                 break;
                             }
                         }
-                        msg_queue.write_blocking(&[0u8]).unwrap(); // EOF signal
-                        shutdown_complete_tx.send(()).unwrap();
+                        // Write EOF signal
+                        if let Err(err) = msg_queue.write_blocking(&[0u8]) {
+                            warn!("msg_queue write error while writing EOF: {err:?}");
+                        }
+                        // If DedicatedOperator was dropped without a `shutdown()`, then shutdown_event could contain a
+                        // RecvError, in which case we don't want to send the shutdown_complete_tx because there will be
+                        // no receiver (resulting in an error).
+                        if shutdown_event.is_ok() {
+                            // only possible failure is if shutdown_complete_rx has been deallocated, which could happen
+                            // if dropped without shutdown (presumably after the event was sent or else we wouldn't be
+                            // inside this if), but sending on this channel wouldn't matter then -- ignore Result
+                            // failure.
+                            let _ = shutdown_complete_tx.send(());
+                        }
                         return;
                     },
                     trace = trace_rx.recv() => {
@@ -402,7 +426,7 @@ impl TraceClient {
         self.shutdown_signal
             .store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(read_join_handle) = self.read_join_handle.take() {
-            // JoinHandle join should be infallible, unless it panic'd
+            // JoinHandle join should be infallible, unless the tokio spawn panic'd
             if let Err(err) = read_join_handle.await.unwrap() {
                 // Possibly could fail from shmem access.
                 warn!("failure in TraceClient spawn process: {err:?}");
@@ -506,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn receptionist_auto_shutdown() -> Result<()> {
         let address = PathBuf::from(format!("receptionist.sock-{}", Uuid::new_v4()));
-        let mut receptionist = Receptionist::startup(address.clone())?;
+        let receptionist = Receptionist::startup(address.clone())?;
         let mut client = TraceClient::try_create(&address, 100).await?;
 
         receptionist.peek_trace("100 close(3) = 0").await;
