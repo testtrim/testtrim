@@ -2,16 +2,22 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// Can't attach this specifically to the `FunctionExtractorOutput` struct because the relevant field is part of the
+// macro output.
+#![allow(clippy::ref_option)]
+
 use std::{os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
 
 use anyhow::{Result, anyhow, ensure};
 use lazy_static::lazy_static;
+use ouroboros::self_referencing;
 use regex::Regex;
 
 use crate::sys_trace::trace::UnifiedSocketAddr;
 
-use super::tokenizer::{
-    Argument, CallOutcome, EncodedString, Retval, SyscallSegment, TokenizerOutput, tokenize,
+use super::{
+    sequencer::{CompleteSyscall, Sequencer, SequencerOutput},
+    tokenizer::{Argument, EncodedString, Retval},
 };
 
 #[derive(Debug, PartialEq)]
@@ -22,14 +28,14 @@ pub enum OpenPath {
 
 #[derive(Debug, PartialEq)]
 pub enum StringArgument<'a> {
-    Complete(EncodedString<'a>),
+    Complete(&'a EncodedString<'a>),
     Partial,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum FunctionTrace<'a> {
-    Function(Function<'a>),
-    Exit,
+    Function { pid: i32, function: Function<'a> },
+    Exit { pid: i32 },
 }
 
 #[derive(Debug, PartialEq)]
@@ -41,7 +47,7 @@ pub enum Function<'a> {
         path: PathBuf,
     },
     Clone {
-        child_pid: u32,
+        child_pid: i32,
     },
     Connect {
         // connect is a trickier syscall than the others we've handled because it is typically used with non-blocking
@@ -122,68 +128,80 @@ lazy_static! {
     .unwrap();
 }
 
+#[self_referencing]
+#[derive(Debug, PartialEq)]
+pub struct FunctionExtractorOutput {
+    sequencer_output: SequencerOutput,
+    #[borrows(sequencer_output)]
+    #[covariant]
+    pub function_trace: Option<FunctionTrace<'this>>,
+}
+
 pub struct FunctionExtractor {
-    // sequencer: Sequencer<'a>,
+    sequencer: Sequencer,
 }
 
 impl FunctionExtractor {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            // sequencer: Sequencer::new(),
+            sequencer: Sequencer::new(),
         }
     }
 
-    pub fn extract<'a>(&mut self, input: &'a str) -> Result<Option<FunctionTrace<'a>>> {
-        let mut my_input = input;
-        let trace_output = tokenize(&mut my_input)?;
-        // let Some(trace_output) = trace_output else {
-        //     return Ok(None);
-        // };
-        match trace_output {
-            TokenizerOutput::Syscall(syscall) => {
-                let CallOutcome::Complete { ref retval } = syscall.outcome else {
-                    return Ok(None);
-                };
-                let retval = match retval {
-                    Retval::Success(retval) => retval,
-                    // Permit "connect" failures to be emitted.
-                    Retval::Failure(retval, _msg) if syscall.function == "connect" => retval,
-                    _ => {
-                        // Ignore error and resumed states.
-                        return Ok(None);
-                    }
-                };
-                let function = match syscall.function {
-                    "close" => Some(Self::extract_close(&syscall.arguments)?),
-                    "openat" => Some(Self::extract_openat(&syscall.arguments)?),
-                    "chdir" => Some(Self::extract_chdir(&syscall.arguments)?),
-                    "clone" => Some(Self::extract_clone((*retval).try_into()?)),
-                    "clone3" => Some(Self::extract_clone((*retval).try_into()?)),
-                    "vfork" => Some(Self::extract_clone((*retval).try_into()?)),
-                    "sendto" => Self::extract_sendto(syscall)?, // may have None
-                    "read" => Some(Self::extract_read(syscall)?),
-                    "connect" => Self::extract_connect(&syscall.arguments)?, // may have None
-                    "recvfrom" => Some(Self::extract_recvfrom(syscall)?),
-                    "execve" => Some(Self::extract_execve(&syscall.arguments)?),
+    pub fn extract(&mut self, input: String) -> Result<FunctionExtractorOutput> {
+        let sequencer_output = self.sequencer.tokenize(input)?;
+        FunctionExtractorOutput::try_new(sequencer_output, Self::make_function_trace)
+    }
 
-                    // some syscalls we receive because we trace "%process" (for completeness if anything comes along to
-                    // create new processes), but can be dropped because they aren't relevant to our current needs:
-                    "wait4" | "kill" | "tgkill" | "waitid" | "pidfd_send_signal" => None,
+    fn make_function_trace(
+        sequencer_output: &SequencerOutput,
+    ) -> Result<Option<FunctionTrace<'_>>> {
+        match sequencer_output {
+            SequencerOutput::OnelineSyscall(syscall) => Self::handle_function(syscall),
+            SequencerOutput::TwolineSyscall(syscall) => Self::handle_function(syscall),
+            SequencerOutput::ProcessExit(process_exit) => Ok(Some(FunctionTrace::Exit {
+                pid: i32::from_str(process_exit.pid())?,
+            })),
+            SequencerOutput::IncompleteSyscall | SequencerOutput::Junk(_) => Ok(None),
+        }
+    }
 
-                    other => {
-                        return Err(anyhow!("unexpected syscall: {other:?}"));
-                    }
-                };
-
-                Ok(function.map(FunctionTrace::Function))
+    fn handle_function<T: CompleteSyscall>(syscall: &T) -> Result<Option<FunctionTrace<'_>>> {
+        let retval = match syscall.retval() {
+            Retval::Success(retval) => retval,
+            // Permit "connect" failures to be emitted.
+            Retval::Failure(retval, _msg) if syscall.function() == "connect" => retval,
+            _ => {
+                // Ignore error and resumed states.
+                return Ok(None);
             }
-            TokenizerOutput::Exit(_) => Ok(Some(FunctionTrace::Exit)),
-            TokenizerOutput::Signal(_) => Ok(None),
+        };
+
+        let pid = i32::from_str(syscall.pid())?;
+        Ok(match syscall.function() {
+            "close" => Some(Self::extract_close(syscall.arguments())?),
+            "chdir" => Some(Self::extract_chdir(syscall.arguments())?),
+            "openat" => Some(Self::extract_openat(syscall.arguments())?),
+            "clone" | "clone3" | "vfork" => Some(Self::extract_clone(*retval)),
+            "sendto" => Self::extract_sendto(syscall)?, // may have None
+            "read" => Some(Self::extract_read(syscall)?),
+            "connect" => Self::extract_connect(syscall.arguments())?, // may have None
+            "recvfrom" => Some(Self::extract_recvfrom(syscall.arguments())?),
+            "execve" => Some(Self::extract_execve(syscall.arguments())?),
+
+            // some syscalls we receive because we trace "%process" (for completeness if anything comes along to
+            // create new processes), but can be dropped because they aren't relevant to our current needs:
+            "wait4" | "kill" | "tgkill" | "waitid" | "pidfd_send_signal" => None,
+
+            other => {
+                return Err(anyhow!("unexpected syscall: {other:?}"));
+            }
         }
+        .map(|f| FunctionTrace::Function { pid, function: f }))
     }
 
-    fn extract_close<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
+    fn extract_close<'a>(arguments: &[&Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 1,
             "expected 1 argument to close, but was: {}",
@@ -193,7 +211,7 @@ impl FunctionExtractor {
         Ok(Function::Close { fd })
     }
 
-    fn extract_openat<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
+    fn extract_openat<'a>(arguments: &[&Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             // mode_t mode optional 4th
             (3..=4).contains(&arguments.len()),
@@ -213,7 +231,7 @@ impl FunctionExtractor {
         Ok(Function::Openat { path })
     }
 
-    fn extract_chdir<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
+    fn extract_chdir<'a>(arguments: &[&Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 1,
             "expected 1 argument to chdir, but arguments were: {:?}",
@@ -223,38 +241,36 @@ impl FunctionExtractor {
         Ok(Function::Chdir { path })
     }
 
-    fn extract_clone<'a>(retval: u32) -> Function<'a> {
+    fn extract_clone<'a>(retval: i32) -> Function<'a> {
         Function::Clone { child_pid: retval }
     }
 
-    fn extract_sendto(mut syscall: SyscallSegment) -> Result<Option<Function<'_>>> {
+    fn extract_sendto<T: CompleteSyscall>(syscall: &T) -> Result<Option<Function<'_>>> {
         ensure!(
-            syscall.arguments.len() == 6,
+            syscall.arguments().len() == 6,
             "expected 6 argument to sendto, but arguments were: {:?}",
-            syscall.arguments,
+            syscall.arguments(),
         );
-        if let Argument::Structure(_) = syscall.arguments[1] {
-            // unreachable!()
+        if let Argument::Structure(_) = syscall.arguments()[1] {
             return Ok(None);
         }
-        let data = Self::remove_data_argument(&mut syscall.arguments, 1)?;
-        let socket_fd = Self::numeric(&syscall.arguments, 0)?;
+        let data = Self::data(syscall.arguments(), 1)?;
+        let socket_fd = Self::numeric(syscall.arguments(), 0)?;
         Ok(Some(Function::Sendto { socket_fd, data }))
     }
 
-    fn extract_read(mut syscall: SyscallSegment) -> Result<Function<'_>> {
+    fn extract_read<T: CompleteSyscall>(syscall: &T) -> Result<Function<'_>> {
         ensure!(
-            syscall.arguments.len() == 3,
+            syscall.arguments().len() == 3,
             "expected 3 argument to read, but arguments were: {:?}",
-            syscall.arguments
+            syscall.arguments()
         );
-        let _ = syscall.arguments.pop();
-        let data = Self::pop_data_argument(&mut syscall.arguments)?;
-        let fd = Self::pop_numeric_argument(&mut syscall.arguments)?;
+        let fd = Self::numeric(syscall.arguments(), 0)?;
+        let data = Self::data(syscall.arguments(), 1)?;
         Ok(Function::Read { fd, data })
     }
 
-    fn extract_connect<'a>(arguments: &[Argument<'a>]) -> Result<Option<Function<'a>>> {
+    fn extract_connect<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Option<Function<'a>>> {
         ensure!(
             arguments.len() == 3,
             "expected 3 argument to connect, but arguments were: {:?}",
@@ -320,18 +336,18 @@ impl FunctionExtractor {
         })
     }
 
-    fn extract_recvfrom(mut syscall: SyscallSegment) -> Result<Function<'_>> {
+    fn extract_recvfrom<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
-            syscall.arguments.len() == 6,
+            arguments.len() == 6,
             "expected 6 argument to recvfrom, but arguments were: {:?}",
-            syscall.arguments
+            arguments
         );
-        let data = Self::remove_data_argument(&mut syscall.arguments, 1)?;
-        let socket_fd = Self::numeric(&syscall.arguments, 0)?;
+        let data = Self::data(arguments, 1)?;
+        let socket_fd = Self::numeric(arguments, 0)?;
         Ok(Function::Recv { socket_fd, data })
     }
 
-    fn extract_execve<'a>(arguments: &[Argument<'a>]) -> Result<Function<'a>> {
+    fn extract_execve<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 3,
             "expected 3 argument to execve, but arguments were: {:?}",
@@ -341,22 +357,14 @@ impl FunctionExtractor {
         Ok(Function::Execve { arg0: path })
     }
 
-    fn numeric<'a>(args: &[Argument<'a>], index: usize) -> Result<&'a str> {
+    fn numeric<'a>(args: &[&Argument<'a>], index: usize) -> Result<&'a str> {
         match &args[index] {
             Argument::Numeric(v) => Ok(v),
             v => Err(anyhow!("argument {index} was not numeric; it was {v:?}",)),
         }
     }
 
-    fn pop_numeric_argument<'a>(arguments: &mut Vec<Argument<'a>>) -> Result<&'a str> {
-        match arguments.pop() {
-            Some(Argument::Numeric(v)) => Ok(v),
-            Some(v) => Err(anyhow!("argument was not numeric; it was {v:?}",)),
-            None => Err(anyhow!("argument was not present in pop_numeric_argument")),
-        }
-    }
-
-    fn path(args: &[Argument<'_>], index: usize) -> Result<PathBuf> {
+    fn path(args: &[&Argument<'_>], index: usize) -> Result<PathBuf> {
         match &args[index] {
             Argument::String(v) => Ok(PathBuf::from(<std::ffi::OsStr as OsStrExt>::from_bytes(
                 v.decoded(),
@@ -365,20 +373,8 @@ impl FunctionExtractor {
         }
     }
 
-    fn pop_data_argument<'a>(arguments: &mut Vec<Argument<'a>>) -> Result<StringArgument<'a>> {
-        match arguments.pop() {
-            Some(Argument::String(data)) => Ok(StringArgument::Complete(data)),
-            Some(Argument::PartialString(_)) => Ok(StringArgument::Partial),
-            Some(v) => Err(anyhow!("argument was not string; it was {v:?}")),
-            None => Err(anyhow!("argument was not present in pop_data_argument")),
-        }
-    }
-
-    fn remove_data_argument<'a>(
-        arguments: &mut Vec<Argument<'a>>,
-        index: usize,
-    ) -> Result<StringArgument<'a>> {
-        match arguments.remove(index) {
+    fn data<'a>(args: &'a [&'a Argument<'a>], index: usize) -> Result<StringArgument<'a>> {
+        match &args[index] {
             Argument::String(data) => Ok(StringArgument::Complete(data)),
             Argument::PartialString(_) => Ok(StringArgument::Partial),
             v => Err(anyhow!("argument was not string; it was {v:?}")),
@@ -407,10 +403,13 @@ mod tests {
     fn close() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
-        let t = fe.extract(r"close(3)                        = 0")?;
+        let t = fe.extract(String::from(r"1234321 close(3)                        = 0"))?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Close { fd: "3" }))
+            t.borrow_function_trace(),
+            &Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Close { fd: "3" }
+            })
         );
 
         Ok(())
@@ -420,9 +419,9 @@ mod tests {
     fn error_filtered() -> Result<()> {
         let mut fe = FunctionExtractor::new();
         let t = fe.extract(
-            r#"chdir("/home/mfenniak")               = -1 ENOENT (No such file or directory)"#,
-        )?;
-        assert_eq!(t, None);
+                String::from(r#"1234321 chdir("/home/mfenniak")               = -1 ENOENT (No such file or directory)"#),
+            )?;
+        assert_eq!(t.borrow_function_trace(), &None);
         Ok(())
     }
 
@@ -431,24 +430,34 @@ mod tests {
         let mut fe = FunctionExtractor::new();
 
         let t = fe.extract(
-            r#"openat(AT_FDCWD, "test_data/Fibonacci_Sequence.txt", O_RDONLY|O_CLOEXEC) = 3"#,
-        )?;
+                String::from(r#"1234321 openat(AT_FDCWD, "test_data/Fibonacci_Sequence.txt", O_RDONLY|O_CLOEXEC) = 3"#),
+            )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Openat {
-                path: OpenPath::RelativeToCwd(PathBuf::from("test_data/Fibonacci_Sequence.txt")),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Openat {
+                    path: OpenPath::RelativeToCwd(PathBuf::from(
+                        "test_data/Fibonacci_Sequence.txt"
+                    )),
+                }
+            })
         );
 
         let t = fe.extract(
             // not using AT_FDCWD...
-            r#"openat(7, "gocoverdir", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_DIRECTORY) = 4"#,
+            String::from(
+                r#"1234321 openat(7, "gocoverdir", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_DIRECTORY) = 4"#,
+            ),
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Openat {
-                path: OpenPath::RelativeToOpenDirFD(PathBuf::from("gocoverdir"), 7),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Openat {
+                    path: OpenPath::RelativeToOpenDirFD(PathBuf::from("gocoverdir"), 7),
+                }
+            })
         );
 
         Ok(())
@@ -458,12 +467,17 @@ mod tests {
     fn chdir() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
-        let t = fe.extract(r#"chdir("test_data/\"Fibonacci\"_Sequence.txt") = 0"#)?;
+        let t = fe.extract(String::from(
+            r#"1234321 chdir("test_data/\"Fibonacci\"_Sequence.txt") = 0"#,
+        ))?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Chdir {
-                path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
-            }))
+            t.borrow_function_trace(),
+            &Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Chdir {
+                    path: PathBuf::from("test_data/\"Fibonacci\"_Sequence.txt"),
+                }
+            })
         );
 
         Ok(())
@@ -473,12 +487,13 @@ mod tests {
     fn clone() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
-        let t = fe.extract(r"clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653")?;
+        let t = fe.extract(String::from(r"1234321 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653"))?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Clone {
-                child_pid: 337_653
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Clone { child_pid: 337_653 }
+            })
         );
 
         Ok(())
@@ -488,12 +503,13 @@ mod tests {
     fn clone3() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
-        let t = fe.extract(r"clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7fcdb7d7f990, parent_tid=0x7fcdb7d7f990, exit_signal=0, stack=0x7fcdb7b7f000, stack_size=0x1fff00, tls=0x7fcdb7d7f6c0} => {parent_tid=[416676]}, 88) = 416676")?;
+        let t = fe.extract(String::from(r"1234321 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7fcdb7d7f990, parent_tid=0x7fcdb7d7f990, exit_signal=0, stack=0x7fcdb7b7f000, stack_size=0x1fff00, tls=0x7fcdb7d7f6c0} => {parent_tid=[416676]}, 88) = 416676"))?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Clone {
-                child_pid: 416_676
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Clone { child_pid: 416_676 }
+            })
         );
 
         Ok(())
@@ -503,12 +519,15 @@ mod tests {
     fn vfork() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
-        let t = fe.extract(r"vfork()                                 = 38724")?;
+        let t = fe.extract(String::from(
+            r"1234321 vfork()                                 = 38724",
+        ))?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Clone {
-                child_pid: 38724
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Clone { child_pid: 38724 }
+            })
         );
 
         Ok(())
@@ -518,32 +537,38 @@ mod tests {
     fn sendto() -> Result<()> {
         let mut fe = FunctionExtractor::new();
         let t = fe.extract(
-            r"sendto(12, [{nlmsg_len=20, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=1734979518, nlmsg_pid=0}, {ifa_family=AF_UNSPEC, ...}], 20, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12 <unfinished ...>",
-        )?;
-        assert_eq!(t, None);
+                String::from(r"123400 sendto(12, [{nlmsg_len=20, nlmsg_type=RTM_GETADDR, nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP, nlmsg_seq=1734979518, nlmsg_pid=0}, {ifa_family=AF_UNSPEC, ...}], 20, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12 <unfinished ...>"),
+            )?;
+        assert_eq!(*t.borrow_function_trace(), None);
 
         let t = fe.extract(
-            r#"sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#,
-        )?;
+                String::from(r#"1234321 sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#)
+            )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Sendto {
-                socket_fd: "3",
-                data: StringArgument::Complete(EncodedString::new(
-                    "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
-                )),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Sendto {
+                    socket_fd: "3",
+                    data: StringArgument::Complete(&EncodedString::new(
+                        "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
+                    )),
+                }
+            })
         );
 
         let t = fe.extract(
-            r#"sendto(5, "\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03\xb5NG\xda\xd9\x9fX\x07\xd4\xb3a\x7f\xe7\\\xbe\x96\xe1\x01\xe3E;\x85\x1ei\xcc\xd6\xdfc\xf7~\xec\xb4 q\x96\x1cW\x805\x84\xce\x9b\xe8\xd4\x89j%|\x95:<\xd952zYbj\rM\xd1(\xa0D\x8e\x00>\x13\x02\x13\x03\x13\x01\xc0,\xc00\x00\x9f\xcc\xa9\xcc\xa8\xcc\xaa\xc0+\xc0/\x00\x9e\xc0$\xc0(\x00k\xc0#\xc0'\x00g\xc0\n\xc0\x14\x009\xc0\t\xc0\x13\x003\x00\x9d\x00\x9c\x00=\x00<\x005\x00/\x00\xff\x01\x00\x01u\x00\x00\x00\x0e\x00\f\x00\x00\tgoogle.ca\x00\v\x00\x04\x03\x00\x01\x02\x00\n\x00\x16\x00\x14\x00\x1d\x00\x17\x00\x1e\x00\x19\x00\x18\x01\x00\x01\x01\x01\x02\x01\x03\x01\x04\x00\x10\x00\x0e\x00\f\x02h2\x08http/1.1\x00\x16\x00\x00\x00\x17\x00\x00\x001\x00\x00\x00\r\x000\x00.\x04\x03\x05\x03\x06\x03\x08\x07\x08\x08\x08\x1a\x08\x1b\x08\x1c\x08\t\x08\n\x08\v\x08\x04"..., 517, MSG_NOSIGNAL, NULL, 0) = 517"#,
-        )?;
+                String::from(r#"1234321 sendto(5, "\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03\xb5NG\xda\xd9\x9fX\x07\xd4\xb3a\x7f\xe7\\\xbe\x96\xe1\x01\xe3E;\x85\x1ei\xcc\xd6\xdfc\xf7~\xec\xb4 q\x96\x1cW\x805\x84\xce\x9b\xe8\xd4\x89j%|\x95:<\xd952zYbj\rM\xd1(\xa0D\x8e\x00>\x13\x02\x13\x03\x13\x01\xc0,\xc00\x00\x9f\xcc\xa9\xcc\xa8\xcc\xaa\xc0+\xc0/\x00\x9e\xc0$\xc0(\x00k\xc0#\xc0'\x00g\xc0\n\xc0\x14\x009\xc0\t\xc0\x13\x003\x00\x9d\x00\x9c\x00=\x00<\x005\x00/\x00\xff\x01\x00\x01u\x00\x00\x00\x0e\x00\f\x00\x00\tgoogle.ca\x00\v\x00\x04\x03\x00\x01\x02\x00\n\x00\x16\x00\x14\x00\x1d\x00\x17\x00\x1e\x00\x19\x00\x18\x01\x00\x01\x01\x01\x02\x01\x03\x01\x04\x00\x10\x00\x0e\x00\f\x02h2\x08http/1.1\x00\x16\x00\x00\x00\x17\x00\x00\x001\x00\x00\x00\r\x000\x00.\x04\x03\x05\x03\x06\x03\x08\x07\x08\x08\x08\x1a\x08\x1b\x08\x1c\x08\t\x08\n\x08\v\x08\x04"..., 517, MSG_NOSIGNAL, NULL, 0) = 517"#)
+            )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Sendto {
-                socket_fd: "5",
-                data: StringArgument::Partial,
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Sendto {
+                    socket_fd: "5",
+                    data: StringArgument::Partial,
+                }
+            })
         );
 
         Ok(())
@@ -554,27 +579,33 @@ mod tests {
         let mut fe = FunctionExtractor::new();
 
         let t = fe.extract(
-            r#"read(3, "\x02\x00\x00\x00\x01\x00\x00\x00\t\x00\x00\x00\x02\x00\x00\x00\xe8\x03\x00\x00d\x00\x00\x00\x10\x00\x00\x00\x0f\x00\x00\x00\x1f\x00\x00\x00", 38) = 36"#,
+            String::from(r#"1234321 read(3, "\x02\x00\x00\x00\x01\x00\x00\x00\t\x00\x00\x00\x02\x00\x00\x00\xe8\x03\x00\x00d\x00\x00\x00\x10\x00\x00\x00\x0f\x00\x00\x00\x1f\x00\x00\x00", 38) = 36"#,)
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Read {
-                fd: "3",
-                data: StringArgument::Complete(EncodedString::new(
-                    "\\x02\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\t\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\xe8\\x03\\x00\\x00d\\x00\\x00\\x00\\x10\\x00\\x00\\x00\\x0f\\x00\\x00\\x00\\x1f\\x00\\x00\\x00"
-                )),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Read {
+                    fd: "3",
+                    data: StringArgument::Complete(&EncodedString::new(
+                        "\\x02\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\t\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\xe8\\x03\\x00\\x00d\\x00\\x00\\x00\\x10\\x00\\x00\\x00\\x0f\\x00\\x00\\x00\\x1f\\x00\\x00\\x00"
+                    )),
+                }
+            })
         );
 
         let t = fe.extract(
-            r#"read(3, "d attributes must be the same, and the optional\n# and supplied fields are just that :-)\npolicy\t\t= policy_match\n\n# For the CA policy\n[ policy_match ]\ncountryName\t\t= match\nstateOrProvinceName\t= match\norganizationName\t= match\norganizationalUnitName\t= optional"..., 4096) = 4096"#,
+            String::from(r#"1234321 read(3, "d attributes must be the same, and the optional\n# and supplied fields are just that :-)\npolicy\t\t= policy_match\n\n# For the CA policy\n[ policy_match ]\ncountryName\t\t= match\nstateOrProvinceName\t= match\norganizationName\t= match\norganizationalUnitName\t= optional"..., 4096) = 4096"#,)
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Read {
-                fd: "3",
-                data: StringArgument::Partial,
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Read {
+                    fd: "3",
+                    data: StringArgument::Partial,
+                }
+            })
         );
 
         Ok(())
@@ -584,81 +615,96 @@ mod tests {
     fn connect() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
-        let t = fe.extract(
-            r#"connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
-        )?;
+        let t = fe.extract(String::from(
+            r#"1234321 connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
+        ))?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: "3",
-                socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Connect {
+                    socket_fd: "3",
+                    socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
+                }
+            })
         );
 
         let t = fe.extract(
-            r#"connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = 0"#,
+            String::from(r#"1234321 connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = 0"#)
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: "5",
-                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(SocketAddrV6::new(
-                    Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
-                    443,
-                    0,
-                    0
-                ))),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Connect {
+                    socket_fd: "5",
+                    socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
+                        SocketAddrV6::new(
+                            Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
+                            443,
+                            0,
+                            0
+                        )
+                    )),
+                }
+            })
         );
 
         let t = fe.extract(
-            r#"connect(5, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = 0"#,
+            String::from(r#"1234321 connect(5, {sa_family=AF_INET6, sin6_port=htons(0), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = 0"#)
         )?;
         // 0 port is filtered out:
-        assert_eq!(t, None);
+        assert_eq!(*t.borrow_function_trace(), None);
 
         let t = fe.extract(
-            r#"connect(17, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#,
+            String::from(r#"1234321 connect(17, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#)
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: "17",
-                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
-                    Ipv4Addr::new(100, 100, 100, 100),
-                    53
-                ))),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Connect {
+                    socket_fd: "17",
+                    socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
+                        SocketAddrV4::new(Ipv4Addr::new(100, 100, 100, 100), 53)
+                    )),
+                }
+            })
         );
 
         let t = fe.extract(
-            r#"connect(17, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#,
+            String::from(r#"1234321 connect(17, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("100.100.100.100")}, 16) = 0"#)
         )?;
         // 0 port is filtered out:
-        assert_eq!(t, None);
+        assert_eq!(*t.borrow_function_trace(), None);
 
         // errors are not filtered out:
         let t = fe.extract(
-            r#"connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINPROGRESS (Operation now in progress)"#,
+            String::from(r#"1234321 connect(5, {sa_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2607:f8b0:400a:805::2003", &sin6_addr), sin6_scope_id=0}, 28) = -1 EINPROGRESS (Operation now in progress)"#)
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Connect {
-                socket_fd: "5",
-                socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(SocketAddrV6::new(
-                    Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
-                    443,
-                    0,
-                    0
-                ))),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Connect {
+                    socket_fd: "5",
+                    socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
+                        SocketAddrV6::new(
+                            Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
+                            443,
+                            0,
+                            0
+                        )
+                    )),
+                }
+            })
         );
 
         // AF_UNSPEC is ignored
         let t = fe.extract(
-            r#"connect(7, {sa_family=AF_UNSPEC, sa_data="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"}, 16) = 0"#,
+            String::from(r#"1234321 connect(7, {sa_family=AF_UNSPEC, sa_data="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"}, 16) = 0"#)
         )?;
-        assert_eq!(t, None);
+        assert_eq!(*t.borrow_function_trace(), None);
 
         Ok(())
     }
@@ -668,17 +714,69 @@ mod tests {
         let mut fe = FunctionExtractor::new();
 
         let t = fe.extract(
-            r#"recvfrom(7, "\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 2048, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 57"#
+            String::from(r#"1234321 recvfrom(7, "\xd6\xef\x81\x80\x00\x01\x00\x01\x00\x00\x00\x01\x08codeberg\x03org\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x01\"\x00\x04\xd9\xc5[\x91\x00\x00)\x04\xd0\x00\x00\x00\x00\x00\x00", 2048, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("100.100.100.100")}, [28 => 16]) = 57"#)
         )?;
         assert_eq!(
-            t,
-            Some(FunctionTrace::Function(Function::Recv {
-                socket_fd: "7",
-                data: StringArgument::Complete(EncodedString::new(
-                    "\\xd6\\xef\\x81\\x80\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\x01\\x08codeberg\\x03org\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\\"\\x00\\x04\\xd9\\xc5[\\x91\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00"
-                )),
-            }))
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_234_321,
+                function: Function::Recv {
+                    socket_fd: "7",
+                    data: StringArgument::Complete(&EncodedString::new(
+                        "\\xd6\\xef\\x81\\x80\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\x01\\x08codeberg\\x03org\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\\"\\x00\\x04\\xd9\\xc5[\\x91\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00"
+                    )),
+                }
+            })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn execve() -> Result<()> {
+        let mut fe = FunctionExtractor::new();
+
+        let t = fe.extract(
+            String::from(r#"1316971 execve("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", ["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"], 0x7ffdf2244ed8 /* 218 vars */) = 0"#)
+        )?;
+        assert_eq!(
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 1_316_971,
+                function: Function::Execve {
+                    arg0: PathBuf::from(
+                        "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
+                    ),
+                }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn ignored_syscalls() -> Result<()> {
+        let mut fe = FunctionExtractor::new();
+
+        let t = fe.extract(String::from(
+            r"1316971 wait4(4086639, 0x7ffd89aca254, WNOHANG, NULL) = 0",
+        ))?;
+        assert_eq!(*t.borrow_function_trace(), None);
+
+        let t = fe.extract(String::from(
+            r"1316971 kill(4086639, SIGTERM)                  = 0",
+        ))?;
+        assert_eq!(*t.borrow_function_trace(), None);
+
+        let t = fe.extract(String::from(
+            r"1316971 tgkill(4143934, 4144060, SIGUSR1)       = 0",
+        ))?;
+        assert_eq!(*t.borrow_function_trace(), None);
+
+        let t = fe.extract(String::from(
+            r"1316971 waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
+        ))?;
+        assert_eq!(*t.borrow_function_trace(), None);
 
         Ok(())
     }

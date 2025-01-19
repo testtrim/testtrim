@@ -9,3 +9,6 @@ serial-integration = { max-threads = 1 }
 # Note that these tests also implement internal locking to guarantee success -- so both approaches do the same thing.
 filter = 'test(coverage::postgres_sqlx::) or test(coverage::testtrim_api::)'
 test-group = 'serial-integration'
+
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 4 }

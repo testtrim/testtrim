@@ -41,11 +41,12 @@ impl<'a> EncodedString<'a> {
         self.decoded.get_or_init(|| self.do_decode())
     }
 
-    #[must_use]
-    pub fn take(mut self) -> Vec<u8> {
-        self.decoded.get_or_init(|| self.do_decode());
-        self.decoded.take().unwrap()
-    }
+    // FIXME: removed because it's not currently usable, but would like to readd in the future
+    // #[must_use]
+    // pub fn take(mut self) -> Vec<u8> {
+    //     self.decoded.get_or_init(|| self.do_decode());
+    //     self.decoded.take().unwrap()
+    // }
 }
 
 #[derive(Debug, PartialEq)]
@@ -115,6 +116,7 @@ pub enum TokenizerOutput<'a> {
 
 #[derive(Debug, PartialEq)]
 pub struct SyscallSegment<'a> {
+    pub pid: &'a str,
     pub function: &'a str,
     pub arguments: Vec<Argument<'a>>,
     pub outcome: CallOutcome<'a>,
@@ -122,11 +124,13 @@ pub struct SyscallSegment<'a> {
 
 #[derive(Debug, PartialEq)]
 pub struct ProcessExit<'a> {
+    pub pid: &'a str,
     pub exit_code: &'a str,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct SignalRecv<'a> {
+    pub pid: &'a str,
     pub signal: &'a str,
 }
 
@@ -147,15 +151,23 @@ fn internal_tokenize<'i>(input: &mut &'i str) -> PResult<TokenizerOutput<'i>> {
 }
 
 fn parse_proc_exit<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
+    let pid = parse_pid(input)?;
+    let _ = consume_whitespace(input)?;
     let _ = literal("+++ exited with ").parse_next(input)?;
     let exit_code = digit1(input)?;
     let _ = literal(" +++").parse_next(input)?;
-    Ok(ProcessExit { exit_code })
+    Ok(ProcessExit { pid, exit_code })
 }
 
 fn parse_proc_killed<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
-    let _ = literal("+++ killed by SIGKILL +++").parse_next(input)?;
-    Ok(ProcessExit { exit_code: "-1" })
+    let pid = parse_pid(input)?;
+    let _ = consume_whitespace(input)?;
+    let _ = literal("+++ killed by ").parse_next(input)?;
+    let _ = rest(input)?;
+    Ok(ProcessExit {
+        pid,
+        exit_code: "-1",
+    })
 }
 
 fn parse_signal<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
@@ -163,19 +175,23 @@ fn parse_signal<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
 }
 
 fn parse_signal_format1<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+    let pid = parse_pid(input)?;
+    let _ = consume_whitespace(input)?;
     let _ = literal("---").parse_next(input)?;
     let _ = consume_whitespace(input)?;
     let signal = take_while(1.., |c: char| c.is_ascii_uppercase()).parse_next(input)?;
     // pretty lazy here but we don't do anything with signals yet, and may never
     let _ = take_while(0.., |_| true).parse_next(input)?;
-    Ok(SignalRecv { signal })
+    Ok(SignalRecv { pid, signal })
 }
 
 fn parse_signal_format2<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+    let pid = parse_pid(input)?;
+    let _ = consume_whitespace(input)?;
     let _ = literal("--- stopped by ").parse_next(input)?;
     let signal = take_while(1.., |c: char| c.is_ascii_uppercase()).parse_next(input)?;
     let _ = literal(" ---").parse_next(input)?;
-    Ok(SignalRecv { signal })
+    Ok(SignalRecv { pid, signal })
 }
 
 #[cfg(test)]
@@ -186,6 +202,8 @@ fn tokenize_syscall<'i>(input: &mut &'i str) -> Result<SyscallSegment<'i>> {
 }
 
 fn parse_syscall<'i>(input: &mut &'i str) -> PResult<SyscallSegment<'i>> {
+    let pid = parse_pid(input)?;
+    let _ = consume_whitespace(input)?;
     let line_type = parse_line_type(input)?;
 
     match line_type {
@@ -199,11 +217,13 @@ fn parse_syscall<'i>(input: &mut &'i str) -> PResult<SyscallSegment<'i>> {
             arguments,
             outcome,
         } => Ok(SyscallSegment {
+            pid,
             function: function_name,
             arguments,
             outcome,
         }),
         InternalLineType::ResumedUnfinished { function_name } => Ok(SyscallSegment {
+            pid,
             function: function_name,
             arguments: Vec::new(),
             outcome: CallOutcome::ResumedUnfinished,
@@ -332,6 +352,10 @@ fn consume_whitespace<'i>(input: &mut &'i str) -> PResult<&'i str> {
     multispace1(input)
 }
 
+pub fn parse_pid<'i>(input: &mut &'i str) -> PResult<&'i str> {
+    digit1(input)
+}
+
 fn parse_function_name<'i>(input: &mut &'i str) -> PResult<&'i str> {
     take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)
 }
@@ -366,7 +390,7 @@ fn parse_null_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
 
 fn parse_enum_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
     let arg = (
-        one_of(|c: char| c.is_ascii_uppercase()),
+        one_of(|c: char| c.is_ascii_uppercase() || c == '_'),
         take_while(1.., |c: char| {
             c.is_ascii_uppercase() || c == '_' || c == '|' || c.is_numeric()
         }),
@@ -646,9 +670,10 @@ mod tests {
 
     #[test]
     fn start_all_retval_states() -> Result<()> {
-        let strace = String::from(r"close(3)                                = 0");
+        let strace = String::from(r"1316971 close(3)                                = 0");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "close",
             arguments: vec![Argument::Numeric("3")],
             outcome: CallOutcome::Complete {
@@ -656,10 +681,12 @@ mod tests {
             }
         });
 
-        let strace =
-            String::from(r"close(3)                        = -1 EBADF (Bad file descriptor)");
+        let strace = String::from(
+            r"1316971 close(3)                        = -1 EBADF (Bad file descriptor)",
+        );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "close",
             arguments: vec![Argument::Numeric("3")],
             outcome: CallOutcome::Complete {
@@ -667,26 +694,30 @@ mod tests {
             }
         });
 
-        let strace = String::from(r"close(17 <unfinished ...>");
+        let strace = String::from(r"1435293 close(17 <unfinished ...>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1435293",
             function: "close",
             arguments: vec![Argument::Numeric("17")],
             outcome: CallOutcome::Unfinished,
         });
 
-        let strace = String::from(r"read(7,  <unfinished ...>");
+        let strace = String::from(r"34187 read(7,  <unfinished ...>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "34187",
             function: "read",
             arguments: vec![Argument::Numeric("7")],
             outcome: CallOutcome::Unfinished,
         });
 
-        let strace =
-            String::from(r"close(3)                        = ? ERESTARTSYS (To be restarted)");
+        let strace = String::from(
+            r"1316971 close(3)                        = ? ERESTARTSYS (To be restarted)",
+        );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "close",
             arguments: vec![Argument::Numeric("3")],
             outcome: CallOutcome::Complete {
@@ -697,30 +728,35 @@ mod tests {
         // The cases where I've seen this behavior -- "resumed> <unfinished...>" AND "resumed>) = ?" have both occurred
         // right before the process exited.  I'm combining both of these into one "ResumedUnfinished" state because, at
         // least for now, it doesn't seem like I need to do anything differently with them.
-        let strace = String::from(r"<... read resumed> <unfinished ...>) = ?");
+        let strace = String::from(r"1316971 <... read resumed> <unfinished ...>) = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let strace = String::from(r"<... openat resumed>)           = ?");
+        let strace = String::from(r"1316971 <... openat resumed>)           = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "openat",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let strace = String::from(r"read(3,  <unfinished ...>)              = ?");
+        let strace = String::from(r"1316971 read(3,  <unfinished ...>)              = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             arguments: vec![Argument::Numeric("3")],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let strace = String::from(r"read(7, )                               = ? <unavailable>");
+        let strace =
+            String::from(r"1316971 read(7, )                               = ? <unavailable>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
             arguments: vec![],
@@ -730,26 +766,29 @@ mod tests {
         // Another unrecognizable mess right before a process exit.  Again since ResumedUnfinished is just suppressed at
         // the sequencer layer, I'll output it like that... but maybe "ResumedUnfinished" is just becoming "terminated
         // during process exit"?
-        let strace = String::from(r"???( <unfinished ...>");
+        let strace = String::from(r"1316971 ???( <unfinished ...>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "???",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
-        let strace = String::from(r"???()                                   = ?");
+        let strace = String::from(r"1316971 ???()                                   = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "???",
             arguments: vec![],
             outcome: CallOutcome::ResumedUnfinished
         });
         // basically anything ending with a ? seems to happen at the end of a process... even a completed call?
         let strace = String::from(
-            r#"openat(AT_FDCWD, "/proc/sys/vm/overcommit_memory", O_RDONLY|O_CLOEXEC) = ?"#,
+            r#"1316971 openat(AT_FDCWD, "/proc/sys/vm/overcommit_memory", O_RDONLY|O_CLOEXEC) = ?"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "openat",
             arguments: vec![
                 Argument::Enum("AT_FDCWD"),
@@ -759,9 +798,10 @@ mod tests {
             outcome: CallOutcome::ResumedUnfinished
         });
 
-        let strace = String::from(r"exit_group(0)                           = ?");
+        let strace = String::from(r"1316971 exit_group(0)                           = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "exit_group",
             arguments: vec![Argument::Numeric("0"),],
             outcome: CallOutcome::ResumedUnfinished
@@ -772,9 +812,10 @@ mod tests {
 
     #[test]
     fn resumed_all_retval_states() -> Result<()> {
-        let strace = String::from(r"<... chdir resumed>)             = 0");
+        let strace = String::from(r"189532 <... chdir resumed>)             = 0");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "189532",
             function: "chdir",
             arguments: vec![],
             outcome: CallOutcome::Resumed {
@@ -783,10 +824,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r"<... chdir resumed>)             = -1 ENOENT (No such file or directory)",
+            r"189531 <... chdir resumed>)             = -1 ENOENT (No such file or directory)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "189531",
             function: "chdir",
             arguments: vec![],
             outcome: CallOutcome::Resumed {
@@ -799,9 +841,10 @@ mod tests {
 
     #[test]
     fn various_arguments() -> Result<()> {
-        let strace = String::from(r#"read(3, "", 4096)               = 0"#);
+        let strace = String::from(r#"1316971 read(3, "", 4096)               = 0"#);
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             arguments: vec![
                 Argument::Numeric("3"),
@@ -814,10 +857,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r"wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WNOHANG, NULL) = 4187946",
+            r"1316971 wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WNOHANG, NULL) = 4187946",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "wait4",
             arguments: vec![
                 Argument::Numeric("-1"),
@@ -830,9 +874,27 @@ mod tests {
             }
         });
 
-        let strace = String::from(r#"read(3, ""..., 4096)               = 0"#);
+        let strace = String::from(
+            r"86718 <... wait4 resumed>[{WIFEXITED(s) && WEXITSTATUS(s) == 1}], __WALL, NULL) = 86722",
+        );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "86718",
+            function: "wait4",
+            arguments: vec![
+                Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 1}]"),
+                Argument::Enum("__WALL"),
+                Argument::Null,
+            ],
+            outcome: CallOutcome::Resumed {
+                retval: Retval::Success(86_722)
+            }
+        });
+
+        let strace = String::from(r#"1316971 read(3, ""..., 4096)               = 0"#);
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             arguments: vec![
                 Argument::Numeric("3"),
@@ -845,10 +907,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r#"sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#,
+            r#"1316971 sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "sendto",
             arguments: vec![
                 Argument::Numeric("3"),
@@ -865,9 +928,10 @@ mod tests {
             }
         });
 
-        let strace = String::from(r"tgkill(4143934, 4144060, SIGUSR1)       = 0");
+        let strace = String::from(r"1316971 tgkill(4143934, 4144060, SIGUSR1)       = 0");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "tgkill",
             arguments: vec![
                 Argument::Numeric("4143934"),
@@ -880,10 +944,11 @@ mod tests {
         });
 
         let strace = String::from(
-            "openat(AT_FDCWD, \"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)",
+            "1316971 openat(AT_FDCWD, \"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "openat",
             arguments: vec![
                 Argument::Enum("AT_FDCWD"),
@@ -898,10 +963,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r"read(17, 0x7fb0f00111d6, 122)   = -1 EAGAIN (Resource temporarily unavailable)",
+            r"1316971 read(17, 0x7fb0f00111d6, 122)   = -1 EAGAIN (Resource temporarily unavailable)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             arguments: vec![
                 Argument::Numeric("17"),
@@ -914,10 +980,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r#"connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
+            r#"1316971 connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "connect",
             arguments: vec![
                 Argument::Numeric("3"),
@@ -930,10 +997,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r"clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653",
+            r"1316971 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "clone",
             arguments: vec![
                 Argument::Named("child_stack", Box::new(Argument::Null)),
@@ -954,10 +1022,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r"clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0} => {parent_tid=[1343642]}, 88) = 1343642",
+            r"1316971 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0} => {parent_tid=[1343642]}, 88) = 1343642",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "clone3",
             arguments: vec![
                 Argument::WrittenStructure(
@@ -972,10 +1041,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r#"execve("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", ["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"], 0x7ffdf2244ed8 /* 218 vars */) = 0"#,
+            r#"1316971 execve("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", ["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"], 0x7ffdf2244ed8 /* 218 vars */) = 0"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "execve",
             arguments: vec![
                 Argument::String(EncodedString::new(
@@ -992,10 +1062,11 @@ mod tests {
         });
 
         let strace = String::from(
-            r"waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
+            r"1316971 waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "waitid",
             arguments: vec![
                 Argument::Enum("P_PIDFD"),
@@ -1140,10 +1211,11 @@ mod tests {
 
     #[test]
     fn test_resumed_addt_arguments() -> Result<()> {
-        let strace = String::from(r#"<... read resumed>"abc"..., 1140) = 792"#);
+        let strace = String::from(r#"1316971 <... read resumed>"abc"..., 1140) = 792"#);
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
 
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "read",
             arguments: vec![
                 Argument::PartialString(EncodedString::new("abc")),
@@ -1154,9 +1226,11 @@ mod tests {
             }
         });
 
-        let strace = String::from("<... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654");
+        let strace =
+            String::from("1316971 <... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "clone",
             arguments: vec![Argument::Named(
                 "child_tidptr",
@@ -1167,10 +1241,11 @@ mod tests {
             }
         });
 
-        let strace = String::from("<... clone3 resumed> => {parent_tid=[0]}, 88) = 15620");
+        let strace = String::from("1316971 <... clone3 resumed> => {parent_tid=[0]}, 88) = 15620");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
 
         assert_eq!(tokenized, SyscallSegment {
+            pid: "1316971",
             function: "clone3",
             arguments: vec![
                 Argument::WrittenStructureResumed("{parent_tid=[0]}"),
@@ -1186,45 +1261,77 @@ mod tests {
 
     #[test]
     fn test_parse_proc_exit() {
-        let strace = String::from("+++ exited with 0 +++");
+        let strace = String::from("1316971 +++ exited with 0 +++");
         let exit = parse_proc_exit(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, ProcessExit { exit_code: "0" });
+        assert_eq!(exit, ProcessExit {
+            pid: "1316971",
+            exit_code: "0"
+        });
     }
 
     #[test]
     fn test_parse_proc_killed() {
-        let strace = String::from("+++ killed by SIGKILL +++");
+        let strace = String::from("1316971 +++ killed by SIGKILL +++");
         let exit = parse_proc_killed(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, ProcessExit { exit_code: "-1" });
+        assert_eq!(exit, ProcessExit {
+            pid: "1316971",
+            exit_code: "-1"
+        });
+
+        let strace = String::from("4182469 +++ killed by SIGABRT (core dumped) +++");
+        let exit = parse_proc_killed(&mut strace.as_str()).unwrap();
+        assert_eq!(exit, ProcessExit {
+            pid: "4182469",
+            exit_code: "-1"
+        });
     }
 
     #[test]
     fn test_parse_signal() {
         let strace = String::from(
-            "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
+            "337651 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
         );
         let exit = parse_signal(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, SignalRecv { signal: "SIGCHLD" });
+        assert_eq!(exit, SignalRecv {
+            pid: "337651",
+            signal: "SIGCHLD"
+        });
 
-        let strace = String::from("--- stopped by SIGURG ---");
+        let strace = String::from("337651 --- stopped by SIGURG ---");
         let exit = parse_signal(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, SignalRecv { signal: "SIGURG" });
+        assert_eq!(exit, SignalRecv {
+            pid: "337651",
+            signal: "SIGURG"
+        });
     }
 
     #[test]
     fn test_parse_all_results() {
-        let strace = String::from("+++ exited with 0 +++");
+        let strace = String::from("337651 +++ exited with 0 +++");
         let res = tokenize(&mut strace.as_str()).unwrap();
-        assert_eq!(res, TokenizerOutput::Exit(ProcessExit { exit_code: "0" }));
-        let strace = String::from("+++ killed by SIGKILL +++");
+        assert_eq!(
+            res,
+            TokenizerOutput::Exit(ProcessExit {
+                pid: "337651",
+                exit_code: "0"
+            })
+        );
+        let strace = String::from("337651 +++ killed by SIGKILL +++");
         let res = tokenize(&mut strace.as_str()).unwrap();
-        assert_eq!(res, TokenizerOutput::Exit(ProcessExit { exit_code: "-1" }));
+        assert_eq!(
+            res,
+            TokenizerOutput::Exit(ProcessExit {
+                pid: "337651",
+                exit_code: "-1"
+            })
+        );
 
-        let strace = String::from(r"close(3)                        = 0");
+        let strace = String::from(r"337651 close(3)                        = 0");
         let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(
             res,
             TokenizerOutput::Syscall(SyscallSegment {
+                pid: "337651",
                 function: "close",
                 arguments: vec![Argument::Numeric("3")],
                 outcome: CallOutcome::Complete {
@@ -1236,20 +1343,26 @@ mod tests {
         let res = tokenize(&mut strace.as_str());
         assert!(res.is_err());
         let strace = String::from(
-            "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
+            "337651 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
         );
         let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(
             res,
-            TokenizerOutput::Signal(SignalRecv { signal: "SIGCHLD" })
+            TokenizerOutput::Signal(SignalRecv {
+                pid: "337651",
+                signal: "SIGCHLD"
+            })
         );
         let strace = String::from(
-            "--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=9564, si_uid=0, si_status=0, si_utime=2 /* 0.02 s */, si_stime=4 /* 0.04 s */} ---",
+            "337651 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=9564, si_uid=0, si_status=0, si_utime=2 /* 0.02 s */, si_stime=4 /* 0.04 s */} ---",
         );
         let res = tokenize(&mut strace.as_str()).unwrap();
         assert_eq!(
             res,
-            TokenizerOutput::Signal(SignalRecv { signal: "SIGCHLD" })
+            TokenizerOutput::Signal(SignalRecv {
+                pid: "337651",
+                signal: "SIGCHLD"
+            })
         );
     }
 }

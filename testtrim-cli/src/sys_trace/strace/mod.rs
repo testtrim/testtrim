@@ -4,18 +4,23 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument};
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
+use nix::sys::wait::waitpid;
+use shmem::{Receptionist, TraceClient};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     env,
-    fs::{File, read_dir},
-    io::{BufRead, BufReader},
+    fs::remove_file,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    os::fd::{AsRawFd, FromRawFd as _, IntoRawFd, OwnedFd},
     path::{Path, PathBuf},
-    process::{Command as SyncCommand, Output, Stdio},
-    str::FromStr as _,
+    process::{Command as SyncCommand, Output},
 };
-use tokio::process::Command;
+use tokio::{
+    fs::File,
+    io::{AsyncBufReadExt as _, AsyncReadExt, BufReader, unix::AsyncFd},
+    process::Command,
+};
 
 use crate::{errors::SubcommandErrors, sys_trace::trace::SocketCaptureState};
 
@@ -25,6 +30,8 @@ use super::{
 };
 
 mod funcs;
+mod sequencer;
+mod shmem;
 mod tokenizer;
 
 /// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
@@ -51,139 +58,89 @@ impl STraceSysTraceCommand {
         }
     }
 
-    // Reading a trace has two modes, and one common function.
-    //
-    // Common: read_trace_file -- reads a specific trace file, updates a Trace object, returns child pids that were
-    // spawned from that.
-    //
-    // Mode 1: read_all_pid_trace_files: For when testtrim started `strace --follow-forks
-    // --output-separately=.../abc.strace`, the goal will be to read all the trace files that match `.../abc.strace.*`
-    // (eg. all the subprocesses from the strace).  However it is necessary that they be read from the first process in
-    // order to track the inherited current workdir for each child process.  In order to accomplish this, the process
-    // files are read in PID order, and the first line is checked for execve -- the earliest process with an arg0 that
-    // matches the command executed under strace will be identified as the root process, and then the rest will proceed
-    // the same as mode 2.
-    //
-    // Mode 2: read_child_pid_trace_files: For when testtrim itself is running under strace already and we're trying to
-    // spawn a child process for tracing.  It will be given a root and a specific process id, read
-    // `.../abc.strace.{pid}` and update a Trace.  But then for all child processes that were spawned by that pid, it
-    // will also read their trace.
-    //
-    // Mode 1 and Mode 2 seems like they could be the same codebase, but we don't know the pid of the first child when
-    // we launch strace ourselves (just the pid of strace).
+    async fn read_strace_output_from_reader(
+        trace_path: PathBuf,
+        receptionist_address: PathBuf,
+    ) -> Result<Trace> {
+        let receptionist = Receptionist::startup(receptionist_address)?;
+        let file = File::open(&trace_path)
+            .await
+            .context(format!("failed to open strace output file {trace_path:?}"))?;
+        let mut lines = BufReader::new(file).lines();
+        Self::read_strace_output(&mut lines, receptionist).await
+    }
 
-    fn read_all_pid_trace_files(
-        trace: &mut DraftTrace,
-        trace_file_root: &Path,
-        cmdpath: &Path,
-    ) -> Result<()> {
-        let parent = trace_file_root.parent().unwrap();
-        let trace_file_name = trace_file_root.file_name().unwrap();
-        let trace_file_name = &*trace_file_name.to_string_lossy();
-
-        let mut pid_and_file = vec![];
-
-        for entry in read_dir(parent)? {
-            let entry = entry?;
-            let orig_filename = entry.file_name();
-            let filename = orig_filename.to_string_lossy();
-            if let Some(suffix) = filename.strip_prefix(trace_file_name) {
-                // suffix will be "." followed by the pid.
-                let pid = u32::from_str(&suffix[1..])?;
-                pid_and_file.push((pid, entry.path()));
+    async fn read_strace_output_from_trace_client(mut trace_client: TraceClient) -> Result<Trace> {
+        // strace syscalls come either in a complete one-line, or in a "unfinished" and "resumed" line.  However, in the
+        // case that we're picking up data from a `TraceClient`, we're going to be in a unique situation where the first
+        // thing that child process does is resume the `read` syscall that is used on the parent/child pipe to
+        // synchronize the processes.  This would normally cause an error because it is a resume without an "unfinished"
+        // call to pair with it.  So, in order to avoid that error, before we start read_strace_output we're going to
+        // pop that resumed syscall off the client.
+        let first = trace_client.next_line().await?;
+        match first {
+            Some(first) => {
+                // Expect to be one of these three, depending on exactly how the parent/child PIDs raced:
+                // 40835 read(11,  <unfinished ...>
+                // 40835 <... read resumed>"\\x00", 1)      = 1
+                // 40835 read(11,  "\\x00", 1)      = 1
+                if first.contains("read(") || first.contains("read resumed") {
+                    // Sure, close enough!
+                } else {
+                    return Err(anyhow!(
+                        "expected read resumed as first syscall; but was {first:?}"
+                    ));
+                }
+            }
+            None => {
+                // Immediate EOF?
+                return Err(anyhow!("unexpected EOF from TraceClient on first response"));
             }
         }
 
-        pid_and_file.sort_by_key(|t| t.0);
-
-        for (pid, filename) in pid_and_file {
-            let mut extractor = FunctionExtractor::new();
-            let file = File::open(&filename)
-                .context(format!("failed to open strace output file {filename:?}"))?;
-            let mut lines = BufReader::new(file).lines();
-            let first_line = lines.next();
-            let Some(first_line) = first_line else {
-                continue;
-            };
-            let first_line = first_line?;
-            let Some(first_line) = extractor.extract(&first_line).context(format!(
-                "error parsing strace output first line: {first_line}"
-            ))?
-            else {
-                continue;
-            };
-            let FunctionTrace::Function(function) = first_line else {
-                continue;
-            };
-            let Function::Execve { arg0 } = function else {
-                continue;
-            };
-
-            // Alright, this file has an execve on the first line...
-            if arg0 == cmdpath {
-                // And it's the program we ran.  Let's do the trace here.
-                Self::read_child_pid_trace_files(trace, trace_file_root, pid, None)?;
-                return Ok(());
-            }
-        }
-
-        Err(anyhow!(
-            "read_all_pid_trace_files: no strace output files were found"
-        ))
+        let receptionist = NoopReceptionist {};
+        let trace = Self::read_strace_output(&mut trace_client, receptionist).await?;
+        trace_client.shutdown().await;
+        Ok(trace)
     }
 
-    fn read_child_pid_trace_files(
-        trace: &mut DraftTrace,
-        trace_file_root: &Path,
-        trace_pid: u32,
-        cwd: Option<PathBuf>,
-    ) -> Result<()> {
-        let file_path = trace_file_root.with_added_extension(trace_pid.to_string());
-        for (child, inherited_cwd) in Self::read_trace_file(trace, &file_path, cwd)? {
-            Self::read_child_pid_trace_files(trace, trace_file_root, child, inherited_cwd)?;
-        }
-        Ok(())
-    }
-
-    fn read_trace_file(
-        trace: &mut DraftTrace,
-        trace_file: &Path,
-        mut cwd: Option<PathBuf>,
-    ) -> Result<HashSet<(u32, Option<PathBuf>)>> {
-        let file = File::open(trace_file)
-            .context(format!("failed to open strace output file {trace_file:?}"))?;
-        let lines = BufReader::new(file).lines();
-
-        let mut child_pids: HashSet<(u32, Option<PathBuf>)> = HashSet::new();
-        let mut pid_socket_fd_captures: HashMap<String, SocketCapture> = HashMap::new();
-
+    async fn read_strace_output<Rd: LineReader, Rcpt: ReceptionistFacade>(
+        reader: &mut Rd,
+        mut receptionist: Rcpt,
+    ) -> Result<Trace> {
+        let mut trace = DraftTrace::new();
         let mut extractor = FunctionExtractor::new();
+        let mut pid_cwd: HashMap<i32, PathBuf> = HashMap::new();
+        let mut pid_socket_fd_captures: HashMap<i32, HashMap<String, SocketCapture>> =
+            HashMap::new();
 
         let mut line_count = 0;
-        for line in lines {
-            let line = line?;
+        while let Some(line) = reader.next_line().await? {
             line_count += 1;
+            receptionist.peek_trace(&line).await;
 
-            let Some(function_trace) = extractor.extract(&line).context(format!(
-                "error parsing strace output line {line_count}: {line}"
-            ))?
-            else {
+            let function_extractor_output = extractor
+                .extract(line)
+                .context(format!("error parsing strace output line {line_count}"))?;
+
+            let Some(function_trace) = function_extractor_output.borrow_function_trace() else {
                 continue;
             };
 
-            if let FunctionTrace::Exit = function_trace {
-                continue;
-            }
-            let FunctionTrace::Function(function) = function_trace else {
-                // basically a match but keeping `function` in scope for remainder...
-                unreachable!()
+            let (pid, function) = match function_trace {
+                FunctionTrace::Function { pid, function } => (*pid, function),
+                FunctionTrace::Exit { pid } => {
+                    receptionist.remove_process(*pid);
+                    continue;
+                }
             };
-            trace!("strace function: {function:?}");
+            trace!("strace function: {pid} {function:?}");
 
             match function {
                 Function::Openat { path: open_path } => {
-                    if let OpenPath::RelativeToCwd(mut path) = open_path {
-                        if let Some(ref cwd) = cwd {
+                    if let OpenPath::RelativeToCwd(path_ref) = open_path {
+                        let mut path = path_ref.clone();
+                        if let Some(cwd) = pid_cwd.get(&pid) {
                             path = cwd.join(path);
                         }
                         trace.add_open(path);
@@ -192,13 +149,17 @@ impl STraceSysTraceCommand {
                     }
                 }
                 Function::Chdir { path } => {
-                    let previous_path = cwd.unwrap_or(PathBuf::from(""));
+                    let default = PathBuf::from("");
+                    let previous_path = pid_cwd.get(&pid).unwrap_or(&default);
                     let new_path = previous_path.join(path);
-                    cwd = Some(new_path);
+                    pid_cwd.insert(pid, new_path);
                 }
                 Function::Clone { child_pid } => {
+                    receptionist.add_subprocess(pid, *child_pid);
                     // Inherit working directory
-                    child_pids.insert((child_pid, cwd.clone()));
+                    if let Some(cwd) = pid_cwd.get(&pid) {
+                        pid_cwd.insert(*child_pid, (*cwd).clone());
+                    }
                 }
                 Function::Connect {
                     socket_fd,
@@ -209,25 +170,29 @@ impl STraceSysTraceCommand {
                     // that pid_socket_fd_captures could already contain the same pid & socket.  In that case this will
                     // be a reinitialization which should be fine; the expected case is we're just finished an
                     // incomplete or non-blocking connect.
-                    pid_socket_fd_captures.insert(socket_fd.to_owned(), SocketCapture {
+                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                    socket_fd_captures.insert((*socket_fd).to_string(), SocketCapture {
                         socket_addr: socket_addr.clone(),
                         state: SocketCaptureState::Complete(Vec::new()),
                     });
 
                     // FIXME: in the near future we could probably remove add_connect and just use the SocketCapture
                     // data that is fed over to the trace when the socket is closed to extract all the connections.
-                    trace.add_connect(socket_addr);
+                    trace.add_connect(socket_addr.clone());
                 }
                 Function::Sendto {
                     socket_fd,
                     data: StringArgument::Complete(data),
                 } => {
-                    let socket_capture = pid_socket_fd_captures.get_mut(socket_fd);
+                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                    let socket_capture = socket_fd_captures.get_mut(*socket_fd);
                     if let Some(socket_capture) = socket_capture {
                         if let SocketCaptureState::Complete(ref mut socket_operations) =
                             socket_capture.state
                         {
-                            socket_operations.push(SocketOperation::Sent(data.take()));
+                            // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
+                            // shared reference, but it's a reference to `function` that I'm about to drop anyway.
+                            socket_operations.push(SocketOperation::Sent(data.decoded().clone()));
                         }
                         // (else, socket capture is already marked as Incomplete, no need to put any data into it)
                     }
@@ -243,12 +208,15 @@ impl STraceSysTraceCommand {
                     socket_fd: fd,
                     data: StringArgument::Complete(data),
                 } => {
-                    let socket_capture = pid_socket_fd_captures.get_mut(fd);
+                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                    let socket_capture = socket_fd_captures.get_mut(*fd);
                     if let Some(socket_capture) = socket_capture {
                         if let SocketCaptureState::Complete(ref mut socket_operations) =
                             socket_capture.state
                         {
-                            socket_operations.push(SocketOperation::Read(data.take()));
+                            // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
+                            // shared reference, but it's a reference to `function` that I'm about to drop anyway.
+                            socket_operations.push(SocketOperation::Read(data.decoded().clone()));
                         }
                         // (else, socket capture is already marked as Incomplete, no need to put any data into it)
                     } else {
@@ -264,7 +232,9 @@ impl STraceSysTraceCommand {
                         // places; we'll be OK if we can't parse this as a query response (search: hack_query_response),
                         // and we'll remove the 0.0.0.0:53 connection trace.
                         if data.encoded.contains("\\x81\\x80") {
-                            let data = data.take();
+                            // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
+                            // shared reference, but it's a reference to `function` that I'm about to drop anyway.
+                            let data = data.decoded().clone();
                             if data.len() > 4 && data[2] == 129 && data[3] == 128 {
                                 debug!(
                                     "received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it"
@@ -298,7 +268,8 @@ impl STraceSysTraceCommand {
                     data: StringArgument::Partial,
                 } => {
                     // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
-                    let in_progress = pid_socket_fd_captures.get_mut(fd);
+                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                    let in_progress = socket_fd_captures.get_mut(*fd);
                     if let Some(in_progress) = in_progress {
                         in_progress.state = SocketCaptureState::Incomplete;
                     }
@@ -307,7 +278,8 @@ impl STraceSysTraceCommand {
                     // trace those, so we'll ignore any unrecognized sockets.
                 }
                 Function::Close { fd } => {
-                    let socket_capture = pid_socket_fd_captures.remove(fd);
+                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                    let socket_capture = socket_fd_captures.remove(*fd);
                     if let Some(socket_capture) = socket_capture {
                         trace.add_socket_capture(socket_capture);
                     }
@@ -319,7 +291,8 @@ impl STraceSysTraceCommand {
             }
         }
 
-        Ok(child_pids)
+        receptionist.shutdown().await;
+        trace.try_into()
     }
 
     async fn trace_command_w_strace(
@@ -327,11 +300,20 @@ impl STraceSysTraceCommand {
         orig_cmd: Command,
         trace_path: &Path,
     ) -> Result<(Output, Trace)> {
+        // We create a named-pipe for strace to write to, and start a tokio Task to begin reading from it and generating
+        // our `Trace` object as data streams in.
+        let _fifo = Fifo::create(trace_path);
+
+        let receptionist_address = Receptionist::get_receptionist_address(trace_path);
+        let pipe_reader = tokio::task::spawn(Self::read_strace_output_from_reader(
+            trace_path.into(),
+            receptionist_address.clone(),
+        ));
+
         let mut new_cmd = Command::new("strace");
         new_cmd
-            .env("__TESTTRIM_STRACE", trace_path)
+            .env("__TESTTRIM_STRACE", receptionist_address)
             .arg("--follow-forks")
-            .arg("--output-separately")
             // %process will guarantee that we get all process lifecycle syscalls, which helps guarentee that the
             // pid-filtering capability for sub-strace doesn't miss any subprocesses
             .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process")
@@ -366,73 +348,177 @@ impl STraceSysTraceCommand {
                 error: e,
             })?;
 
-        let mut trace = DraftTrace::new();
-        if output.status.success() {
-            #[allow(clippy::question_mark)]
-            if let Err(e) = Self::read_all_pid_trace_files(
-                &mut trace,
-                trace_path,
-                orig_cmd.as_std().get_program().as_ref(),
-            ) {
-                // Occasionally useful for debugging to keep a copy of all the strace output...
-                // std::fs::copy(
-                //     tmp,
-                //     Path::new("/home/mfenniak/Dev/testtrim/broken-trace.txt"),
-                // )?;
-                return Err(e);
-            }
-        }
+        let trace = pipe_reader.await??;
 
-        // Occasionally useful for debugging to keep a copy of all the strace output...
-        // std::fs::copy(
-        //     &tmp,
-        //     PathBuf::from("/home/mfenniak/Dev/testtrim-test-projects/logs/strace/")
-        //         .join(tmp.file_name().unwrap()),
-        // )?;
-
-        Ok((output, trace.try_into()?))
+        Ok((output, trace))
     }
 
-    async fn trace_command_w_existing_file(
-        &self,
-        mut orig_cmd: Command,
-        parent_strace_path: &Path,
-    ) -> Result<(Output, Trace)> {
-        let child = orig_cmd
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| SubcommandErrors::UnableToStart {
-                command: format!("{:?} ...", orig_cmd.as_std().get_program()).to_string(),
-                error: e,
-            })?;
-
-        let Some(subprocess_id) = child.id() else {
-            return Err(anyhow!("subprocess had no process id after spawn()"));
+    fn pidfd_open(pid: nix::libc::pid_t) -> Result<OwnedFd> {
+        let retval = unsafe {
+            nix::libc::c_int::try_from(nix::libc::syscall(
+                nix::libc::SYS_pidfd_open,
+                pid,
+                nix::libc::PIDFD_NONBLOCK,
+            ))?
         };
-        info!(
-            "trace_command_w_existing_file: subprocess: {:?}",
-            child.id()
-        );
-
-        let output = child.wait_with_output().await?;
-
-        let mut trace = DraftTrace::new();
-        if output.status.success() {
-            Self::read_child_pid_trace_files(&mut trace, parent_strace_path, subprocess_id, None)?;
+        if retval == -1 {
+            Err(anyhow!("pidfd_open fail"))
+        } else {
+            Ok(unsafe { OwnedFd::from_raw_fd(retval) })
         }
+    }
 
-        Ok((output, trace.try_into()?))
+    async fn trace_command_remotely(
+        &self,
+        orig_cmd: Command,
+        receptionist_address: PathBuf,
+    ) -> Result<(Output, Trace)> {
+        // In this case we want to read our trace from the the out-of-process testtrim at receptionist_address.  In
+        // order to do this without missing any events, we need to:
+        // - fork this process
+        // - in child, wait
+        // - in the parent, connect to the receptionist and subscribe to the pid of the child, then release the child
+        // - in the child, execve replacing ourselves with the `orig_cmd`
+        // - in the parent, process the strace data, stdout/stderr, and exit code of the child.
+
+        use nix::sys::wait::WaitStatus;
+        use nix::unistd::{ForkResult, fork, pipe};
+        use std::fs::File;
+        use std::io::{Read, Write};
+        use std::os::unix::process::CommandExt;
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::ExitStatus;
+
+        let (read_goahead_fd, write_goahead_fd) = pipe()?;
+        let (stdout_read_fd, stdout_write_fd) = pipe()?;
+        let (stderr_read_fd, stderr_write_fd) = pipe()?;
+
+        match unsafe { fork()? } {
+            ForkResult::Parent { child } => {
+                debug!("trace_command_remotely spawned child {child:?}");
+
+                drop(read_goahead_fd);
+                drop(stdout_write_fd);
+                drop(stderr_write_fd);
+
+                // It's safe to use tokio/async work in the Parent branch.
+                let mut stdout_read_file =
+                    unsafe { tokio::fs::File::from_raw_fd(stdout_read_fd.into_raw_fd()) };
+                let mut stderr_read_file =
+                    unsafe { tokio::fs::File::from_raw_fd(stderr_read_fd.into_raw_fd()) };
+
+                // Create a pidfd that we can use with tokio to wait for the child process.
+                let pidfd = Self::pidfd_open(child.as_raw())?;
+                let mut pidfd = AsyncFd::new(pidfd)?;
+
+                // Subscribe to the events of the child pid.
+                debug!("trace_command_remotely spawned child {child:?}");
+                let trace_client =
+                    TraceClient::try_create(&receptionist_address, child.as_raw()).await?;
+                let trace_reader =
+                    tokio::task::spawn(Self::read_strace_output_from_trace_client(trace_client));
+
+                // Now we can let the child know to move forward.
+                let buf = [0u8; 1];
+                let mut write_file = File::from(write_goahead_fd);
+                loop {
+                    let bytes_written = write_file.write(&buf)?;
+                    if bytes_written != 0 {
+                        break;
+                    }
+                }
+                drop(write_file);
+
+                let mut stdout: Vec<u8> = Vec::with_capacity(4096);
+                let mut stdout_buf = [0u8; 4096];
+                let mut stderr: Vec<u8> = Vec::with_capacity(4096);
+                let mut stderr_buf = [0u8; 4096];
+
+                loop {
+                    tokio::select! {
+                        read_result = stdout_read_file.read(&mut stdout_buf) => {
+                            let bytes_read = read_result?;
+                            debug!("trace_command_remotely recv'd stdout: {:?}", &stdout_buf[..bytes_read]);
+                            stdout.extend_from_slice(&stdout_buf[..bytes_read]);
+                        },
+                        read_result = stderr_read_file.read(&mut stderr_buf) => {
+                            let bytes_read = read_result?;
+                            debug!("trace_command_remotely recv'd stderr: {:?}", &stderr_buf[..bytes_read]);
+                            stderr.extend_from_slice(&stderr_buf[..bytes_read]);
+                        },
+                        _ = pidfd.readable_mut() => {
+                            // pidfd should become readable when the child process has exited.
+                            debug!("trace_command_remotely found pidfd readable");
+                            break;
+                        }
+                    }
+                }
+
+                // This should be non-blocking because we only exited the loop above when the pidfd became readable.
+                let wait_status = waitpid(child, None)?;
+                let WaitStatus::Exited(_, exit_code) = wait_status else {
+                    return Err(anyhow!(
+                        "expected WaitStatus::Exited, but was: {wait_status:?}"
+                    ));
+                };
+                debug!("trace_command_remotely found child exit code: {exit_code:?}");
+
+                // Child process exited; but output pipes could still have some data to flush:
+                stdout_read_file.read_to_end(&mut stdout).await?;
+                stderr_read_file.read_to_end(&mut stderr).await?;
+
+                debug!(
+                    "completed subprocess!  exit_code = {exit_code:?}; stdout = {stdout:?}; stderr = {stderr:?}"
+                );
+
+                let output = Output {
+                    status: ExitStatus::from_raw(exit_code),
+                    stdout,
+                    stderr,
+                };
+
+                let trace = trace_reader.await??;
+                Ok((output, trace))
+            }
+            ForkResult::Child => {
+                // I don't think it's safe to use tokio/async in the Child branch... there should be no active tokio
+                // runtime and everything should be blocking.  Hopefully!
+
+                // Wait until the parent has subscribed upstream to our process.  This should be the first syscall in
+                // the child process because it will wait until the parent process has subscribed to the strace stream,
+                // and, there's special handling in read_strace_output_from_trace_client for this syscall since the
+                // trace may be incomplete.  syscalls following this don't require any special behavior.
+                let mut buf = [0u8; 1];
+                let mut read_file = File::from(read_goahead_fd);
+                read_file.read_exact(&mut buf).expect("pipe read_exact()");
+                drop(read_file);
+
+                // Connect stdout, stderr to the pipes
+                nix::unistd::close(0)?; // stdin
+                nix::unistd::dup2(stdout_write_fd.as_raw_fd(), 1)?; // stdout
+                nix::unistd::dup2(stderr_write_fd.as_raw_fd(), 2)?; // stderr
+
+                // Drop all the unused pipe ends.
+                drop(write_goahead_fd);
+                drop(stdout_read_fd);
+                drop(stderr_read_fd);
+                drop(stdout_write_fd); // because dup2'd into stdout already
+                drop(stderr_write_fd); // because dup2'd into stderr already
+
+                // Execute the target commend, replacing this child process.
+                let exec_err = orig_cmd.into_std().exec();
+                // We won't reach here.
+                panic!("error in exec: {exec_err:?}");
+            }
+        }
     }
 }
 
 impl SysTraceCommand for STraceSysTraceCommand {
     async fn trace_command(&self, orig_cmd: Command, tmp: &Path) -> Result<(Output, Trace)> {
         match env::var("__TESTTRIM_STRACE") {
-            Ok(ref trace_path) => {
-                self.trace_command_w_existing_file(orig_cmd, Path::new(trace_path))
+            Ok(ref receptionist_address) => {
+                self.trace_command_remotely(orig_cmd, PathBuf::from(receptionist_address))
                     .await
             }
             Err(_) => self.trace_command_w_strace(orig_cmd, tmp).await,
@@ -440,110 +526,167 @@ impl SysTraceCommand for STraceSysTraceCommand {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeSet,
-        net::{Ipv4Addr, SocketAddrV4},
-        path::{Path, PathBuf},
-    };
+struct Fifo(PathBuf);
 
-    use crate::sys_trace::{
-        strace::STraceSysTraceCommand,
-        trace::{DraftTrace, ResolvedSocketAddr, Trace, UnifiedSocketAddr},
-    };
-
-    #[test]
-    fn multiprocess_cwd() {
-        // trace_raw contains an strace that was generated by running scripts/generate-strace-multiproc-chdir.py under
-        // strace.  This script accesses these files, but all in separate processes with `chdir` commands to the parent
-        // directories; this creates a test case for per-process cwd tracking:
-        //
-        // - "flake.nix" (from start process's cwd)
-        // - "/home/mfenniak/Dev/testtrim/README.md"
-        // - "/home/mfenniak/Dev/wifi-fix-standalone-0.3.1.tar.gz"
-        // - "/home/mfenniak/.zsh_history"
-        // - "/nix/store/0019vid273mjmsm95vwjk6zjp50g66xa-openssl-3.0.11/etc/ssl/openssl.cnf"
-        // - "/home/mfenniak/Dev/test.txt"
-        //
-        // The files listed above are not required to be present to make this test work; read_trace doesn't canonicalize
-        // the paths.
-        //
-        // Regenerating this file (if needed?) is done by...
-        // ```
-        // rm tests/test_data/strace-multiproc-chdir.strace.*
-        // strace --follow-forks --output-separately \
-        // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process \
-        // --string-limit=512 --strings-in-hex=non-ascii-chars \
-        // --output tests/test_data/strace-multiproc-chdir.strace python scripts/generate-strace-multiproc-chdir.py
-        // ```
-
-        let mut trace = DraftTrace::new();
-
-        let res = STraceSysTraceCommand::read_all_pid_trace_files(
-            &mut trace,
-            Path::new("tests/test_data/strace-multiproc-chdir.strace"),
-            Path::new("/nix/store/zv1kaq7f1q20x62kbjv6pfjygw5jmwl6-python3-3.12.7/bin/python"),
-        );
-        assert!(res.is_ok(), "expected ok, was: {res:?}");
-
-        let trace: Trace = trace.try_into().expect("DraftTrace -> Trace");
-
-        let paths = trace.get_open_paths();
-        assert!(paths.contains(&PathBuf::from("flake.nix")));
-        assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/testtrim/README.md")));
-        assert!(paths.contains(&PathBuf::from(
-            "/home/mfenniak/Dev/wifi-fix-standalone-0.3.1.tar.gz"
-        )));
-        assert!(paths.contains(&PathBuf::from("/home/mfenniak/.zsh_history")));
-        assert!(paths.contains(&PathBuf::from(
-            "/nix/store/0019vid273mjmsm95vwjk6zjp50g66xa-openssl-3.0.11/etc/ssl/openssl.cnf"
-        )));
-
-        // test.txt is accessed in an unusual way compared to above cases; one process chdir's into /home/mfenniak/Dev,
-        // and then starts a subprocess which inherits that directory, and then accesses "test.txt".  So if this test
-        // case is failing, it's the inheritence of the cwd from parent processes that is to blame (probably).
-        assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/test.txt")));
-    }
-
-    #[test]
-    fn connect_trace_read() {
-        // trace_raw contains an strace that was generated by running `curl https://www.google.ca/` under an strace.
-        //
-        // Regenerating this file (if needed?) is done by...
-        // ```
-        // rm tests/test_data/tests/test_data/strace-curl-google-without-nscd.strace.*
-        // strace --follow-forks --output-separately \
-        // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process \
-        // --string-limit=512 --strings-in-hex=non-ascii-chars \
-        // --output tests/test_data/strace-curl-google-without-nscd.strace curl https://www.google.ca/
-        // ```
-
-        let mut trace = DraftTrace::new();
-
-        let res = STraceSysTraceCommand::read_all_pid_trace_files(
-            &mut trace,
-            Path::new("tests/test_data/strace-curl-google-without-nscd.strace"),
-            Path::new("/run/current-system/sw/bin/curl"),
-        );
-        assert!(res.is_ok(), "expected OK, was {res:?}");
-
-        let trace: Trace = trace.try_into().expect("DraftTrace -> Trace");
-
-        let sockets = trace.get_connect_sockets();
-
-        assert!(sockets.contains(&ResolvedSocketAddr {
-            address: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
-            hostnames: BTreeSet::from([]),
-        }));
-
-        println!("sockets: {sockets:?}");
-        assert!(sockets.contains(&ResolvedSocketAddr {
-            address: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
-                Ipv4Addr::new(142, 250, 217, 67),
-                443
-            ))),
-            hostnames: BTreeSet::from([String::from("www.google.ca")]),
-        }));
+impl Fifo {
+    fn create(trace_path: &Path) -> Result<Self> {
+        nix::unistd::mkfifo(
+            trace_path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )?;
+        Ok(Self(trace_path.into()))
     }
 }
+
+impl Drop for Fifo {
+    fn drop(&mut self) {
+        remove_file(&self.0).expect("unable to cleanup FIFO");
+    }
+}
+
+trait ReceptionistFacade {
+    async fn peek_trace(&self, trace_line: &str);
+    fn add_subprocess(&self, parent_pid: i32, child_pid: i32);
+    fn remove_process(&mut self, pid: i32);
+    async fn shutdown(self);
+}
+
+struct NoopReceptionist {}
+
+impl ReceptionistFacade for NoopReceptionist {
+    async fn peek_trace(&self, _trace_line: &str) {}
+
+    fn add_subprocess(&self, _parent_pid: i32, _child_pid: i32) {}
+
+    fn remove_process(&mut self, _pid: i32) {}
+
+    async fn shutdown(self) {}
+}
+
+trait LineReader {
+    async fn next_line(&mut self) -> Result<Option<String>>;
+}
+
+impl LineReader for tokio::io::Lines<BufReader<File>> {
+    async fn next_line(&mut self) -> Result<Option<String>> {
+        Ok(self.next_line().await?)
+    }
+}
+
+impl LineReader for TraceClient {
+    async fn next_line(&mut self) -> Result<Option<String>> {
+        let line = self.next_line().await?;
+
+        // "Some(\"25315 <... read resumed>\\\"\\\\x00\\\", 1)      = 1\")";
+        debug!("LineReader for TraceClient: {line:?}");
+        Ok(line)
+    }
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use std::{
+//         collections::BTreeSet,
+//         net::{Ipv4Addr, SocketAddrV4},
+//         path::{Path, PathBuf},
+//     };
+
+//     use crate::sys_trace::{
+//         strace::STraceSysTraceCommand,
+//         trace::{DraftTrace, ResolvedSocketAddr, Trace, UnifiedSocketAddr},
+//     };
+
+//     #[test]
+//     fn multiprocess_cwd() {
+//         // trace_raw contains an strace that was generated by running scripts/generate-strace-multiproc-chdir.py under
+//         // strace.  This script accesses these files, but all in separate processes with `chdir` commands to the parent
+//         // directories; this creates a test case for per-process cwd tracking:
+//         //
+//         // - "flake.nix" (from start process's cwd)
+//         // - "/home/mfenniak/Dev/testtrim/README.md"
+//         // - "/home/mfenniak/Dev/wifi-fix-standalone-0.3.1.tar.gz"
+//         // - "/home/mfenniak/.zsh_history"
+//         // - "/nix/store/0019vid273mjmsm95vwjk6zjp50g66xa-openssl-3.0.11/etc/ssl/openssl.cnf"
+//         // - "/home/mfenniak/Dev/test.txt"
+//         //
+//         // The files listed above are not required to be present to make this test work; read_trace doesn't canonicalize
+//         // the paths.
+//         //
+//         // Regenerating this file (if needed?) is done by...
+//         // ```
+//         // rm tests/test_data/strace-multiproc-chdir.strace.*
+//         // strace --follow-forks --output-separately \
+//         // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process \
+//         // --string-limit=512 --strings-in-hex=non-ascii-chars \
+//         // --output tests/test_data/strace-multiproc-chdir.strace python scripts/generate-strace-multiproc-chdir.py
+//         // ```
+
+//         let mut trace = DraftTrace::new();
+
+//         let res = STraceSysTraceCommand::read_all_pid_trace_files(
+//             &mut trace,
+//             Path::new("tests/test_data/strace-multiproc-chdir.strace"),
+//             Path::new("/nix/store/zv1kaq7f1q20x62kbjv6pfjygw5jmwl6-python3-3.12.7/bin/python"),
+//         );
+//         assert!(res.is_ok(), "expected ok, was: {res:?}");
+
+//         let trace: Trace = trace.try_into().expect("DraftTrace -> Trace");
+
+//         let paths = trace.get_open_paths();
+//         assert!(paths.contains(&PathBuf::from("flake.nix")));
+//         assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/testtrim/README.md")));
+//         assert!(paths.contains(&PathBuf::from(
+//             "/home/mfenniak/Dev/wifi-fix-standalone-0.3.1.tar.gz"
+//         )));
+//         assert!(paths.contains(&PathBuf::from("/home/mfenniak/.zsh_history")));
+//         assert!(paths.contains(&PathBuf::from(
+//             "/nix/store/0019vid273mjmsm95vwjk6zjp50g66xa-openssl-3.0.11/etc/ssl/openssl.cnf"
+//         )));
+
+//         // test.txt is accessed in an unusual way compared to above cases; one process chdir's into /home/mfenniak/Dev,
+//         // and then starts a subprocess which inherits that directory, and then accesses "test.txt".  So if this test
+//         // case is failing, it's the inheritence of the cwd from parent processes that is to blame (probably).
+//         assert!(paths.contains(&PathBuf::from("/home/mfenniak/Dev/test.txt")));
+//     }
+
+//     #[test]
+//     fn connect_trace_read() {
+//         // trace_raw contains an strace that was generated by running `curl https://www.google.ca/` under an strace.
+//         //
+//         // Regenerating this file (if needed?) is done by...
+//         // ```
+//         // rm tests/test_data/tests/test_data/strace-curl-google-without-nscd.strace.*
+//         // strace --follow-forks --output-separately \
+//         // --trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process \
+//         // --string-limit=512 --strings-in-hex=non-ascii-chars \
+//         // --output tests/test_data/strace-curl-google-without-nscd.strace curl https://www.google.ca/
+//         // ```
+
+//         let mut trace = DraftTrace::new();
+
+//         let res = STraceSysTraceCommand::read_all_pid_trace_files(
+//             &mut trace,
+//             Path::new("tests/test_data/strace-curl-google-without-nscd.strace"),
+//             Path::new("/run/current-system/sw/bin/curl"),
+//         );
+//         assert!(res.is_ok(), "expected OK, was {res:?}");
+
+//         let trace: Trace = trace.try_into().expect("DraftTrace -> Trace");
+
+//         let sockets = trace.get_connect_sockets();
+
+//         assert!(sockets.contains(&ResolvedSocketAddr {
+//             address: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
+//             hostnames: BTreeSet::from([]),
+//         }));
+
+//         println!("sockets: {sockets:?}");
+//         assert!(sockets.contains(&ResolvedSocketAddr {
+//             address: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(SocketAddrV4::new(
+//                 Ipv4Addr::new(142, 250, 217, 67),
+//                 443
+//             ))),
+//             hostnames: BTreeSet::from([String::from("www.google.ca")]),
+//         }));
+//     }
+// }

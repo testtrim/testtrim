@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashSet,
-    env,
+    env::{self, current_exe},
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
 };
@@ -89,6 +89,8 @@ async fn test_noop(trace_command: &SysTraceCommandDispatch) -> Result<()> {
 
 #[tokio::test]
 async fn test_noop_strace() -> Result<()> {
+    simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())
+        .expect("must config logging");
     test_noop(&STraceSysTraceCommand::new().into()).await
 }
 
@@ -233,4 +235,31 @@ async fn test_access_network_strace() -> Result<()> {
     simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())
         .expect("must config logging");
     test_access_network(&STraceSysTraceCommand::new().into()).await
+}
+
+#[tokio::test]
+async fn nested_strace() -> Result<()> {
+    simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
+        .expect("must config logging");
+
+    // Basically we want to run the same test executable that is currently running (eg. $0), our own unit test process
+    // that is currently running nested_strace, and run it with the command line `--exact test_access_files_strace`...
+    // but do that with the STraceSysTraceCommand.
+    //
+    // To really boggle the mind, if we're running under testtrim, this would be a double-nested strace. 🤣
+    // Theoretically that should work.
+
+    let trace_command = STraceSysTraceCommand::new();
+    let tmp_dir = TempDir::new("testtrim-test")?;
+    let trace_file = tmp_dir.path().join("test_nested_strace.trace");
+    let test_binary = current_exe()?;
+
+    let mut cmd = Command::new(test_binary);
+    cmd.args(["--exact", "test_access_files_strace"]);
+    let (output, _trace) = trace_command.trace_command(cmd, &trace_file).await?;
+    if !output.status.success() {
+        panic!("failed to run subcommand: {output:?}");
+    }
+
+    Ok(())
 }

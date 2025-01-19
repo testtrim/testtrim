@@ -432,8 +432,7 @@ impl GolangTestPlatform {
         let mut coverage_data = CommitCoverageData::new();
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
-        let coverage_dir = tmp_path
-            .join(Path::new("coverage-output").join(&test_case.test_identifier.module_path.0));
+        let coverage_dir = tmp_path.join(&test_case.test_identifier.module_path.0);
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
             .or_else(|e| {

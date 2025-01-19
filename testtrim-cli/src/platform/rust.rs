@@ -542,13 +542,11 @@ impl RustTestPlatform {
         }
 
         let coverage_dir = tmp_path.join(
-            Path::new("coverage-output").join(
-                test_case
-                    .test_binary
-                    .executable_path
-                    .file_name()
-                    .expect("file_name must be present"),
-            ),
+            test_case
+                .test_binary
+                .executable_path
+                .file_name()
+                .expect("file_name must be present"),
         );
         // Create coverage_dir but ignore if its error is 17 (file exists)
         fs::create_dir_all(&coverage_dir)
