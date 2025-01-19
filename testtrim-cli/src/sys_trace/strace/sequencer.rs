@@ -17,7 +17,7 @@ use super::tokenizer::{
 #[self_referencing]
 #[derive(Debug, PartialEq)]
 pub struct TraceLine {
-    input: String,
+    pub input: String,
     #[borrows(input)]
     #[covariant]
     output: TokenizerOutput<'this>,
@@ -57,7 +57,7 @@ pub trait CompleteSyscall {
 #[self_referencing]
 #[derive(Debug, PartialEq)]
 pub struct OnelineSyscall {
-    complete: TraceLine,
+    pub complete: TraceLine,
     #[borrows(complete)]
     #[covariant]
     arguments: Vec<&'this Argument<'this>>,
@@ -258,6 +258,20 @@ pub enum SequencerOutput {
     IncompleteSyscall,
     ProcessExit(TraceLineProcessExit),
     Junk(TraceLine),
+}
+
+impl SequencerOutput {
+    pub fn trace_lines(&self) -> (Option<&TraceLine>, Option<&TraceLine>) {
+        match self {
+            SequencerOutput::OnelineSyscall(one) => (Some(one.borrow_complete()), None),
+            SequencerOutput::TwolineSyscall(two) => {
+                (Some(two.borrow_unfinished()), Some(two.borrow_resumed()))
+            }
+            SequencerOutput::IncompleteSyscall => (None, None),
+            SequencerOutput::ProcessExit(exit) => (Some(exit.borrow_trace_line()), None),
+            SequencerOutput::Junk(trace_line) => (Some(trace_line), None),
+        }
+    }
 }
 
 /// Sequencer tokenizes lines in an strace output file and merges together the arguments of "unfinished" and "resumed"

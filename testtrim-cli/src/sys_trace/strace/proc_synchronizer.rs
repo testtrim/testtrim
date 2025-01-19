@@ -75,6 +75,10 @@ impl ProcSynchronizer {
                 }
 
                 if let Function::Clone { child_pid } = function {
+                    // FIXME: may be a bug here, if the child process exits before the clone resumes in the parent
+                    // process.  We'd get a FunctionTrace::Exit and we'd remove the known pid, but then we'd re-add it
+                    // here... but when since we already processed the child exit we're not expecting any more syscalls
+                    // from it unless the pid is reused, which would be exceedingly unlikely.
                     self.known_pids.insert(*child_pid);
 
                     let suppressed = self.suppressed.remove(child_pid);

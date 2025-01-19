@@ -131,7 +131,7 @@ lazy_static! {
 #[self_referencing]
 #[derive(Debug, PartialEq)]
 pub struct FunctionExtractorOutput {
-    sequencer_output: SequencerOutput,
+    pub sequencer_output: SequencerOutput,
     #[borrows(sequencer_output)]
     #[covariant]
     pub function_trace: Option<FunctionTrace<'this>>,

@@ -140,12 +140,26 @@ impl STraceSysTraceCommand {
         let mut line_count = 0;
         while let Some(line) = reader.next_line().await? {
             line_count += 1;
-            receptionist.peek_trace(&line).await;
 
             for function_extractor_output in extractor
                 .extract(line)
                 .context(format!("error parsing strace output line {line_count}"))?
             {
+                // ProcSynchronizer may reorder syscalls for child processes -- in order to avoid sending an child's
+                // syscall to the receptionist before we've sent the subprocess data to the receptionist, we need to
+                // obey those reorderings (as opposed to doing peek_trace in the outer loop). This is a bit ugly since
+                // it could involve multiple trace lines from the Sequencer, but here we extract whatever inputs were
+                // used and pass them to the receptionist to peek them.
+                let (line1, line2) = function_extractor_output
+                    .borrow_sequencer_output()
+                    .trace_lines();
+                if let Some(line1) = line1 {
+                    receptionist.peek_trace(line1.borrow_input()).await;
+                }
+                if let Some(line2) = line2 {
+                    receptionist.peek_trace(line2.borrow_input()).await;
+                }
+
                 let Some(function_trace) = function_extractor_output.borrow_function_trace() else {
                     continue;
                 };

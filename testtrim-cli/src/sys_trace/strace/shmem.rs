@@ -163,6 +163,7 @@ impl ReceptionistFacade for Receptionist {
 
         let mut tokenizer_input: &str = trace_line;
         let Ok(pid) = parse_pid(&mut tokenizer_input) else {
+            warn!("peek_trace: parse_pid failed on input: {trace_line:?}");
             return;
         };
         let pid = i32::from_str(pid).unwrap(); // pretty safe: parser should guarantee it's numeric, and pid can't be not i32
@@ -314,6 +315,8 @@ impl DedicatedOperator {
                 if let Err(err) = state.trace_tx.send(String::from(trace_line)).await {
                     warn!("trace_tx write error: {err:?}");
                 }
+            } else {
+                warn!("peek_trace: dropped interesting message due to shutdown in-progress");
             }
         }
     }
@@ -399,9 +402,10 @@ impl TraceClient {
                         trace_tx.blocking_send(unsafe { String::from_utf8_unchecked(vec) })?;
                     }
                     Err(MqError::MqEmpty) => {
-                        // FIXME: Normally I would sleep here... I'm not convinced it's safe to make this syscall yet.
-                        // Should test.
-                        // sleep(std::time::Duration::from_millis(1));
+                        // This should be a safe syscall because we don't trace `sleep`.  The TraceClient works without
+                        // this, but spins checking the shared memory constantly -- a very small "yield" sleep here
+                        // prevents 100% CPU usage.
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                     }
                     Err(other) => {
                         return Err(other.into());
