@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{Context as _, Result, anyhow};
-use funcs::{Function, FunctionExtractor, FunctionTrace, OpenPath, StringArgument};
+use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
 use log::{debug, trace, warn};
 use nix::sys::wait::waitpid;
+use proc_synchronizer::ProcSynchronizer;
 use shmem::{Receptionist, TraceClient};
 use std::{
     collections::HashMap,
@@ -30,6 +31,7 @@ use super::{
 };
 
 mod funcs;
+mod proc_synchronizer;
 mod sequencer;
 mod shmem;
 mod tokenizer;
@@ -130,7 +132,7 @@ impl STraceSysTraceCommand {
         receptionist: Rcpt,
     ) -> Result<Trace> {
         let mut trace = DraftTrace::new();
-        let mut extractor = FunctionExtractor::new();
+        let mut extractor = ProcSynchronizer::new();
         let mut pid_cwd: HashMap<i32, PathBuf> = HashMap::new();
         let mut pid_socket_fd_captures: HashMap<i32, HashMap<String, SocketCapture>> =
             HashMap::new();
@@ -140,175 +142,178 @@ impl STraceSysTraceCommand {
             line_count += 1;
             receptionist.peek_trace(&line).await;
 
-            let function_extractor_output = extractor
+            for function_extractor_output in extractor
                 .extract(line)
-                .context(format!("error parsing strace output line {line_count}"))?;
-
-            let Some(function_trace) = function_extractor_output.borrow_function_trace() else {
-                continue;
-            };
-
-            let (pid, function) = match function_trace {
-                FunctionTrace::Function { pid, function } => (*pid, function),
-                FunctionTrace::Exit { pid } => {
-                    receptionist.remove_process(*pid);
+                .context(format!("error parsing strace output line {line_count}"))?
+            {
+                let Some(function_trace) = function_extractor_output.borrow_function_trace() else {
                     continue;
-                }
-            };
-            trace!("strace function: {pid} {function:?}");
+                };
 
-            match function {
-                Function::Openat { path: open_path } => {
-                    if let OpenPath::RelativeToCwd(path_ref) = open_path {
-                        let mut path = path_ref.clone();
+                let (pid, function) = match function_trace {
+                    FunctionTrace::Function { pid, function } => (*pid, function),
+                    FunctionTrace::Exit { pid } => {
+                        receptionist.remove_process(*pid);
+                        continue;
+                    }
+                };
+                trace!("strace function: {pid} {function:?}");
+
+                match function {
+                    Function::Openat { path: open_path } => {
+                        if let OpenPath::RelativeToCwd(path_ref) = open_path {
+                            let mut path = path_ref.clone();
+                            if let Some(cwd) = pid_cwd.get(&pid) {
+                                path = cwd.join(path);
+                            }
+                            trace.add_open(path);
+                        } else {
+                            warn!("open path {:?} not yet supported for strace", open_path);
+                        }
+                    }
+                    Function::Chdir { path } => {
+                        let default = PathBuf::from("");
+                        let previous_path = pid_cwd.get(&pid).unwrap_or(&default);
+                        let new_path = previous_path.join(path);
+                        pid_cwd.insert(pid, new_path);
+                    }
+                    Function::Clone { child_pid } => {
+                        receptionist.add_subprocess(pid, *child_pid);
+                        // Inherit working directory
                         if let Some(cwd) = pid_cwd.get(&pid) {
-                            path = cwd.join(path);
+                            pid_cwd.insert(*child_pid, (*cwd).clone());
                         }
-                        trace.add_open(path);
-                    } else {
-                        warn!("open path {:?} not yet supported for strace", open_path);
                     }
-                }
-                Function::Chdir { path } => {
-                    let default = PathBuf::from("");
-                    let previous_path = pid_cwd.get(&pid).unwrap_or(&default);
-                    let new_path = previous_path.join(path);
-                    pid_cwd.insert(pid, new_path);
-                }
-                Function::Clone { child_pid } => {
-                    receptionist.add_subprocess(pid, *child_pid);
-                    // Inherit working directory
-                    if let Some(cwd) = pid_cwd.get(&pid) {
-                        pid_cwd.insert(*child_pid, (*cwd).clone());
-                    }
-                }
-                Function::Connect {
-                    socket_fd,
-                    socket_addr,
-                } => {
-                    // Insert a new SocketCaptureState into pid_socket_in_progress by the pid & socket_fd.  Because we
-                    // don't parse connect in a very precise way -- eg. handling unfinished and errors -- it's possible
-                    // that pid_socket_fd_captures could already contain the same pid & socket.  In that case this will
-                    // be a reinitialization which should be fine; the expected case is we're just finished an
-                    // incomplete or non-blocking connect.
-                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
-                    socket_fd_captures.insert((*socket_fd).to_string(), SocketCapture {
-                        socket_addr: socket_addr.clone(),
-                        state: SocketCaptureState::Complete(Vec::new()),
-                    });
+                    Function::Connect {
+                        socket_fd,
+                        socket_addr,
+                    } => {
+                        // Insert a new SocketCaptureState into pid_socket_in_progress by the pid & socket_fd.  Because we
+                        // don't parse connect in a very precise way -- eg. handling unfinished and errors -- it's possible
+                        // that pid_socket_fd_captures could already contain the same pid & socket.  In that case this will
+                        // be a reinitialization which should be fine; the expected case is we're just finished an
+                        // incomplete or non-blocking connect.
+                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        socket_fd_captures.insert((*socket_fd).to_string(), SocketCapture {
+                            socket_addr: socket_addr.clone(),
+                            state: SocketCaptureState::Complete(Vec::new()),
+                        });
 
-                    // FIXME: in the near future we could probably remove add_connect and just use the SocketCapture
-                    // data that is fed over to the trace when the socket is closed to extract all the connections.
-                    trace.add_connect(socket_addr.clone());
-                }
-                Function::Sendto {
-                    socket_fd,
-                    data: StringArgument::Complete(data),
-                } => {
-                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
-                    let socket_capture = socket_fd_captures.get_mut(*socket_fd);
-                    if let Some(socket_capture) = socket_capture {
-                        if let SocketCaptureState::Complete(ref mut socket_operations) =
-                            socket_capture.state
-                        {
-                            // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
-                            // shared reference, but it's a reference to `function` that I'm about to drop anyway.
-                            socket_operations.push(SocketOperation::Sent(data.decoded().clone()));
-                        }
-                        // (else, socket capture is already marked as Incomplete, no need to put any data into it)
+                        // FIXME: in the near future we could probably remove add_connect and just use the SocketCapture
+                        // data that is fed over to the trace when the socket is closed to extract all the connections.
+                        trace.add_connect(socket_addr.clone());
                     }
-                    // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
-                    // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
-                    // trace those, so we'll ignore any unrecognized sockets.
-                }
-                Function::Read {
-                    fd,
-                    data: StringArgument::Complete(data),
-                }
-                | Function::Recv {
-                    socket_fd: fd,
-                    data: StringArgument::Complete(data),
-                } => {
-                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
-                    let socket_capture = socket_fd_captures.get_mut(*fd);
-                    if let Some(socket_capture) = socket_capture {
-                        if let SocketCaptureState::Complete(ref mut socket_operations) =
-                            socket_capture.state
-                        {
-                            // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
-                            // shared reference, but it's a reference to `function` that I'm about to drop anyway.
-                            socket_operations.push(SocketOperation::Read(data.decoded().clone()));
+                    Function::Sendto {
+                        socket_fd,
+                        data: StringArgument::Complete(data),
+                    } => {
+                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_capture = socket_fd_captures.get_mut(*socket_fd);
+                        if let Some(socket_capture) = socket_capture {
+                            if let SocketCaptureState::Complete(ref mut socket_operations) =
+                                socket_capture.state
+                            {
+                                // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
+                                // shared reference, but it's a reference to `function` that I'm about to drop anyway.
+                                socket_operations
+                                    .push(SocketOperation::Sent(data.decoded().clone()));
+                            }
+                            // (else, socket capture is already marked as Incomplete, no need to put any data into it)
                         }
-                        // (else, socket capture is already marked as Incomplete, no need to put any data into it)
-                    } else {
-                        // Per https://codeberg.org/testtrim/testtrim/issues/217 -- our strace doesn't work correctly
-                        // for DNS tracing if the socket is connected on one thread, and then read on another thread.
-                        // Until I can figure out a way to address that issue, this is a little hack that looks for the
-                        // DNS "flags" response (the third & fourth bytes) and see if it looks like a typical recursive
-                        // query response.
-                        //
-                        // So in this case where we've performed a read but we don't know what the file descriptor is,
-                        // but the two bytes match the response pattern for a query, then we're going to pretend that it
-                        // is a response that we received from a DNS server.  This hack will continue in two other
-                        // places; we'll be OK if we can't parse this as a query response (search: hack_query_response),
-                        // and we'll remove the 0.0.0.0:53 connection trace.
-                        if data.encoded.contains("\\x81\\x80") {
-                            // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
-                            // shared reference, but it's a reference to `function` that I'm about to drop anyway.
-                            let data = data.decoded().clone();
-                            if data.len() > 4 && data[2] == 129 && data[3] == 128 {
-                                debug!(
-                                    "received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it"
-                                );
-                                let fake_capture = SocketCapture {
-                                    socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(
-                                        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 53),
-                                    )),
-                                    state: SocketCaptureState::Complete(vec![
-                                        SocketOperation::Read(data),
-                                    ]),
-                                };
-                                trace.add_socket_capture(fake_capture);
+                        // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
+                        // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
+                        // trace those, so we'll ignore any unrecognized sockets.
+                    }
+                    Function::Read {
+                        fd,
+                        data: StringArgument::Complete(data),
+                    }
+                    | Function::Recv {
+                        socket_fd: fd,
+                        data: StringArgument::Complete(data),
+                    } => {
+                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_capture = socket_fd_captures.get_mut(*fd);
+                        if let Some(socket_capture) = socket_capture {
+                            if let SocketCaptureState::Complete(ref mut socket_operations) =
+                                socket_capture.state
+                            {
+                                // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
+                                // shared reference, but it's a reference to `function` that I'm about to drop anyway.
+                                socket_operations
+                                    .push(SocketOperation::Read(data.decoded().clone()));
+                            }
+                            // (else, socket capture is already marked as Incomplete, no need to put any data into it)
+                        } else {
+                            // Per https://codeberg.org/testtrim/testtrim/issues/217 -- our strace doesn't work correctly
+                            // for DNS tracing if the socket is connected on one thread, and then read on another thread.
+                            // Until I can figure out a way to address that issue, this is a little hack that looks for the
+                            // DNS "flags" response (the third & fourth bytes) and see if it looks like a typical recursive
+                            // query response.
+                            //
+                            // So in this case where we've performed a read but we don't know what the file descriptor is,
+                            // but the two bytes match the response pattern for a query, then we're going to pretend that it
+                            // is a response that we received from a DNS server.  This hack will continue in two other
+                            // places; we'll be OK if we can't parse this as a query response (search: hack_query_response),
+                            // and we'll remove the 0.0.0.0:53 connection trace.
+                            if data.encoded.contains("\\x81\\x80") {
+                                // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
+                                // shared reference, but it's a reference to `function` that I'm about to drop anyway.
+                                let data = data.decoded().clone();
+                                if data.len() > 4 && data[2] == 129 && data[3] == 128 {
+                                    debug!(
+                                        "received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it"
+                                    );
+                                    let fake_capture = SocketCapture {
+                                        socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(
+                                            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 53),
+                                        )),
+                                        state: SocketCaptureState::Complete(vec![
+                                            SocketOperation::Read(data),
+                                        ]),
+                                    };
+                                    trace.add_socket_capture(fake_capture);
+                                }
                             }
                         }
+                        // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
+                        // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
+                        // trace those, so we'll ignore any unrecognized sockets.
                     }
-                    // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
-                    // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
-                    // trace those, so we'll ignore any unrecognized sockets.
-                }
-                Function::Sendto {
-                    socket_fd: fd,
-                    data: StringArgument::Partial,
-                }
-                | Function::Read {
-                    fd,
-                    data: StringArgument::Partial,
-                }
-                | Function::Recv {
-                    socket_fd: fd,
-                    data: StringArgument::Partial,
-                } => {
-                    // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
-                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
-                    let in_progress = socket_fd_captures.get_mut(*fd);
-                    if let Some(in_progress) = in_progress {
-                        in_progress.state = SocketCaptureState::Incomplete;
+                    Function::Sendto {
+                        socket_fd: fd,
+                        data: StringArgument::Partial,
                     }
-                    // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
-                    // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
-                    // trace those, so we'll ignore any unrecognized sockets.
-                }
-                Function::Close { fd } => {
-                    let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
-                    let socket_capture = socket_fd_captures.remove(*fd);
-                    if let Some(socket_capture) = socket_capture {
-                        trace.add_socket_capture(socket_capture);
+                    | Function::Read {
+                        fd,
+                        data: StringArgument::Partial,
                     }
-                    // No else case for warning if no socket present -- close(n) is used for file FDs which we're not
-                    // capturing, so it will be common and normal for (pid, fd) to not be present.
+                    | Function::Recv {
+                        socket_fd: fd,
+                        data: StringArgument::Partial,
+                    } => {
+                        // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
+                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let in_progress = socket_fd_captures.get_mut(*fd);
+                        if let Some(in_progress) = in_progress {
+                            in_progress.state = SocketCaptureState::Incomplete;
+                        }
+                        // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
+                        // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
+                        // trace those, so we'll ignore any unrecognized sockets.
+                    }
+                    Function::Close { fd } => {
+                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_capture = socket_fd_captures.remove(*fd);
+                        if let Some(socket_capture) = socket_capture {
+                            trace.add_socket_capture(socket_capture);
+                        }
+                        // No else case for warning if no socket present -- close(n) is used for file FDs which we're not
+                        // capturing, so it will be common and normal for (pid, fd) to not be present.
+                    }
+                    // Nothing to do with execve.
+                    Function::Execve { .. } => {}
                 }
-                // Nothing to do with execve.
-                Function::Execve { .. } => {}
             }
         }
 

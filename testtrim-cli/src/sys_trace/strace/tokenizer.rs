@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow};
 use winnow::ascii::{dec_int, digit1, hex_digit1, multispace1};
@@ -14,14 +14,14 @@ use winnow::{PResult, Parser};
 #[derive(Debug, PartialEq)]
 pub struct EncodedString<'a> {
     pub encoded: &'a str,
-    decoded: OnceCell<Vec<u8>>,
+    decoded: OnceLock<Vec<u8>>,
 }
 
 impl<'a> EncodedString<'a> {
     pub(crate) fn new(encoded: &'a str) -> Self {
         EncodedString {
             encoded,
-            decoded: OnceCell::new(),
+            decoded: OnceLock::new(),
         }
     }
 

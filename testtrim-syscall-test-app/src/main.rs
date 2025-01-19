@@ -143,7 +143,7 @@ fn access_files_inherited() -> Result<(), std::io::Error> {
     {
         let (read_fd, write_fd) = nix::unistd::pipe()?;
         match unsafe { nix::unistd::fork()? } {
-            nix::unistd::ForkResult::Parent { child: _ } => {
+            nix::unistd::ForkResult::Parent { child } => {
                 // Wait for child to write to the pipe indicating its work is done.
                 drop(write_fd);
                 let mut buf = [0u8; 1];
@@ -155,6 +155,7 @@ fn access_files_inherited() -> Result<(), std::io::Error> {
                     }
                 }
                 drop(read_file);
+                nix::sys::wait::waitpid(child, None)?; // prevent zombie children
             }
             nix::unistd::ForkResult::Child => {
                 // Do work in child.
@@ -181,7 +182,7 @@ fn access_files_inherited() -> Result<(), std::io::Error> {
         std::env::set_current_dir("testtrim-syscall-test-app")?;
         let (read_fd, write_fd) = nix::unistd::pipe()?;
         match unsafe { nix::unistd::fork()? } {
-            nix::unistd::ForkResult::Parent { child: _ } => {
+            nix::unistd::ForkResult::Parent { child } => {
                 // Wait for child to write to the pipe indicating its work is done.
                 drop(write_fd);
                 let mut buf = [0u8; 1];
@@ -193,6 +194,7 @@ fn access_files_inherited() -> Result<(), std::io::Error> {
                     }
                 }
                 drop(read_file);
+                nix::sys::wait::waitpid(child, None)?; // prevent zombie children
             }
             nix::unistd::ForkResult::Child => {
                 // Do work in child.
