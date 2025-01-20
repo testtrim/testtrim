@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
 use log::{debug, trace, warn};
 use nix::sys::wait::waitpid;
+use nix::unistd::Pid;
 use proc_synchronizer::ProcSynchronizer;
 use shmem::{Receptionist, TraceClient};
 use std::{
@@ -424,6 +425,7 @@ impl STraceSysTraceCommand {
         match unsafe { fork()? } {
             ForkResult::Parent { child } => {
                 debug!("trace_command_remotely spawned child {child:?}");
+                let child = OwnedChildPid::from(child);
 
                 drop(read_goahead_fd);
                 drop(stdout_write_fd);
@@ -435,25 +437,14 @@ impl STraceSysTraceCommand {
 
                 // Subscribe to the syscall tracing of the child pid through TraceClient...
                 let trace_client =
-                    match TraceClient::try_create(&receptionist_address, child.as_raw()).await {
-                        Ok(trace_client) => Ok(trace_client),
-                        Err(e) => {
-                            // Prevent zombie subprocess; waitpid the child even if the parent has error.
-                            tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
-                            Err(e)
-                        }
-                    }?;
+                    TraceClient::try_create(&receptionist_address, child.as_raw()).await?;
                 let trace_reader =
                     tokio::task::spawn(Self::read_strace_output_from_trace_client(trace_client));
 
                 // Now we can let the child know to move forward.
                 let buf = [0u8; 1];
                 let mut write_file = tokio::fs::File::from(File::from(write_goahead_fd));
-                if let Err(e) = write_file.write_all(&buf).await {
-                    // Prevent zombie subprocess; waitpid the child even if the parent has error.
-                    tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
-                    return Err(e.into());
-                }
+                write_file.write_all(&buf).await?;
                 drop(write_file);
 
                 // Spawn tasks to read stdout & stderr; this should minimize the risk of any deadlocks between the
@@ -474,33 +465,15 @@ impl STraceSysTraceCommand {
                 });
 
                 // Create a pidfd that we can use with tokio to wait for the child process.
-                let pidfd = match Self::pidfd_open(child.as_raw()) {
-                    Ok(pidfd) => pidfd,
-                    Err(e) => {
-                        // Prevent zombie subprocess; waitpid the child even if the parent has error.
-                        tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
-                        return Err(e);
-                    }
-                };
-                let pidfd = match AsyncFd::new(pidfd) {
-                    Ok(pidfd) => pidfd,
-                    Err(e) => {
-                        // Prevent zombie subprocess; waitpid the child even if the parent has error.
-                        tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
-                        return Err(e.into());
-                    }
-                };
+                let pidfd = Self::pidfd_open(child.as_raw())?;
+                let pidfd = AsyncFd::new(pidfd)?;
                 // AsyncFdReadyGuard is dropped without a care; we never read from this fd, just use it to identify if
                 // the child pid is ready for a wait that won't block.
-                if let Err(e) = pidfd.readable().await {
-                    // Prevent zombie subprocess; waitpid the child even if the parent has error.
-                    tokio::task::spawn_blocking(move || waitpid(child, None).unwrap());
-                    return Err(e.into());
-                }
+                let _ = pidfd.readable().await?;
                 debug!("trace_command_remotely found pidfd readable");
 
                 // This should be non-blocking because we only exited the loop above when the pidfd became readable.
-                let wait_status = waitpid(child, None)?;
+                let wait_status = waitpid(child.take(), None)?;
                 let WaitStatus::Exited(_, exit_code) = wait_status else {
                     return Err(anyhow!(
                         "expected WaitStatus::Exited, but was: {wait_status:?}"
@@ -589,6 +562,35 @@ impl Fifo {
 impl Drop for Fifo {
     fn drop(&mut self) {
         remove_file(&self.0).expect("unable to cleanup FIFO");
+    }
+}
+
+/// `OwnedChildPid` can be used to prevent zombie child process.  It guarantees that the child is `waitpid()`'d.
+struct OwnedChildPid(Option<i32>);
+
+impl OwnedChildPid {
+    fn as_raw(&self) -> i32 {
+        // Safety: will be Some(_) unless dropped or taken, which would prevent access here.
+        self.0.unwrap()
+    }
+
+    fn take(mut self) -> Pid {
+        // Safety: will be Some(_) unless dropped, not possible here.
+        Pid::from_raw(self.0.take().unwrap())
+    }
+}
+
+impl From<Pid> for OwnedChildPid {
+    fn from(value: Pid) -> Self {
+        OwnedChildPid(Some(value.as_raw()))
+    }
+}
+
+impl Drop for OwnedChildPid {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0.take() {
+            tokio::task::spawn_blocking(move || waitpid(Pid::from_raw(pid), None).unwrap());
+        }
     }
 }
 
