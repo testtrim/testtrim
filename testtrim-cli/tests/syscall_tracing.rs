@@ -170,12 +170,13 @@ async fn test_access_files_chdir_inherit(trace_command: &SysTraceCommandDispatch
         trace.get_open_paths(),
         "testtrim-syscall-test-app/test-file-2.txt"
     ));
-    // FIXME: Changing working directory in a thread is not currently supported by our strace implementation --
-    // https://codeberg.org/testtrim/testtrim/issues/287
-    // assert!(has_relative_path(
-    //     trace.get_open_paths(),
-    //     "testtrim-syscall-test-app/test-file-3.txt"
-    // ));
+    assert!(has_relative_path(
+        trace.get_open_paths(),
+        // technically this is accurate to what was accessed, but it kinda sucks that it isn't "normalized" in some way
+        // -- but the syscall tracing doesn't bother doing that since there are no `std` capabilities in Rust (other
+        // than canonicalize which requires the files to exist and be accessible).
+        "testtrim-syscall-test-app/../testtrim-syscall-test-app/test-file-3.txt"
+    ));
 
     assert!(
         trace.get_connect_sockets().is_empty(),
@@ -262,4 +263,33 @@ async fn nested_strace() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn test_access_network_mt(trace_command: &SysTraceCommandDispatch) -> Result<()> {
+    let trace = run_test_binary(trace_command, "access-network-multithreaded").await?;
+
+    for socket in trace.get_connect_sockets() {
+        println!("open socket: {socket:?}");
+    }
+
+    assert!(trace.get_connect_sockets().iter().any(|s| match s.address {
+        UnifiedSocketAddr::Inet(SocketAddr::V4(sock_addr)) =>
+            sock_addr.ip() == &Ipv4Addr::new(1, 1, 1, 1) && sock_addr.port() == 53,
+        _ => false,
+    }));
+
+    assert!(trace.get_connect_sockets().iter().any(|s| match s.address {
+        UnifiedSocketAddr::Inet(SocketAddr::V4(sock_addr)) => sock_addr.port() == 80,
+        UnifiedSocketAddr::Inet(SocketAddr::V6(sock_addr)) => sock_addr.port() == 80,
+        _ => false,
+    } && s.hostnames.contains("example.com")));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_access_network_strace_mt() -> Result<()> {
+    simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())
+        .expect("must config logging");
+    test_access_network_mt(&STraceSysTraceCommand::new().into()).await
 }

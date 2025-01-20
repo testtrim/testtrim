@@ -5,12 +5,13 @@
 use std::{
     fs::File,
     io::{Read as _, Write as _},
-    net::{SocketAddr, TcpStream},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, UdpSocket},
     thread::{self},
     time::Duration,
 };
 
 use clap::{Parser, Subcommand};
+use dns_protocol::{Flags, Message, Question, ResourceRecord, ResourceType};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -52,7 +53,9 @@ fn main() {
             access_files_inherited().expect("access_files_inherited")
         }
         Commands::AccessNetwork => access_network().expect("access_network"),
-        Commands::AccessNetworkMultithreaded => todo!(),
+        Commands::AccessNetworkMultithreaded => {
+            access_network_multithread().expect("access_network_multithread")
+        }
     }
 }
 
@@ -136,8 +139,7 @@ fn access_files() -> Result<(), std::io::Error> {
 ///   with.
 /// - test-file-2.txt - accessed w/ subprocess after this process's CWD was changed.
 /// - test-file-3.txt - accessed from a spawned thread, where the process CWD has changed in a different thread and the
-///   shared-state of the CWD must be understood. (FIXME: not supported by strace syscall tracing; maybe this should be
-///   a different disabled test case?)
+///   shared-state of the CWD between threads must be understood.
 fn access_files_inherited() -> Result<(), std::io::Error> {
     // test-file-1.txt
     {
@@ -257,6 +259,84 @@ fn access_network() -> Result<(), std::io::Error> {
 
     // DNS resolution + connection attempt
     let _ = TcpStream::connect("example.com:80");
+
+    Ok(())
+}
+
+/// Accesses network addresses, sharing the network traffic between threads.
+///
+/// - UDP 1.1.1.1:53
+/// - DNS lookup (via previous) of example.com
+/// - Network access to example.com:80
+///
+/// Network access must be successful for this test case to be accurate.
+fn access_network_multithread() -> Result<(), std::io::Error> {
+    // Test #1 & #2: UDP access and DNS resolution with shared threading:
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.connect("1.1.1.1:53")?;
+    let mut buf = vec![0; 1024];
+    let mut questions = [Question::new("example.com", ResourceType::A, 1)];
+    let mut answers = [ResourceRecord::default()];
+    let message = Message::new(
+        rand::random(),
+        Flags::default(),
+        &mut questions,
+        &mut answers,
+        &mut [],
+        &mut [],
+    );
+    assert!(message.space_needed() <= buf.len());
+    let msg_len = message.write(&mut buf).expect("message.write");
+    // Share `socket` into another thread, requiring syscall tracing to be able to follow the shared socket:
+    let (mut buf, socket) = thread::spawn(move || {
+        let bytes_sent = socket.send(&buf[..msg_len]).unwrap();
+        assert_eq!(bytes_sent, msg_len);
+        (buf, socket)
+    })
+    .join()
+    .unwrap();
+    // Throw it to one other thread for a recv.
+    let (buf, bytes_recvd) = thread::spawn(move || {
+        let bytes_recvd = socket.recv(&mut buf).unwrap();
+        (buf, bytes_recvd)
+    })
+    .join()
+    .unwrap();
+    let mut questions = [dns_protocol::Question::default(); 1];
+    let mut answers = [dns_protocol::ResourceRecord::default(); 10];
+    let mut authorities = [dns_protocol::ResourceRecord::default(); 10];
+    let mut additional = [dns_protocol::ResourceRecord::default(); 10];
+    let binding = buf[..bytes_recvd].to_vec();
+    let message = dns_protocol::Message::read(
+        &binding,
+        &mut questions,
+        &mut answers,
+        &mut authorities,
+        &mut additional,
+    )
+    .unwrap();
+
+    // Test #3: TCP access to example.com:80
+    for answer in message.answers() {
+        if let dns_protocol::ResourceType::A = answer.ty() {
+            let addr = answer.data().try_into().map(u32::from_be_bytes).unwrap();
+            let addr = Ipv4Addr::from_bits(addr);
+            let mut stream = TcpStream::connect(SocketAddrV4::new(addr, 80))?;
+
+            // Throw it to another thread for a write.
+            let _stream = thread::spawn(move || {
+                let msg = "GET / HTTP/1.1\nHost: example.com\n\n".as_bytes();
+                let bytes_sent = stream.write(msg).unwrap();
+                assert_eq!(bytes_sent, msg.len());
+                stream
+            })
+            .join()
+            .unwrap();
+
+            // One connection is plenty.
+            break;
+        }
+    }
 
     Ok(())
 }

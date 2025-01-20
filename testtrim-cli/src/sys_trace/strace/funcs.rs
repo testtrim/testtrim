@@ -48,6 +48,7 @@ pub enum Function<'a> {
     },
     Clone {
         child_pid: i32,
+        thread: bool,
     },
     Connect {
         // connect is a trickier syscall than the others we've handled because it is typically used with non-blocking
@@ -183,7 +184,9 @@ impl FunctionExtractor {
             "close" => Some(Self::extract_close(syscall.arguments())?),
             "chdir" => Some(Self::extract_chdir(syscall.arguments())?),
             "openat" => Some(Self::extract_openat(syscall.arguments())?),
-            "clone" | "clone3" | "vfork" => Some(Self::extract_clone(*retval)),
+            "clone" => Some(Self::extract_clone(syscall.arguments(), *retval)?),
+            "clone3" => Some(Self::extract_clone3(syscall.arguments(), *retval)?),
+            "vfork" => Some(Self::extract_vfork(*retval)),
             "sendto" => Self::extract_sendto(syscall)?, // may have None
             "read" => Some(Self::extract_read(syscall)?),
             "connect" => Self::extract_connect(syscall.arguments())?, // may have None
@@ -241,8 +244,37 @@ impl FunctionExtractor {
         Ok(Function::Chdir { path })
     }
 
-    fn extract_clone<'a>(retval: i32) -> Function<'a> {
-        Function::Clone { child_pid: retval }
+    fn extract_clone<'a>(arguments: &[&Argument<'a>], retval: i32) -> Result<Function<'a>> {
+        ensure!(
+            arguments.len() == 3,
+            "expected 3 arguments to clone, but arguments were: {:?}",
+            arguments
+        );
+        let flags = Self::enum_text(arguments, 1)?;
+        Ok(Function::Clone {
+            child_pid: retval,
+            thread: flags.contains("CLONE_THREAD"),
+        })
+    }
+
+    fn extract_clone3<'a>(arguments: &[&Argument<'a>], retval: i32) -> Result<Function<'a>> {
+        ensure!(
+            arguments.len() == 2,
+            "expected 2 arguments to clone3, but arguments were: {:?}",
+            arguments
+        );
+        let flags = Self::structure_text(arguments, 0)?;
+        Ok(Function::Clone {
+            child_pid: retval,
+            thread: flags.contains("CLONE_THREAD"),
+        })
+    }
+
+    fn extract_vfork<'a>(retval: i32) -> Function<'a> {
+        Function::Clone {
+            child_pid: retval,
+            thread: false,
+        }
     }
 
     fn extract_sendto<T: CompleteSyscall>(syscall: &T) -> Result<Option<Function<'_>>> {
@@ -361,6 +393,29 @@ impl FunctionExtractor {
         match &args[index] {
             Argument::Numeric(v) => Ok(v),
             v => Err(anyhow!("argument {index} was not numeric; it was {v:?}",)),
+        }
+    }
+
+    fn enum_text<'a>(args: &[&Argument<'a>], index: usize) -> Result<&'a str> {
+        match &args[index] {
+            Argument::Enum(v) => Ok(v),
+            Argument::Named(_name, value) => match value.as_ref() {
+                &Argument::Enum(v) => Ok(v),
+                v => Err(anyhow!(
+                    "argument {index} was named, but not an enum; it was {v:?}",
+                )),
+            },
+            v => Err(anyhow!("argument {index} was not enum; it was {v:?}",)),
+        }
+    }
+
+    fn structure_text<'a>(args: &[&Argument<'a>], index: usize) -> Result<&'a str> {
+        match &args[index] {
+            Argument::Structure(v) => Ok(v),
+            Argument::WrittenStructure(orig, _upd) => Ok(orig),
+            v => Err(anyhow!(
+                "argument {index} was not structure or written-structure; it was {v:?}",
+            )),
         }
     }
 
@@ -492,7 +547,10 @@ mod tests {
             *t.borrow_function_trace(),
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
-                function: Function::Clone { child_pid: 337_653 }
+                function: Function::Clone {
+                    child_pid: 337_653,
+                    thread: false
+                }
             })
         );
 
@@ -508,7 +566,10 @@ mod tests {
             *t.borrow_function_trace(),
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
-                function: Function::Clone { child_pid: 416_676 }
+                function: Function::Clone {
+                    child_pid: 416_676,
+                    thread: true
+                }
             })
         );
 
@@ -526,7 +587,10 @@ mod tests {
             *t.borrow_function_trace(),
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
-                function: Function::Clone { child_pid: 38724 }
+                function: Function::Clone {
+                    child_pid: 38724,
+                    thread: false
+                }
             })
         );
 

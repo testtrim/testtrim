@@ -12,7 +12,6 @@ use std::{
     collections::HashMap,
     env,
     fs::remove_file,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     os::fd::{AsRawFd, FromRawFd as _, IntoRawFd, OwnedFd},
     path::{Path, PathBuf},
     process::{Command as SyncCommand, Output},
@@ -27,7 +26,7 @@ use crate::{errors::SubcommandErrors, sys_trace::trace::SocketCaptureState};
 
 use super::{
     SysTraceCommand,
-    trace::{DraftTrace, SocketCapture, SocketOperation, Trace, UnifiedSocketAddr},
+    trace::{DraftTrace, SocketCapture, SocketOperation, Trace},
 };
 
 mod funcs;
@@ -35,6 +34,15 @@ mod proc_synchronizer;
 mod sequencer;
 mod shmem;
 mod tokenizer;
+
+// These structs are to help differentiate `i32`'s with different meanings and avoid cross-use.  A `ThreadGroupId`
+// matches the description in Linux documentation of a "thread group identifier", which is that all threads in the same
+// process have the same thread group identifier; but each thread within the thread group will have a distinct process
+// identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ThreadGroupId(i32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ProcessId(i32);
 
 /// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
 pub struct STraceSysTraceCommand;
@@ -133,8 +141,9 @@ impl STraceSysTraceCommand {
     ) -> Result<Trace> {
         let mut trace = DraftTrace::new();
         let mut extractor = ProcSynchronizer::new();
-        let mut pid_cwd: HashMap<i32, PathBuf> = HashMap::new();
-        let mut pid_socket_fd_captures: HashMap<i32, HashMap<String, SocketCapture>> =
+        let mut pid_to_tgid: HashMap<ProcessId, ThreadGroupId> = HashMap::new();
+        let mut tgid_cwd: HashMap<ThreadGroupId, PathBuf> = HashMap::new();
+        let mut tgid_socket_fd_captures: HashMap<ThreadGroupId, HashMap<String, SocketCapture>> =
             HashMap::new();
 
         let mut line_count = 0;
@@ -171,13 +180,17 @@ impl STraceSysTraceCommand {
                         continue;
                     }
                 };
-                trace!("strace function: {pid} {function:?}");
+                let pid = ProcessId(pid);
+                let tgid = pid_to_tgid
+                    .entry(pid)
+                    .or_insert_with(|| ThreadGroupId(pid.0));
+                trace!("strace function: {tgid:?} {pid:?} {function:?}");
 
                 match function {
                     Function::Openat { path: open_path } => {
                         if let OpenPath::RelativeToCwd(path_ref) = open_path {
                             let mut path = path_ref.clone();
-                            if let Some(cwd) = pid_cwd.get(&pid) {
+                            if let Some(cwd) = tgid_cwd.get(tgid) {
                                 path = cwd.join(path);
                             }
                             trace.add_open(path);
@@ -187,15 +200,21 @@ impl STraceSysTraceCommand {
                     }
                     Function::Chdir { path } => {
                         let default = PathBuf::from("");
-                        let previous_path = pid_cwd.get(&pid).unwrap_or(&default);
+                        let previous_path = tgid_cwd.get(tgid).unwrap_or(&default);
                         let new_path = previous_path.join(path);
-                        pid_cwd.insert(pid, new_path);
+                        tgid_cwd.insert(*tgid, new_path);
                     }
-                    Function::Clone { child_pid } => {
-                        receptionist.add_subprocess(pid, *child_pid);
-                        // Inherit working directory
-                        if let Some(cwd) = pid_cwd.get(&pid) {
-                            pid_cwd.insert(*child_pid, (*cwd).clone());
+                    Function::Clone { child_pid, thread } => {
+                        receptionist.add_subprocess(pid.0, *child_pid);
+                        if *thread {
+                            // Set the new `child_pid` to have the same `ThreadGroupId` as the spawning process.
+                            let tgid = *tgid;
+                            pid_to_tgid.insert(ProcessId(*child_pid), tgid);
+                        } else {
+                            // Inherit working directory for new subprocess.
+                            if let Some(cwd) = tgid_cwd.get(tgid) {
+                                tgid_cwd.insert(ThreadGroupId(*child_pid), (*cwd).clone());
+                            }
                         }
                     }
                     Function::Connect {
@@ -207,7 +226,7 @@ impl STraceSysTraceCommand {
                         // that pid_socket_fd_captures could already contain the same pid & socket.  In that case this will
                         // be a reinitialization which should be fine; the expected case is we're just finished an
                         // incomplete or non-blocking connect.
-                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
                         socket_fd_captures.insert((*socket_fd).to_string(), SocketCapture {
                             socket_addr: socket_addr.clone(),
                             state: SocketCaptureState::Complete(Vec::new()),
@@ -221,7 +240,7 @@ impl STraceSysTraceCommand {
                         socket_fd,
                         data: StringArgument::Complete(data),
                     } => {
-                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
                         let socket_capture = socket_fd_captures.get_mut(*socket_fd);
                         if let Some(socket_capture) = socket_capture {
                             if let SocketCaptureState::Complete(ref mut socket_operations) =
@@ -246,7 +265,7 @@ impl STraceSysTraceCommand {
                         socket_fd: fd,
                         data: StringArgument::Complete(data),
                     } => {
-                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
                         let socket_capture = socket_fd_captures.get_mut(*fd);
                         if let Some(socket_capture) = socket_capture {
                             if let SocketCaptureState::Complete(ref mut socket_operations) =
@@ -258,37 +277,6 @@ impl STraceSysTraceCommand {
                                     .push(SocketOperation::Read(data.decoded().clone()));
                             }
                             // (else, socket capture is already marked as Incomplete, no need to put any data into it)
-                        } else {
-                            // Per https://codeberg.org/testtrim/testtrim/issues/217 -- our strace doesn't work correctly
-                            // for DNS tracing if the socket is connected on one thread, and then read on another thread.
-                            // Until I can figure out a way to address that issue, this is a little hack that looks for the
-                            // DNS "flags" response (the third & fourth bytes) and see if it looks like a typical recursive
-                            // query response.
-                            //
-                            // So in this case where we've performed a read but we don't know what the file descriptor is,
-                            // but the two bytes match the response pattern for a query, then we're going to pretend that it
-                            // is a response that we received from a DNS server.  This hack will continue in two other
-                            // places; we'll be OK if we can't parse this as a query response (search: hack_query_response),
-                            // and we'll remove the 0.0.0.0:53 connection trace.
-                            if data.encoded.contains("\\x81\\x80") {
-                                // FIXME: any way I can use `take()` here?  It fails because `data.take` is a move out of a
-                                // shared reference, but it's a reference to `function` that I'm about to drop anyway.
-                                let data = data.decoded().clone();
-                                if data.len() > 4 && data[2] == 129 && data[3] == 128 {
-                                    debug!(
-                                        "received data packet that may be a DNS response without a socket capture; pretending that it was a DNS response to see if we can parse it"
-                                    );
-                                    let fake_capture = SocketCapture {
-                                        socket_addr: UnifiedSocketAddr::Inet(SocketAddr::V4(
-                                            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 53),
-                                        )),
-                                        state: SocketCaptureState::Complete(vec![
-                                            SocketOperation::Read(data),
-                                        ]),
-                                    };
-                                    trace.add_socket_capture(fake_capture);
-                                }
-                            }
                         }
                         // sendto on a pid/socket that we don't know about will be normal/routine for any server-side
                         // sockets used by this test (eg. bind/accept), because we don't trace those.  We don't need to
@@ -307,7 +295,7 @@ impl STraceSysTraceCommand {
                         data: StringArgument::Partial,
                     } => {
                         // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
-                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
                         let in_progress = socket_fd_captures.get_mut(*fd);
                         if let Some(in_progress) = in_progress {
                             in_progress.state = SocketCaptureState::Incomplete;
@@ -317,7 +305,7 @@ impl STraceSysTraceCommand {
                         // trace those, so we'll ignore any unrecognized sockets.
                     }
                     Function::Close { fd } => {
-                        let socket_fd_captures = pid_socket_fd_captures.entry(pid).or_default();
+                        let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
                         let socket_capture = socket_fd_captures.remove(*fd);
                         if let Some(socket_capture) = socket_capture {
                             trace.add_socket_capture(socket_capture);

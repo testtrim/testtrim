@@ -109,3 +109,14 @@ apply = "ignore"
 port = 9999
 [[network-policy.match]]
 host = "example.com"
+
+# When testtrim is run on the testtrim project, it does some magic in order to perform nested strace syscall tracing
+# since strace can't be nested.  This requires test processes connecting back to the testtrim system on a UNIX socket in
+# /tmp/.  Those connections can be ignored.
+[[network-policy]]
+name = "testtrim strace sockets"
+apply = "ignore"
+[[network-policy.match]]
+unix-socket = "/tmp/**"
+[[network-policy.match]]
+unix-socket = "**receptionist.sock*"

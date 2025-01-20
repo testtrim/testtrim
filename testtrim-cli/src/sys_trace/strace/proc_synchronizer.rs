@@ -74,7 +74,7 @@ impl ProcSynchronizer {
                     return Ok(vec![]);
                 }
 
-                if let Function::Clone { child_pid } = function {
+                if let Function::Clone { child_pid, .. } = function {
                     // FIXME: may be a bug here, if the child process exits before the clone resumes in the parent
                     // process.  We'd get a FunctionTrace::Exit and we'd remove the known pid, but then we'd re-add it
                     // here... but when since we already processed the child exit we're not expecting any more syscalls
@@ -168,7 +168,10 @@ mod tests {
             syscall.borrow_function_trace(),
             &Some(FunctionTrace::Function {
                 pid: 15615,
-                function: Function::Clone { child_pid: 15620 }
+                function: Function::Clone {
+                    child_pid: 15620,
+                    thread: true
+                }
             })
         );
         let syscall = &t[1];
