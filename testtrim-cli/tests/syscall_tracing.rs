@@ -284,6 +284,16 @@ async fn test_access_network_mt(trace_command: &SysTraceCommandDispatch) -> Resu
         _ => false,
     } && s.hostnames.contains("example.com")));
 
+    // Must have no IP connections to port 80 which have no DNS address.  If we did, that would indicate that our DNS
+    // resolution wasn't understood completely.
+    assert!(
+        !trace.get_connect_sockets().iter().any(|s| match s.address {
+            UnifiedSocketAddr::Inet(SocketAddr::V4(sock_addr)) => sock_addr.port() == 80,
+            UnifiedSocketAddr::Inet(SocketAddr::V6(sock_addr)) => sock_addr.port() == 80,
+            _ => false,
+        } && s.hostnames.is_empty())
+    );
+
     Ok(())
 }
 
