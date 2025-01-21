@@ -17,7 +17,7 @@ use crate::sys_trace::trace::UnifiedSocketAddr;
 
 use super::{
     sequencer::{CompleteSyscall, Sequencer, SequencerOutput},
-    tokenizer::{Argument, EncodedString, Retval},
+    tokenizer::{Argument, CallOutcome, EncodedString, Retval, SyscallSegment, TokenizerOutput},
 };
 
 #[derive(Debug, PartialEq)]
@@ -36,6 +36,7 @@ pub enum StringArgument<'a> {
 pub enum FunctionTrace<'a> {
     Function { pid: i32, function: Function<'a> },
     Exit { pid: i32 },
+    ExitThreadGroup { pid: i32 },
 }
 
 #[derive(Debug, PartialEq)]
@@ -164,7 +165,18 @@ impl FunctionExtractor {
             SequencerOutput::ProcessExit(process_exit) => Ok(Some(FunctionTrace::Exit {
                 pid: i32::from_str(process_exit.pid())?,
             })),
-            SequencerOutput::IncompleteSyscall | SequencerOutput::Junk(_) => Ok(None),
+            SequencerOutput::Junk(junk) => match junk.borrow_output() {
+                TokenizerOutput::Syscall(SyscallSegment {
+                    pid,
+                    function,
+                    outcome: CallOutcome::ResumedUnfinished,
+                    ..
+                }) if *function == "exit_group" => Ok(Some(FunctionTrace::ExitThreadGroup {
+                    pid: i32::from_str(pid)?,
+                })),
+                _ => Ok(None),
+            },
+            SequencerOutput::IncompleteSyscall => Ok(None),
         }
     }
 
@@ -841,6 +853,19 @@ mod tests {
             r"1316971 waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
         ))?;
         assert_eq!(*t.borrow_function_trace(), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn exit_group() -> Result<()> {
+        let mut fe = FunctionExtractor::new();
+
+        let t = fe.extract(String::from(r"26979 exit_group(0)     = ?"))?;
+        assert_eq!(
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::ExitThreadGroup { pid: 26979 })
+        );
 
         Ok(())
     }

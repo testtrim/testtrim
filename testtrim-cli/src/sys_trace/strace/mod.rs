@@ -180,6 +180,22 @@ impl STraceSysTraceCommand {
                         receptionist.remove_process(*pid);
                         continue;
                     }
+                    FunctionTrace::ExitThreadGroup { pid } => {
+                        // When a thread group exits, ensure that all the pids associated with it are cleaned up from
+                        // the receptionist.  Technically we're missing other potentially useful cleanup here -- our
+                        // other local hashmaps -- but the receptionist cleanup is the most important because it causes
+                        // the EOF to be sent to the trace client and finish up its processes.
+                        let pid = ProcessId(*pid);
+                        let tgid = *pid_to_tgid
+                            .entry(pid)
+                            .or_insert_with(|| ThreadGroupId(pid.0));
+                        for (other_pid, other_tgid) in &pid_to_tgid {
+                            if *other_tgid == tgid {
+                                receptionist.remove_process(other_pid.0);
+                            }
+                        }
+                        continue;
+                    }
                 };
                 let pid = ProcessId(pid);
                 let tgid = pid_to_tgid

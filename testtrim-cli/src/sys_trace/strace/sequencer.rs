@@ -20,7 +20,7 @@ pub struct TraceLine {
     pub input: String,
     #[borrows(input)]
     #[covariant]
-    output: TokenizerOutput<'this>,
+    pub output: TokenizerOutput<'this>,
 }
 
 #[self_referencing]

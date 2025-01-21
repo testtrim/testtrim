@@ -96,6 +96,12 @@ impl ProcSynchronizer {
                 self.known_pids.remove(pid);
                 Ok(vec![output])
             }
+            FunctionTrace::ExitThreadGroup { pid: _ } => {
+                // FIXME: probably ideal to cleanup known_pids here, but we don't know the pids that are relevant unless
+                // we moved thread group tracking here.  It isn't really important to cleanup ProcSynchronizer's state
+                // unless pids are reused though.
+                Ok(vec![output])
+            }
         }
     }
 }
