@@ -57,9 +57,20 @@ jobs:
           fi
           echo NEW_VERSION = $NEW_VERSION
           nix develop .# --command git cliff --tag $NEW_VERSION -o ./CHANGELOG.md
-          echo "$NEW_VERSION" >> ./this-release-notes.md # the first line will appear as a "title" on the tag
-          echo "" >> ./this-release-notes.md
-          nix develop .# --command git cliff --tag $NEW_VERSION --unreleased >> ./this-release-notes.md
+          # Minimal version of the `gif cliff` output, with just the sections and commits, is used for the release body:
+          nix develop .# --command git cliff --tag $NEW_VERSION --unreleased --strip all \
+            --body '
+              testtrim is an intelligent test selection tool which uses code coverage data, system call tracing, git change analysis, and a historical database in order to identify the minimum set of tests required to verify a commit is regression-free.
+
+              All notable changes in this release are listed below.  These notes are automatically generated from git commit logs using [git-cliff](https://git-cliff.org):
+
+              {% for group, commits in commits | group_by(attribute="group") %}
+                ### {{ group | striptags | trim | upper_first }}
+                {% for commit in commits %}
+                    - {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}
+                {% endfor %}
+            {% endfor %}
+            ' > ./this-release-notes.md
 
           # Update version in Cargo.toml and Cargo.lock.  It seemed like it would be useful to use the cargo-edit tool
           # which has a `cargo set-version ...` command, but that doesn't update the lock file
