@@ -76,6 +76,7 @@ jobs:
           git push
           git push --tag
           # Need a clean working directory for the cargo publish
+          RELEASE_BODY=$(cat ./this-release-notes.md | jq -Rs '.')
           rm ./this-release-notes.md
 
           # Retry function for the release creation -- the codeberg API seems to have errors intermittently which I'd
@@ -87,10 +88,17 @@ jobs:
               -H 'Accept: application/json' \
               -H 'Content-Type: application/json' \
               -H "Authorization: token $GITHUB_TOKEN" \
-              -d "{
-                \"tag_name\": \"$NEW_VERSION\",
-                \"target_commitish\": \"$NEW_VERSION\"
-              }"; then
+              -d "$(jq -n \
+                  --arg version "$NEW_VERSION" \
+                  --arg body "$RELEASE_BODY" \
+                  '{
+                    tag_name: $version,
+                    target_commitish: $version,
+                    name: $version,
+                    body: $body
+                  }'
+                )";
+            then
               echo "Release creation successful"
               break
             else
