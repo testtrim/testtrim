@@ -1,8 +1,0 @@
-# SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
-#
-# SPDX-License-Identifier: GPL-3.0-or-later
-
-[package]
-name = "testtrim-ebpf-common"
-version = "0.10.0"
-edition = "2024"

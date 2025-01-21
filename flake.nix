@@ -28,32 +28,6 @@
         cargo = my-rust-bin; # .stable.latest.minimal;
         rustc = my-rust-bin; # .stable.latest.minimal;
       };
-      # aya-rs has hard-coded commands built into it to run "cargo +nightly ..." as part of its build scripts (eg.
-      # https://github.com/aya-rs/aya/blob/f34d355d7d70f8f9ef0f0a01a4338e50cf0080b4/aya-build/src/lib.rs#L62).  However,
-      # "+nightly" isn't truly an argument supported by cargo; instead it is added by rustup's cargo wrapper to allow
-      # choosing a toolchain for the current command.  But we're not using rustup, causing all the aya-rs builds to fail.
-      # So, as a workaround, we replace our cargo command with a script that strips the "+nightly" out.
-      cargoWrapper = pkgs.stdenv.mkDerivation {
-        name = "testtrim-cargo-wrapper";
-        # No source needed as we're creating the script directly
-        dontUnpack = true;
-        buildPhase = ''
-          mkdir -p $out/bin
-          cat > $out/bin/cargo << 'EOF'
-          #!/usr/bin/env bash
-          args=()
-          for arg in "$@"; do
-              if [[ ! $arg == +* ]]; then
-                  args+=("$arg")
-              fi
-          done
-          exec ${my-rust-bin}/bin/cargo "''${args[@]}"
-          EOF
-          chmod +x $out/bin/cargo
-        '';
-        # Skip unneeded phases
-        dontInstall = true;
-      };
       myBuildInputs = with pkgs; [
         openssl
         sqlite
@@ -61,8 +35,6 @@
       myNativeBuildInputs = with pkgs; [
         pkg-config
         openssl.dev
-        cargoWrapper
-        bpf-linker
       ];
     in {
       devShells.default =
@@ -90,12 +62,6 @@
               sqlx-cli
               strace
 
-              # FIXME: eBPF and aya tools -- not sure what we'll actually need yet.
-              # bpftrace
-              # bpf-linker
-              # cargo-generate
-              # bpftools
-
               # Can locally run the Forgejo action for quicker dev cycles:
               # act --container-daemon-socket unix:///run/podman/podman.sock -W ./.forgejo/workflows -P docker=node:20-bullseye
               act
@@ -112,7 +78,6 @@
 
           shellHook = ''
             export RUST_BACKTRACE=1
-            export PATH=${cargoWrapper}/bin:$PATH
           '';
         };
 
@@ -125,9 +90,6 @@
             ./.sqlx
             ./db
             ./testtrim-cli
-            ./testtrim-ebpf-common
-            ./testtrim-ebpf-program
-            ./testtrim-ebpf-tracing
             ./testtrim-syscall-test-app
             ./Cargo.lock
             ./Cargo.toml
@@ -159,12 +121,6 @@
           # the SQL migrations, which is pretty awkward in a build script.
           buildPhase = ''
             runHook preBuild
-
-            # Normally buildRustPackage has a hook that sets up .cargo/config.toml and, amoung other things, sets a
-            # ""rustflags" = [ "-C", "target-feature=-crt-static" ]".  This interfers with the bpf-linker which doesn't
-            # support having `-crt-static` as an input, and causes: note: Error: error: unexpected argument '-c' found
-            # So... we remove it.
-            sed -i '/"rustflags"/d' .cargo/config.toml
 
             export CARGO_HOME=$TMPDIR # prevents any output to /homeless-shelter with cargo cache DBs
             cargo build --release

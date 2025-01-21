@@ -5,13 +5,6 @@
 [workspace]
 members = [
     "testtrim-cli",
-    "testtrim-ebpf-tracing",
-    "testtrim-ebpf-program",
-    "testtrim-syscall-test-app",
-]
-default-members = [
-    "testtrim-cli",
-    "testtrim-ebpf-tracing",
     "testtrim-syscall-test-app",
 ]
 resolver = "3"
@@ -21,11 +14,6 @@ actix-test = "0.1.5"
 actix-web = "4.9.0"
 anyhow = "1.0.94"
 async-compression = { version = "0.4.18", features = ["tokio", "zstd"] }
-aya = { version = "0.13.1", default-features = false }
-aya-build = { version = "0.1.2", default-features = false }
-aya-ebpf = { version = "0.1.1", default-features = false }
-aya-log = { version = "0.2.1", default-features = false }
-aya-log-ebpf = { version = "0.1.1", default-features = false }
 cargo_toml = "0.21.0"
 cargo-lock = "10.0.1"
 clap = { version = "4.5.23", features = ["derive"] }
@@ -42,7 +30,6 @@ glob = "0.3.1"
 gomod-rs = "0.1.1"
 ipnet = { version = "2.10.1", features = ["serde"] }
 lazy_static = "1.5.0"
-libc = { version = "0.2.159", default-features = false }
 llvm_profparser = "0.7.0"
 log = "0.4.22"
 named-lock = "0.4.1"
@@ -70,18 +57,4 @@ toml = "0.8.19"
 tracing = "0.1.41"
 url = "2.5.4"
 uuid = { version = "1.11.0", features = ["v4"] }
-which = { version = "7.0.0", default-features = false }
 winnow = "0.6"
-
-# These dependencies aren't needed directly -- but they are required by the testtrim-ebpf-program cross-compile and if
-# they aren't included here, then they won't be listed in Cargo.lock, and then they won't get into the nix build (which
-# is restricted with the `cargoLock` setting).
-compiler_builtins = "=0.1.143"
-dlmalloc = "=0.2.7"
-fortanix-sgx-abi = "=0.5.0"
-getopts = "=0.2.21"
-hermit-abi = "^0.4.0"
-miniz_oxide = "=0.8.3"
-r-efi = "=4.5.0"
-r-efi-alloc = "=1.0.0"
-unwinding = "=0.2.5"
