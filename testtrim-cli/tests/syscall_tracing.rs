@@ -130,12 +130,10 @@ async fn test_access_files(trace_command: &SysTraceCommandDispatch) -> Result<()
         trace.get_open_paths(),
         "testtrim-syscall-test-app/test-file-2.txt"
     ));
-    // FIXME: Accessing relative paths from an open directory is not currently supported by our strace implementation --
-    // https://codeberg.org/testtrim/testtrim/issues/132
-    // assert!(has_relative_path(
-    //     trace.get_open_paths(),
-    //     "testtrim-syscall-test-app/test-file-3.txt"
-    // ));
+    assert!(has_relative_path(
+        trace.get_open_paths(),
+        "testtrim-syscall-test-app/test-file-3.txt"
+    ));
     assert!(has_relative_path(
         trace.get_open_paths(),
         "testtrim-syscall-test-app/test-file-4.txt"

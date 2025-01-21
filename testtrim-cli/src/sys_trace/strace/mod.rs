@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
-use log::{debug, trace, warn};
+use log::{debug, trace};
 use nix::sys::wait::waitpid;
 use nix::unistd::Pid;
 use proc_synchronizer::ProcSynchronizer;
@@ -44,6 +44,8 @@ mod tokenizer;
 struct ThreadGroupId(i32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ProcessId(i32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct FileDescriptor(i32);
 
 /// Implementation of `SysTraceCommand` that uses the `strace` command to trace all the relevant system calls.
 pub struct STraceSysTraceCommand;
@@ -144,7 +146,11 @@ impl STraceSysTraceCommand {
         let mut extractor = ProcSynchronizer::new();
         let mut pid_to_tgid: HashMap<ProcessId, ThreadGroupId> = HashMap::new();
         let mut tgid_cwd: HashMap<ThreadGroupId, PathBuf> = HashMap::new();
-        let mut tgid_socket_fd_captures: HashMap<ThreadGroupId, HashMap<String, SocketCapture>> =
+        let mut tgid_socket_fd_captures: HashMap<
+            ThreadGroupId,
+            HashMap<FileDescriptor, SocketCapture>,
+        > = HashMap::new();
+        let mut tgid_open_fd: HashMap<ThreadGroupId, HashMap<FileDescriptor, PathBuf>> =
             HashMap::new();
 
         let mut line_count = 0;
@@ -204,16 +210,35 @@ impl STraceSysTraceCommand {
                 trace!("strace function: {tgid:?} {pid:?} {function:?}");
 
                 match function {
-                    Function::Openat { path: open_path } => {
-                        if let OpenPath::RelativeToCwd(path_ref) = open_path {
-                            let mut path = path_ref.clone();
-                            if let Some(cwd) = tgid_cwd.get(tgid) {
-                                path = cwd.join(path);
+                    Function::Openat {
+                        path: open_path,
+                        fd,
+                    } => {
+                        let accessed_path = match open_path {
+                            OpenPath::RelativeToCwd(path_ref) => {
+                                let mut path = path_ref.clone();
+                                if let Some(cwd) = tgid_cwd.get(tgid) {
+                                    path = cwd.join(path);
+                                }
+                                path
                             }
-                            trace.add_open(path);
-                        } else {
-                            warn!("open path {:?} not yet supported for strace", open_path);
-                        }
+                            OpenPath::RelativeToOpenDirFD(path_ref, relative_fd) => {
+                                let relative_fd = FileDescriptor(*relative_fd);
+                                match tgid_open_fd.entry(*tgid).or_default().get(&relative_fd) {
+                                    Some(open_path) => open_path.join(path_ref),
+                                    None => {
+                                        return Err(anyhow!(
+                                            "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
+                                        ));
+                                    }
+                                }
+                            }
+                        };
+                        trace.add_open(accessed_path.clone());
+                        tgid_open_fd
+                            .entry(*tgid)
+                            .or_default()
+                            .insert(FileDescriptor(*fd), accessed_path);
                     }
                     Function::Chdir { path } => {
                         let default = PathBuf::from("");
@@ -244,7 +269,7 @@ impl STraceSysTraceCommand {
                         // be a reinitialization which should be fine; the expected case is we're just finished an
                         // incomplete or non-blocking connect.
                         let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
-                        socket_fd_captures.insert((*socket_fd).to_string(), SocketCapture {
+                        socket_fd_captures.insert(FileDescriptor(*socket_fd), SocketCapture {
                             socket_addr: socket_addr.clone(),
                             state: SocketCaptureState::Complete(Vec::new()),
                         });
@@ -258,7 +283,8 @@ impl STraceSysTraceCommand {
                         data: StringArgument::Complete(data),
                     } => {
                         let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
-                        let socket_capture = socket_fd_captures.get_mut(*socket_fd);
+                        let socket_capture =
+                            socket_fd_captures.get_mut(&FileDescriptor(*socket_fd));
                         if let Some(socket_capture) = socket_capture {
                             if let SocketCaptureState::Complete(ref mut socket_operations) =
                                 socket_capture.state
@@ -283,7 +309,7 @@ impl STraceSysTraceCommand {
                         data: StringArgument::Complete(data),
                     } => {
                         let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
-                        let socket_capture = socket_fd_captures.get_mut(*fd);
+                        let socket_capture = socket_fd_captures.get_mut(&FileDescriptor(*fd));
                         if let Some(socket_capture) = socket_capture {
                             if let SocketCaptureState::Complete(ref mut socket_operations) =
                                 socket_capture.state
@@ -313,7 +339,7 @@ impl STraceSysTraceCommand {
                     } => {
                         // "Corrupt" this stream as strace didn't receive all the data necessary to recreate it.
                         let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
-                        let in_progress = socket_fd_captures.get_mut(*fd);
+                        let in_progress = socket_fd_captures.get_mut(&FileDescriptor(*fd));
                         if let Some(in_progress) = in_progress {
                             in_progress.state = SocketCaptureState::Incomplete;
                         }
@@ -322,8 +348,13 @@ impl STraceSysTraceCommand {
                         // trace those, so we'll ignore any unrecognized sockets.
                     }
                     Function::Close { fd } => {
+                        tgid_open_fd
+                            .entry(*tgid)
+                            .or_default()
+                            .remove(&FileDescriptor(*fd));
+
                         let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
-                        let socket_capture = socket_fd_captures.remove(*fd);
+                        let socket_capture = socket_fd_captures.remove(&FileDescriptor(*fd));
                         if let Some(socket_capture) = socket_capture {
                             trace.add_socket_capture(socket_capture);
                         }

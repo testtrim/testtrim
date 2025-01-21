@@ -125,7 +125,7 @@ mod tests {
             t.borrow_function_trace(),
             &Some(FunctionTrace::Function {
                 pid: 1_234_321,
-                function: Function::Close { fd: "3" }
+                function: Function::Close { fd: 3 }
             })
         );
 
@@ -185,7 +185,7 @@ mod tests {
             syscall.borrow_function_trace(),
             &Some(FunctionTrace::Function {
                 pid: 15620,
-                function: Function::Close { fd: "3" }
+                function: Function::Close { fd: 3 }
             })
         );
 

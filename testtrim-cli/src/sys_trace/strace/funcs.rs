@@ -43,6 +43,7 @@ pub enum FunctionTrace<'a> {
 pub enum Function<'a> {
     Openat {
         path: OpenPath,
+        fd: i32,
     },
     Chdir {
         path: PathBuf,
@@ -61,22 +62,22 @@ pub enum Function<'a> {
         //
         // So the sum of that is that Connect is currently the only syscall which will be emitted here even if it has an
         // error.
-        socket_fd: &'a str,
+        socket_fd: i32,
         socket_addr: UnifiedSocketAddr,
     },
     Sendto {
-        socket_fd: &'a str,
+        socket_fd: i32,
         data: StringArgument<'a>,
     },
     Close {
-        fd: &'a str,
+        fd: i32,
     },
     Read {
-        fd: &'a str,
+        fd: i32,
         data: StringArgument<'a>,
     },
     Recv {
-        socket_fd: &'a str,
+        socket_fd: i32,
         data: StringArgument<'a>,
     },
     Execve {
@@ -195,7 +196,7 @@ impl FunctionExtractor {
         Ok(match syscall.function() {
             "close" => Some(Self::extract_close(syscall.arguments())?),
             "chdir" => Some(Self::extract_chdir(syscall.arguments())?),
-            "openat" => Some(Self::extract_openat(syscall.arguments())?),
+            "openat" => Some(Self::extract_openat(syscall.arguments(), *retval)?),
             "clone" => Some(Self::extract_clone(syscall.arguments(), *retval)?),
             "clone3" => Some(Self::extract_clone3(syscall.arguments(), *retval)?),
             "vfork" => Some(Self::extract_vfork(*retval)),
@@ -226,7 +227,7 @@ impl FunctionExtractor {
         Ok(Function::Close { fd })
     }
 
-    fn extract_openat<'a>(arguments: &[&Argument<'a>]) -> Result<Function<'a>> {
+    fn extract_openat<'a>(arguments: &[&Argument<'a>], retval: i32) -> Result<Function<'a>> {
         ensure!(
             // mode_t mode optional 4th
             (3..=4).contains(&arguments.len()),
@@ -243,7 +244,7 @@ impl FunctionExtractor {
                 ));
             }
         };
-        Ok(Function::Openat { path })
+        Ok(Function::Openat { path, fd: retval })
     }
 
     fn extract_chdir<'a>(arguments: &[&Argument<'a>]) -> Result<Function<'a>> {
@@ -401,9 +402,9 @@ impl FunctionExtractor {
         Ok(Function::Execve { arg0: path })
     }
 
-    fn numeric<'a>(args: &[&Argument<'a>], index: usize) -> Result<&'a str> {
+    fn numeric(args: &[&Argument<'_>], index: usize) -> Result<i32> {
         match &args[index] {
-            Argument::Numeric(v) => Ok(v),
+            Argument::Numeric(v) => Ok(i32::from_str(v)?),
             v => Err(anyhow!("argument {index} was not numeric; it was {v:?}",)),
         }
     }
@@ -475,7 +476,7 @@ mod tests {
             t.borrow_function_trace(),
             &Some(FunctionTrace::Function {
                 pid: 1_234_321,
-                function: Function::Close { fd: "3" }
+                function: Function::Close { fd: 3 }
             })
         );
 
@@ -507,6 +508,7 @@ mod tests {
                     path: OpenPath::RelativeToCwd(PathBuf::from(
                         "test_data/Fibonacci_Sequence.txt"
                     )),
+                    fd: 3,
                 }
             })
         );
@@ -523,6 +525,7 @@ mod tests {
                 pid: 1_234_321,
                 function: Function::Openat {
                     path: OpenPath::RelativeToOpenDirFD(PathBuf::from("gocoverdir"), 7),
+                    fd: 4,
                 }
             })
         );
@@ -625,7 +628,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Sendto {
-                    socket_fd: "3",
+                    socket_fd: 3,
                     data: StringArgument::Complete(&EncodedString::new(
                         "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
                     )),
@@ -641,7 +644,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Sendto {
-                    socket_fd: "5",
+                    socket_fd: 5,
                     data: StringArgument::Partial,
                 }
             })
@@ -662,7 +665,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Read {
-                    fd: "3",
+                    fd: 3,
                     data: StringArgument::Complete(&EncodedString::new(
                         "\\x02\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\t\\x00\\x00\\x00\\x02\\x00\\x00\\x00\\xe8\\x03\\x00\\x00d\\x00\\x00\\x00\\x10\\x00\\x00\\x00\\x0f\\x00\\x00\\x00\\x1f\\x00\\x00\\x00"
                     )),
@@ -678,7 +681,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Read {
-                    fd: "3",
+                    fd: 3,
                     data: StringArgument::Partial,
                 }
             })
@@ -699,7 +702,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Connect {
-                    socket_fd: "3",
+                    socket_fd: 3,
                     socket_addr: UnifiedSocketAddr::Unix(PathBuf::from("/var/run/nscd/socket")),
                 }
             })
@@ -713,7 +716,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Connect {
-                    socket_fd: "5",
+                    socket_fd: 5,
                     socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
                         SocketAddrV6::new(
                             Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
@@ -740,7 +743,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Connect {
-                    socket_fd: "17",
+                    socket_fd: 17,
                     socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
                         SocketAddrV4::new(Ipv4Addr::new(100, 100, 100, 100), 53)
                     )),
@@ -763,7 +766,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Connect {
-                    socket_fd: "5",
+                    socket_fd: 5,
                     socket_addr: UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
                         SocketAddrV6::new(
                             Ipv6Addr::new(0x2607, 0xf8b0, 0x400a, 0x805, 0, 0, 0, 0x2003),
@@ -797,7 +800,7 @@ mod tests {
             Some(FunctionTrace::Function {
                 pid: 1_234_321,
                 function: Function::Recv {
-                    socket_fd: "7",
+                    socket_fd: 7,
                     data: StringArgument::Complete(&EncodedString::new(
                         "\\xd6\\xef\\x81\\x80\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\x01\\x08codeberg\\x03org\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\\"\\x00\\x04\\xd9\\xc5[\\x91\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00"
                     )),
