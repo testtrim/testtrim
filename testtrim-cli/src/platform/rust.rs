@@ -436,30 +436,47 @@ impl RustTestPlatform {
                 // version (0.4.7) from the path if present.
                 let mut itr = file.components();
                 while let Some(comp) = itr.next() {
-                    if let Component::Normal(path) = comp
-                        && path == ".cargo"
-                    {
-                        if let Some(Component::Normal(path)) = itr.next()
-                            && path == "registry"
-                            && let Some(Component::Normal(path)) = itr.next()
-                            && path == "src"
-                            && let Some(Component::Normal(_registry_path)) = itr.next()
-                            && let Some(Component::Normal(package_path)) = itr.next()
-                            && let Some((package_name, version)) = parse_cargo_package(package_path)
-                        {
-                            trace!("Found package reference to {} / {}", package_name, version);
-                            coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-                                test_identifier: test_case.test_identifier.clone(),
-                                coverage_identifier: RustCoverageIdentifier::PackageDependency(
-                                    RustPackageDependency {
-                                        package_name,
-                                        version,
-                                    },
-                                ),
-                            });
-                        }
+                    // First check if we're looking at .cargo
+                    let _first_path = match comp {
+                        Component::Normal(path) if path == ".cargo" => path,
+                        _ => continue,
+                    };
+
+                    // Get the next components, breaking if any don't match expectations
+                    let _registry = match itr.next() {
+                        Some(Component::Normal(path)) if path == "registry" => path,
+                        _ => break,
+                    };
+
+                    let _src = match itr.next() {
+                        Some(Component::Normal(path)) if path == "src" => path,
+                        _ => break,
+                    };
+
+                    let Some(Component::Normal(_registry_path)) = itr.next() else {
                         break;
-                    }
+                    };
+
+                    let Some(Component::Normal(package_path)) = itr.next() else {
+                        break;
+                    };
+
+                    // Try to parse the package info
+                    let Some((package_name, version)) = parse_cargo_package(package_path) else {
+                        break;
+                    };
+
+                    trace!("Found package reference to {} / {}", package_name, version);
+                    coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+                        test_identifier: test_case.test_identifier.clone(),
+                        coverage_identifier: RustCoverageIdentifier::PackageDependency(
+                            RustPackageDependency {
+                                package_name,
+                                version,
+                            },
+                        ),
+                    });
+                    break;
                 }
             } else {
                 // FIXME: not sure what the right thing to do here is, if we've hit a point in the instrumentation, but
@@ -664,11 +681,11 @@ impl TestPlatform for RustTestPlatform {
         if let Some(package) = manifest.package {
             Ok(package.name)
         } else {
-            if let Some(workspace) = manifest.workspace
-                && !workspace.members.is_empty()
-            {
-                // This is a bit hacky... not sure what the right behavior is yet.
-                return Ok(workspace.members[0].clone());
+            if let Some(workspace) = manifest.workspace {
+                if !workspace.members.is_empty() {
+                    // This is a bit hacky... not sure what the right behavior is yet.
+                    return Ok(workspace.members[0].clone());
+                }
             }
             Err(anyhow!("unable to access package metadata in Cargo.toml"))
         }

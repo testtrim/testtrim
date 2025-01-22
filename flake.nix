@@ -17,13 +17,13 @@
       pkgs = import nixpkgs {
         inherit system overlays;
       };
-      my-rust-bin = (pkgs.rust-bin.selectLatestNightlyWith( toolchain: toolchain.default.override {
+      my-rust-bin = pkgs.rust-bin.beta.latest.default.override {
         extensions = [
           "rust-src"
           "rust-analyzer"
           "llvm-tools-preview" # for llvm-profdata & llvm-cov # FIXME: maybe not needed anymore; pretty dated from early development days
         ];
-      }));
+      };
       rustPlatform = pkgs.makeRustPlatform {
         cargo = my-rust-bin; # .stable.latest.minimal;
         rustc = my-rust-bin; # .stable.latest.minimal;

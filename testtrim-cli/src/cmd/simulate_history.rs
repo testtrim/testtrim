@@ -205,12 +205,14 @@ where
 {
     let mut result = vec![];
     let mut parents = scm.get_commit_parents(head)?;
-    while result.len() < Into::<usize>::into(num_commits)
-        && let Some(cur_commit) = parents.pop()
-    {
-        let cur_parents = scm.get_commit_parents(&cur_commit)?;
-        result.push(cur_commit);
-        parents.extend(cur_parents);
+    while result.len() < Into::<usize>::into(num_commits) {
+        if let Some(cur_commit) = parents.pop() {
+            let cur_parents = scm.get_commit_parents(&cur_commit)?;
+            result.push(cur_commit);
+            parents.extend(cur_parents);
+        } else {
+            break;
+        }
     }
     // Reorganize the commits from oldest to newest (not based upon time; based upon ancestry).
     result.reverse();

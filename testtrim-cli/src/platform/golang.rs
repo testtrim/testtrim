@@ -922,22 +922,23 @@ impl GolangTestPlatform {
         if let Some(referencing_files) = coverage_data
             .file_referenced_by_files_map()
             .get(changed_file)
-            && !referencing_files.is_empty()
         {
-            for referencing_file in referencing_files {
-                Self::maybe_guess_tests_from_changed_file(
-                    referencing_file,
-                    coverage_data,
-                    eval_target_test_cases,
-                    test_cases,
-                    prevent_recursive,
-                    Some(&TestReason::SideEffect(
-                        // Because this occurred (probably a FileChanged)
-                        Box::new(reason.clone()),
-                        // We treated it like this file changed:
-                        Box::new(TestReason::FileChanged(referencing_file.clone())),
-                    )),
-                )?;
+            if !referencing_files.is_empty() {
+                for referencing_file in referencing_files {
+                    Self::maybe_guess_tests_from_changed_file(
+                        referencing_file,
+                        coverage_data,
+                        eval_target_test_cases,
+                        test_cases,
+                        prevent_recursive,
+                        Some(&TestReason::SideEffect(
+                            // Because this occurred (probably a FileChanged)
+                            Box::new(reason.clone()),
+                            // We treated it like this file changed:
+                            Box::new(TestReason::FileChanged(referencing_file.clone())),
+                        )),
+                    )?;
+                }
             }
         }
 

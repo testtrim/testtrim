@@ -118,11 +118,12 @@ impl Trace {
                 // If we completed a connection to an IPv6 address which was actually an IPv4-mapped address (eg.
                 // ::ffff:192.229.211.108), then lookup the IPv4 address in the DNS resolutions (eg. if we did an `A`
                 // record resolution) and add those hostnames to the ResolvedSocketAddr as well.
-                if let IpAddr::V6(ip6) = inet.ip()
-                    && let Some(v4) = ip6.to_ipv4_mapped()
-                    && let Some(resolved_hostnames) = dns_resolutions.get(&IpAddr::V4(v4))
-                {
-                    hostnames.extend(resolved_hostnames.to_owned());
+                if let IpAddr::V6(ip6) = inet.ip() {
+                    if let Some(v4) = ip6.to_ipv4_mapped() {
+                        if let Some(resolved_hostnames) = dns_resolutions.get(&IpAddr::V4(v4)) {
+                            hostnames.extend(resolved_hostnames.to_owned());
+                        }
+                    }
                 }
 
                 // Not really expecting that DNS resolution would make external socket access for 'localhost', and it'd
@@ -131,10 +132,10 @@ impl Trace {
                 // specific check for that.
                 if inet.ip().is_loopback() {
                     hostnames.insert(String::from("localhost"));
-                } else if let IpAddr::V6(ip6) = inet.ip()
-                    && ip6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
-                {
-                    hostnames.insert(String::from("localhost"));
+                } else if let IpAddr::V6(ip6) = inet.ip() {
+                    if ip6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()) {
+                        hostnames.insert(String::from("localhost"));
+                    }
                 }
             }
 

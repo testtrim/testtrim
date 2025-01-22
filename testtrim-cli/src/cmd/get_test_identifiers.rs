@@ -486,24 +486,25 @@ fn compute_changed_file_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     if let Some(referencing_files) = coverage_data
         .file_referenced_by_files_map()
         .get(changed_file)
-        && !referencing_files.is_empty()
     {
-        // Treat all the "referencing files", which are files that had some reference to the changed file, as-if
-        // they were changed because this file was changed.
-        for referencing_file in referencing_files {
-            compute_changed_file_test_cases(
-                eval_target_test_cases,
-                referencing_file,
-                coverage_data,
-                retval,
-                recurse_ignore_files,
-                Some(&TestReason::SideEffect(
-                    // Because this occurred (probably a FileChanged)
-                    Box::new(reason.clone()),
-                    // We treated it like this file changed:
-                    Box::new(TestReason::FileChanged(referencing_file.clone())),
-                )),
-            )?;
+        if !referencing_files.is_empty() {
+            // Treat all the "referencing files", which are files that had some reference to the changed file, as-if
+            // they were changed because this file was changed.
+            for referencing_file in referencing_files {
+                compute_changed_file_test_cases(
+                    eval_target_test_cases,
+                    referencing_file,
+                    coverage_data,
+                    retval,
+                    recurse_ignore_files,
+                    Some(&TestReason::SideEffect(
+                        // Because this occurred (probably a FileChanged)
+                        Box::new(reason.clone()),
+                        // We treated it like this file changed:
+                        Box::new(TestReason::FileChanged(referencing_file.clone())),
+                    )),
+                )?;
+            }
         }
     }
     Ok(())

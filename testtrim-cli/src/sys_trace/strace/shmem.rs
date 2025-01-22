@@ -57,7 +57,7 @@ pub struct Receptionist {
 
 impl Receptionist {
     pub fn get_receptionist_address(trace_path: &Path) -> PathBuf {
-        let mut path = trace_path.with_added_extension("sock");
+        let mut path = trace_path.with_extension("sock");
         // SUN_LEN is the max UNIX socket length, which is short...
         if path.as_os_str().len() > 107 {
             path.pop();

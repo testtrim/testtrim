@@ -69,15 +69,15 @@ impl TesttrimApiCoverageDatabase {
         })
     }
 
-    fn client(&self) -> Result<&Client, CoverageDatabaseDetailedError> {
-        self.client.get_or_try_init(|| {
+    fn client(&self) -> &Client {
+        self.client.get_or_init(|| {
             reqwest::ClientBuilder::new()
                 .zstd(true)
                 .gzip(true)
                 .user_agent(format!("testtrim ({})", env!("CARGO_PKG_VERSION")))
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .context("creating reqwest client for TesttrimApiCoverageDatabase")
+                .unwrap()
         })
     }
 
@@ -138,7 +138,7 @@ impl TesttrimApiCoverageDatabase {
                 duration.as_millis()
             );
 
-            let client = self.client()?;
+            let client = self.client();
             let request = client
                 .post(url)
                 .header("Content-Type", "application/json")
@@ -244,7 +244,7 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
             }
         }
         debug!("HTTP request GET {url}");
-        let client = self.client()?;
+        let client = self.client();
         let request = client
             .get(url)
             .build()
@@ -288,7 +288,7 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
             .push("coverage-data")
             .push(project_name);
         debug!("HTTP request GET {url}");
-        let client = self.client()?;
+        let client = self.client();
         let request = client
             .get(url)
             .build()
@@ -333,7 +333,7 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
             .push("coverage-data")
             .push(project_name);
         debug!("HTTP request DELETE {url}");
-        let client = self.client()?;
+        let client = self.client();
         let request = client
             .delete(url)
             .build()

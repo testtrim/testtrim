@@ -93,9 +93,8 @@ impl PerformanceStorage {
     fn aggregate_cumulative_time(&self) -> HashMap<String, Duration> {
         let mut accumulated_time: HashMap<String, Duration> = HashMap::new();
         for thingy in &self.span_storage {
-            if let Some(perftrace) = &thingy.perftrace
-                && let Some(entered_at) = &thingy.entered_at
-                && let Some(exited_at) = &thingy.exited_at
+            if let (Some(perftrace), Some(entered_at), Some(exited_at)) =
+                (&thingy.perftrace, &thingy.entered_at, &thingy.exited_at)
             {
                 let addt_duration = exited_at.duration_since(*entered_at);
 

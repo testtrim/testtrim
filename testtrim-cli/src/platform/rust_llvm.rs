@@ -78,14 +78,15 @@ impl CoverageLibrary {
             // have to come across them experimentally.
             let mut file_id: Option<usize> = None;
             for region in &c.regions {
-                if let Some(existing_file_id) = file_id
-                    && existing_file_id != region.file_id
-                {
-                    panic!(
-                        "llvm coverage region had multiple file_ids for a single function -- this isn't currently supported"
-                    );
-                } else {
-                    file_id = Some(region.file_id);
+                match file_id {
+                    Some(existing_file_id) if existing_file_id != region.file_id => {
+                        panic!(
+                            "llvm coverage region had multiple file_ids for a single function -- this isn't currently supported"
+                        );
+                    }
+                    _ => {
+                        file_id = Some(region.file_id);
+                    }
                 }
             }
             let Some(file_id) = file_id else {
