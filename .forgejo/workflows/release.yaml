@@ -87,7 +87,7 @@ jobs:
           git push
           git push --tag
           # Need a clean working directory for the cargo publish
-          RELEASE_BODY=$(cat ./this-release-notes.md | jq -Rs '.')
+          RELEASE_BODY=$(cat ./this-release-notes.md)
           rm ./this-release-notes.md
 
           # Retry function for the release creation -- the codeberg API seems to have errors intermittently which I'd
