@@ -18,7 +18,7 @@ use tracing::instrument::WithSubscriber;
 use crate::{
     cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
     coverage::{CoverageDatabase, commit_coverage_data::CoverageIdentifier, create_db_infallible},
-    errors::{RunTestsCommandErrors, RunTestsErrors},
+    errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
@@ -306,6 +306,23 @@ where
                 "commit {commit_identifier} failed to execute {} tests",
                 failures.len()
             );
+            for failure in &failures {
+                match &failure.failure {
+                    TestFailure::NonZeroExitCode {
+                        exit_code,
+                        stdout,
+                        stderr,
+                    } => {
+                        info!(
+                            "test {} exited with code {exit_code:?}\n\nstdout: {}\n\nstderr: {}",
+                            failure.test_identifier,
+                            // indent stdout & stderr for maybe more clarity:
+                            stdout.replace('\n', "\n    "),
+                            stderr.replace('\n', "\n    "),
+                        );
+                    }
+                }
+            }
             Ok(SimulateCommitOutput {
                 commit,
                 commit_identifier,
