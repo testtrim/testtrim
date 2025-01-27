@@ -301,3 +301,27 @@ async fn test_access_network_strace_mt() -> Result<()> {
         .expect("must config logging");
     test_access_network_mt(&STraceSysTraceCommand::new().into()).await
 }
+
+async fn test_access_network_cname(trace_command: &SysTraceCommandDispatch) -> Result<()> {
+    let trace = run_test_binary(trace_command, "access-network-cname").await?;
+
+    for socket in trace.get_connect_sockets() {
+        println!("open socket: {socket:?}");
+    }
+
+    assert!(trace.get_connect_sockets().iter().any(|s| match s.address {
+        UnifiedSocketAddr::Inet(SocketAddr::V4(sock_addr)) => sock_addr.port() == 80,
+        UnifiedSocketAddr::Inet(SocketAddr::V6(sock_addr)) => sock_addr.port() == 80,
+        _ => false,
+    }
+        && s.hostnames.contains("cname-test.testtrim.org")));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_access_network_cname_strace() -> Result<()> {
+    simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())
+        .expect("must config logging");
+    test_access_network_cname(&STraceSysTraceCommand::new().into()).await
+}

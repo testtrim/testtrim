@@ -1357,13 +1357,19 @@ mod tests {
             let ip6 = IpAddr::from_str("2607:f8b0:400a:801::2003")?;
             assert_eq!(
                 hashmap.get(&ip6),
-                Some(&HashSet::from([String::from("google.ca")]))
+                Some(&HashSet::from([
+                    String::from("google.com"),
+                    String::from("google.ca")
+                ]))
             );
 
             let ip4 = IpAddr::from_str("172.217.14.195")?;
             assert_eq!(
                 hashmap.get(&ip4),
-                Some(&HashSet::from([String::from("google.ca")]))
+                Some(&HashSet::from([
+                    String::from("google.com"),
+                    String::from("google.ca")
+                ]))
             );
         } else {
             panic!("expected DnsCaptureAnalysisResult::Data, but was {result:?}");

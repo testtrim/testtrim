@@ -109,6 +109,8 @@ apply = "ignore"
 port = 9999
 [[network-policy.match]]
 host = "example.com"
+[[network-policy.match]]
+host = "cname-test.testtrim.org"
 
 # When testtrim is run on the testtrim project, it does some magic in order to perform nested strace syscall tracing
 # since strace can't be nested.  This requires test processes connecting back to the testtrim system on a UNIX socket in

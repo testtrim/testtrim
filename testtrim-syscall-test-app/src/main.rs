@@ -39,6 +39,9 @@ enum Commands {
     /// address of a socket is identifiable only in tracing on one thread, and the network traffic is identified on
     /// another thread, requiring understanding of shared thread file-descriptors and context.
     AccessNetworkMultithreaded,
+
+    /// Access a network resource through a CNAME
+    AccessNetworkCname,
 }
 
 /// This application exists to be a syscall tracing target for testtrim's internal tests.  It performs work in a small
@@ -56,6 +59,7 @@ fn main() {
         Commands::AccessNetworkMultithreaded => {
             access_network_multithread().expect("access_network_multithread")
         }
+        Commands::AccessNetworkCname => access_network_cname().expect("access_network_cname"),
     }
 }
 
@@ -338,5 +342,15 @@ fn access_network_multithread() -> Result<(), std::io::Error> {
         }
     }
 
+    Ok(())
+}
+
+/// Accesses a network address through a DNS CNAME.
+///
+/// - cname-test.testtrim.org -> example.com -> [some IPs]
+///
+/// In all these cases we don't care about successful network access.  But we do care about successful DNS resolution.
+fn access_network_cname() -> Result<(), std::io::Error> {
+    let _ = TcpStream::connect("cname-test.testtrim.org:80");
     Ok(())
 }

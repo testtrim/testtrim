@@ -4,7 +4,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ffi::CString,
+    ffi::{CStr, CString},
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
@@ -140,23 +140,23 @@ pub fn parse_nscd_interchange(
 ) -> Result<()> {
     let request = Request::parse(send_data)?;
     if let RequestType::GETAI = request.ty {
+        let queried_hostname = String::from(CStr::from_bytes_with_nul(request.key)?.to_str()?);
         let mut slice = recv_data;
         let response = read_response_getai(&mut slice)?;
-        let hostname = response.content.canon_name;
+        let canonical_hostname = response.content.canon_name;
         for addr in response.content.addrs {
-            dns_resolutions
-                .entry(addr)
-                .or_default()
-                .insert(hostname.clone());
+            let hashset = dns_resolutions.entry(addr).or_default();
+            hashset.insert(queried_hostname.clone());
+            hashset.insert(canonical_hostname.clone());
         }
     }
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::{HashMap, HashSet},
         ffi::{CStr, CString},
         net::IpAddr,
         str::FromStr as _,
@@ -169,7 +169,9 @@ mod tests {
         protocol::{AiResponseHeader, PwResponseHeader, RequestType},
     };
 
-    use super::{protocol::Request, read_response_getai, read_response_getpwbyuid};
+    use super::{
+        parse_nscd_interchange, protocol::Request, read_response_getai, read_response_getpwbyuid,
+    };
 
     #[test]
     fn test_request_packet_getfdhst() {
@@ -281,6 +283,42 @@ mod tests {
                 canon_name: String::from("google.ca"),
             }
         });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_nscd_interchange() -> Result<()> {
+        let send = b"\x02\x00\x00\x00\x0e\x00\x00\x00\x18\x00\x00\x00cname-test.testtrim.org\x00";
+        let recv = b"\x02\x00\x00\x00\x01\x00\x00\x00\x0c\x00\x00\x00x\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00&\x00\x14\x06:\x00\x00!\x00\x00\x00\x00\x17>.e&\x00\x14\x06:\x00\x00!\x00\x00\x00\x00\x17>.f&\x00\x14\x08\xec\x00\x006\x00\x00\x00\x00\x176\x7f$&\x00\x14\x08\xec\x00\x006\x00\x00\x00\x00\x176\x7f1&\x00\x14\x06\xbc\x00\x00S\x00\x00\x00\x00\xb8\x1e\x94\xc8&\x00\x14\x06\xbc\x00\x00S\x00\x00\x00\x00\xb8\x1e\x94\xce\x17\xc0\xe4P\x17\xc0\xe4T\x17\xd7\x00\x88`\x07\x80\xaf`\x07\x80\xc6\x17\xd7\x00\x8a\n\n\n\n\n\n\x02\x02\x02\x02\x02\x02example.com\x00";
+
+        let mut hashmap = HashMap::new();
+
+        // 2600:1406:bc00:53::b81e:94ce: {"example.com"},
+        // 2600:1408:ec00:36::1736:7f31: {"example.com"},
+        // 23.192.228.80: {"example.com"},
+        // 23.215.0.136: {"example.com"},
+        // 2600:1406:3a00:21::173e:2e65: {"example.com"},
+        // 96.7.128.198: {"example.com"},
+        // 23.192.228.84: {"example.com"},
+        // 2600:1408:ec00:36::1736:7f24: {"example.com"},
+        // 23.215.0.138: {"example.com"},
+        // 2600:1406:bc00:53::b81e:94c8: {"example.com"},
+        // 96.7.128.175: {"example.com"},
+        // 2600:1406:3a00:21::173e:2e66: {"example.com"}
+
+        parse_nscd_interchange(send, recv, &mut hashmap)?;
+
+        let hostnames = hashmap.get(&IpAddr::from_str("96.7.128.175")?);
+        assert!(hostnames.is_some());
+        let hostnames = hostnames.unwrap();
+        assert_eq!(
+            *hostnames,
+            HashSet::from([
+                String::from("example.com"),
+                String::from("cname-test.testtrim.org")
+            ])
+        );
 
         Ok(())
     }
