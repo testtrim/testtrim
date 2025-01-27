@@ -4,7 +4,7 @@
 
 use dashmap::DashMap;
 use log::warn;
-use rand::{RngCore, thread_rng};
+use rand::{RngCore, rng};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -160,7 +160,7 @@ impl Subscriber for PerformanceStoringTracingSubscriber {
     }
 
     fn new_span(&self, span: &Attributes<'_>) -> Id {
-        let span_id = Id::from_u64(thread_rng().next_u64());
+        let span_id = Id::from_u64(rng().next_u64());
 
         let mut span_data = SpanData {
             perftrace: None,
