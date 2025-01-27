@@ -69,7 +69,7 @@ async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new()
             .wrap(middleware::Logger::default())
-            // WARN: Do not change without adjusting test_zstd_compression; see FIXME comment there
+            // WARN: Do not change without adjusting test_zstd_compression; see comment there
             .wrap(middleware::Compress::default())
             .service(index)
             .service(
@@ -142,10 +142,10 @@ mod tests {
 
     #[actix_web::test]
     async fn test_zstd_compression() {
-        // FIXME: this is a pretty dumb test because no subject is under-test other than Actix.  The compression
-        // middleware is installed in this test, and then tested in this test.  But I haven't been successful yet in
-        // breaking up the App initialization into pieces that can be reused in this test, so it's good enough for the
-        // short-term to suggest to me that the compression will work.
+        // This is a pretty dumb test because no subject is under-test other than Actix.  The compression middleware is
+        // installed in this test, and then tested in this test.  But I haven't been successful yet in breaking up the
+        // App initialization into pieces that can be reused in this test, so it's good enough for the short-term to
+        // suggest to me that the compression will work.
 
         let app = test::init_service(
             App::new()

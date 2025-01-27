@@ -91,14 +91,13 @@ pub enum RequestType {
 ///
 /// The parsed Request object is valid as long as the buffer it is parsed from
 /// (that is, the key is a reference to the bytes in the buffer).
-#[allow(dead_code)] // FIXME: currently used in a test only, remove later
 #[derive(Debug)]
 pub struct Request<'a> {
     pub ty: RequestType,
+    #[allow(dead_code)] // used in a test, only
     pub key: &'a [u8],
 }
 
-#[allow(dead_code)] // FIXME: currently used in a test only, remove later
 impl<'a> Request<'a> {
     /// Parse a Request from a buffer.
     pub fn parse(buf: &'a [u8]) -> Result<Self> {
