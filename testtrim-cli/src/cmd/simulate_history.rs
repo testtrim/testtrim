@@ -34,7 +34,12 @@ use super::cli::{
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub async fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16) -> ExitCode {
+pub async fn cli(
+    test_project_type: TestProjectType,
+    num_commits: u16,
+    jobs: u16,
+    override_config: Option<&String>,
+) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
     } else {
@@ -43,18 +48,22 @@ pub async fn cli(test_project_type: TestProjectType, num_commits: u16, jobs: u16
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs).await
+            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs, override_config).await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs).await
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs, override_config).await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs).await
+            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs, override_config).await
         }
     }
 }
 
-async fn specific_cli<TI, CI, TD, CTI, TP>(num_commits: u16, jobs: u16) -> ExitCode
+async fn specific_cli<TI, CI, TD, CTI, TP>(
+    num_commits: u16,
+    jobs: u16,
+    override_config: Option<&String>,
+) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
@@ -67,6 +76,7 @@ where
         num_commits,
         jobs,
         &create_db_infallible(),
+        override_config,
     )
     .await
     {
@@ -150,6 +160,7 @@ async fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
     num_commits: u16,
     jobs: u16,
     coverage_db: &impl CoverageDatabase,
+    override_config: Option<&String>,
 ) -> Result<SimulateHistoryOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -187,8 +198,16 @@ where
     let mut commits_simulated = Vec::<SimulateCommitOutput<Commit>>::with_capacity(commits.len());
     for commit in commits {
         info!("testing commit: {:?}", scm.get_commit_identifier(&commit));
-        commits_simulated
-            .push(simulate_commit::<_, _, _, _, _, _, TP>(scm, commit, jobs, coverage_db).await?);
+        commits_simulated.push(
+            simulate_commit::<_, _, _, _, _, _, TP>(
+                scm,
+                commit,
+                jobs,
+                coverage_db,
+                override_config,
+            )
+            .await?,
+        );
     }
 
     Ok(SimulateHistoryOutput { commits_simulated })
@@ -224,6 +243,7 @@ async fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
     commit: Commit,
     jobs: u16,
     coverage_db: &impl CoverageDatabase,
+    override_config: Option<&String>,
 ) -> Result<SimulateCommitOutput<Commit>>
 where
     Commit: ScmCommit,
@@ -261,6 +281,7 @@ where
             jobs,
             &get_test_identifiers::tags::<TP>(&[], PlatformTaggingMode::Automatic), // default tags only
             coverage_db,
+            override_config,
         )
         .await
     }

@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Default)]
@@ -19,11 +19,20 @@ impl RepoConfig {
     }
 }
 
-pub fn get_repo_config() -> Result<RepoConfig> {
-    let path = ".config/testtrim.toml";
+pub fn get_repo_config(override_config: Option<&String>) -> Result<RepoConfig> {
+    let path = match override_config {
+        Some(path) => path,
+        None => ".config/testtrim.toml",
+    };
+    // let path = ".config/testtrim.toml";
     if fs::exists(path)? {
         Ok(toml::from_str(&fs::read_to_string(path)?)?)
     } else {
+        if let Some(override_config) = override_config {
+            return Err(anyhow!(
+                "override config path {override_config} could not be opened"
+            ));
+        }
         Ok(RepoConfig::default())
     }
 }

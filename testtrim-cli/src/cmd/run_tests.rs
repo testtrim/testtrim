@@ -41,6 +41,7 @@ pub async fn cli(
     jobs: u16,
     user_tags: &[Tag],
     platform_tagging_mode: PlatformTaggingMode,
+    override_config: Option<&String>,
 ) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
@@ -56,6 +57,7 @@ pub async fn cli(
                 jobs,
                 user_tags,
                 platform_tagging_mode,
+                override_config,
             )
             .await
         }
@@ -66,6 +68,7 @@ pub async fn cli(
                 jobs,
                 user_tags,
                 platform_tagging_mode,
+                override_config,
             )
             .await
         }
@@ -76,6 +79,7 @@ pub async fn cli(
                 jobs,
                 user_tags,
                 platform_tagging_mode,
+                override_config,
             )
             .await
         }
@@ -89,6 +93,7 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
     jobs: u16,
     user_tags: &[Tag],
     platform_tagging_mode: PlatformTaggingMode,
+    override_config: Option<&String>,
 ) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
@@ -110,6 +115,7 @@ where
             jobs,
             &tags,
             &create_db_infallible(),
+            override_config,
         )
         .await
         {
@@ -194,6 +200,7 @@ pub async fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
     jobs: u16,
     tags: &[Tag],
     coverage_db: &impl CoverageDatabase,
+    override_config: Option<&String>,
 ) -> Result<RunTestsOutput<Commit, TI, CTI>, RunTestsCommandErrors>
 where
     Commit: ScmCommit,
@@ -240,6 +247,7 @@ where
         ancestor_search_mode,
         tags,
         coverage_db,
+        override_config,
     )
     .await?;
 

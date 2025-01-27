@@ -43,6 +43,7 @@ pub async fn cli(
     test_selection_mode: GetTestIdentifierMode,
     user_tags: &[Tag],
     platform_tagging_mode: PlatformTaggingMode,
+    override_config: Option<&String>,
 ) -> ExitCode {
     let test_project_type = if test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
@@ -56,6 +57,7 @@ pub async fn cli(
                 test_selection_mode,
                 user_tags,
                 platform_tagging_mode,
+                override_config,
             )
             .await
         }
@@ -64,6 +66,7 @@ pub async fn cli(
                 test_selection_mode,
                 user_tags,
                 platform_tagging_mode,
+                override_config,
             )
             .await
         }
@@ -72,6 +75,7 @@ pub async fn cli(
                 test_selection_mode,
                 user_tags,
                 platform_tagging_mode,
+                override_config,
             )
             .await
         }
@@ -83,6 +87,7 @@ async fn specific_cli<TI, CI, TD, CTI, TP>(
     test_selection_mode: GetTestIdentifierMode,
     user_tags: &[Tag],
     platform_tagging_mode: PlatformTaggingMode,
+    override_config: Option<&String>,
 ) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
@@ -103,6 +108,7 @@ where
             AncestorSearchMode::AllCommits,
             &tags,
             &create_db_infallible(),
+            override_config,
         )
         .await
         {
@@ -182,6 +188,7 @@ pub async fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     ancestor_search_mode: AncestorSearchMode,
     tags: &[Tag],
     coverage_db: &impl CoverageDatabase,
+    override_config: Option<&String>,
 ) -> Result<TargetTestCases<Commit, TI, CTI, CI>>
 where
     Commit: ScmCommit,
@@ -264,7 +271,7 @@ where
         relevant_test_cases.entry(ti).or_default().extend(reasons);
     }
 
-    let repo_config = get_repo_config()?;
+    let repo_config = get_repo_config(override_config)?;
 
     for (ti, reasons) in compute_tests_from_network_accesses::<TP>(
         &coverage_data,

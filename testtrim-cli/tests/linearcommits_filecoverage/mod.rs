@@ -74,6 +74,7 @@ async fn execute_test<TP: TestPlatform>(
         AncestorSearchMode::AllCommits,
         tags,
         coverage_db,
+        None,
     )
     .await?
     .target_test_cases;
@@ -100,6 +101,7 @@ async fn execute_test<TP: TestPlatform>(
         AncestorSearchMode::AllCommits,
         tags,
         coverage_db,
+        None,
     )
     .await?
     .target_test_cases;
@@ -130,6 +132,7 @@ async fn execute_test<TP: TestPlatform>(
         0,
         tags,
         coverage_db,
+        None,
     )
     .await
     {

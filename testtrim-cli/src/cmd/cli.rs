@@ -60,6 +60,10 @@ enum Commands {
         /// Number of historical commits to simulate
         #[arg(short, long, default_value_t = 100)]
         num_commits: u16,
+
+        /// Override the in-repo testtrim.toml with a static config file
+        #[arg(short, long)]
+        override_config: Option<String>,
     },
 
     /// Run a testtrim web server for remote access to a coverage database
@@ -92,6 +96,10 @@ struct TestTargetingParameters {
     /// Whether or not to add the `platform` tag automatically to test results
     #[arg(value_enum, long, default_value_t=PlatformTaggingMode::Automatic)]
     platform_tagging_mode: PlatformTaggingMode,
+
+    /// Override the in-repo testtrim.toml with a static config file
+    #[arg(short, long)]
+    override_config: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -124,7 +132,7 @@ pub enum PlatformTaggingMode {
 
 #[derive(Args, Debug)]
 struct TestExecutionParameters {
-    /// Number of parallel jobs for test execution; defaults to # of CPUs.
+    /// Number of parallel jobs for test execution; defaults to # of CPUs
     #[arg(short, long, default_value_t = 0)]
     jobs: u16,
 }
@@ -173,6 +181,7 @@ pub async fn run_cli() -> ExitCode {
                 target_parameters.test_selection_mode,
                 &target_parameters.tags,
                 target_parameters.platform_tagging_mode,
+                target_parameters.override_config.as_ref(),
             )
             .await
         }
@@ -188,6 +197,7 @@ pub async fn run_cli() -> ExitCode {
                 execution_parameters.jobs,
                 &target_parameters.tags,
                 target_parameters.platform_tagging_mode,
+                target_parameters.override_config.as_ref(),
             )
             .await
         }
@@ -195,8 +205,15 @@ pub async fn run_cli() -> ExitCode {
             test_project_type,
             num_commits,
             execution_parameters,
+            override_config,
         } => {
-            simulate_history::cli(*test_project_type, *num_commits, execution_parameters.jobs).await
+            simulate_history::cli(
+                *test_project_type,
+                *num_commits,
+                execution_parameters.jobs,
+                override_config.as_ref(),
+            )
+            .await
         }
         Commands::RunServer { bind_socket } => {
             server::cli(bind_socket).await;
