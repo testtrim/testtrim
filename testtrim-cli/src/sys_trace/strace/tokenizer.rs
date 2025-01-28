@@ -9,7 +9,7 @@ use winnow::ascii::{dec_int, digit1, hex_digit1, multispace1};
 use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated};
 use winnow::token::{literal, none_of, one_of, rest, take_until};
 use winnow::token::{take_till, take_while};
-use winnow::{PResult, Parser};
+use winnow::{ModalResult, Parser};
 
 #[derive(Debug, PartialEq)]
 pub struct EncodedString<'a> {
@@ -133,7 +133,7 @@ pub fn tokenize<'i>(input: &mut &'i str) -> Result<TokenizerOutput<'i>> {
         .map_err(|e| anyhow!("error occurred in strace tokenize: {e:?}"))
 }
 
-fn internal_tokenize<'i>(input: &mut &'i str) -> PResult<TokenizerOutput<'i>> {
+fn internal_tokenize<'i>(input: &mut &'i str) -> ModalResult<TokenizerOutput<'i>> {
     alt((
         Parser::map(parse_syscall, TokenizerOutput::Syscall),
         Parser::map(parse_proc_exit, TokenizerOutput::Exit),
@@ -143,7 +143,7 @@ fn internal_tokenize<'i>(input: &mut &'i str) -> PResult<TokenizerOutput<'i>> {
     .parse_next(input)
 }
 
-fn parse_proc_exit<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
+fn parse_proc_exit<'i>(input: &mut &'i str) -> ModalResult<ProcessExit<'i>> {
     let pid = parse_pid(input)?;
     let _ = consume_whitespace(input)?;
     let _ = literal("+++ exited with ").parse_next(input)?;
@@ -152,7 +152,7 @@ fn parse_proc_exit<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
     Ok(ProcessExit { pid, exit_code })
 }
 
-fn parse_proc_killed<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
+fn parse_proc_killed<'i>(input: &mut &'i str) -> ModalResult<ProcessExit<'i>> {
     let pid = parse_pid(input)?;
     let _ = consume_whitespace(input)?;
     let _ = literal("+++ killed by ").parse_next(input)?;
@@ -163,11 +163,11 @@ fn parse_proc_killed<'i>(input: &mut &'i str) -> PResult<ProcessExit<'i>> {
     })
 }
 
-fn parse_signal<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+fn parse_signal<'i>(input: &mut &'i str) -> ModalResult<SignalRecv<'i>> {
     alt((parse_signal_format1, parse_signal_format2)).parse_next(input)
 }
 
-fn parse_signal_format1<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+fn parse_signal_format1<'i>(input: &mut &'i str) -> ModalResult<SignalRecv<'i>> {
     let pid = parse_pid(input)?;
     let _ = consume_whitespace(input)?;
     let _ = literal("---").parse_next(input)?;
@@ -178,7 +178,7 @@ fn parse_signal_format1<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
     Ok(SignalRecv { pid, signal })
 }
 
-fn parse_signal_format2<'i>(input: &mut &'i str) -> PResult<SignalRecv<'i>> {
+fn parse_signal_format2<'i>(input: &mut &'i str) -> ModalResult<SignalRecv<'i>> {
     let pid = parse_pid(input)?;
     let _ = consume_whitespace(input)?;
     let _ = literal("--- stopped by ").parse_next(input)?;
@@ -194,7 +194,7 @@ fn tokenize_syscall<'i>(input: &mut &'i str) -> Result<SyscallSegment<'i>> {
         .map_err(|e| anyhow!("error occurred in strace parse_syscall: {e:?}"))
 }
 
-fn parse_syscall<'i>(input: &mut &'i str) -> PResult<SyscallSegment<'i>> {
+fn parse_syscall<'i>(input: &mut &'i str) -> ModalResult<SyscallSegment<'i>> {
     let pid = parse_pid(input)?;
     let _ = consume_whitespace(input)?;
     let line_type = parse_line_type(input)?;
@@ -240,7 +240,7 @@ enum InternalLineType<'a> {
     },
 }
 
-fn parse_line_type<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_line_type<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     alt((
         parse_started_call,
         parse_resumed_call,
@@ -249,7 +249,7 @@ fn parse_line_type<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
     .parse_next(input)
 }
 
-fn parse_started_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_started_call<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     let function_name = parse_function_name(input)?;
     let _ = literal("(").parse_next(input)?;
     let arguments = separated(0.., parse_argument, literal(", ")).parse_next(input)?;
@@ -261,7 +261,7 @@ fn parse_started_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> 
     })
 }
 
-fn parse_resumed_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_resumed_call<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     let _ = literal("<... ").parse_next(input)?;
     let function_name = parse_function_name(input)?;
     let _ = literal(" resumed>").parse_next(input)?;
@@ -288,7 +288,7 @@ fn parse_resumed_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> 
     })
 }
 
-fn parse_resumed_unfinished_call<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_resumed_unfinished_call<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     alt((
         parse_terminating_process_case1,
         parse_terminating_process_case2,
@@ -298,7 +298,7 @@ fn parse_resumed_unfinished_call<'i>(input: &mut &'i str) -> PResult<InternalLin
     .parse_next(input)
 }
 
-fn parse_terminating_process_case1<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_terminating_process_case1<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     let _ = literal("<... ").parse_next(input)?;
     let function_name = alt((parse_function_name, literal("???"))).parse_next(input)?;
     let _ = literal(" resumed>").parse_next(input)?;
@@ -315,14 +315,14 @@ fn parse_terminating_process_case1<'i>(input: &mut &'i str) -> PResult<InternalL
     Ok(InternalLineType::ResumedUnfinished { function_name })
 }
 
-fn parse_terminating_process_case2<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_terminating_process_case2<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     let _ = literal("???( <unfinished ...>").parse_next(input)?;
     Ok(InternalLineType::ResumedUnfinished {
         function_name: "???",
     })
 }
 
-fn parse_terminating_process_case3<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_terminating_process_case3<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     let _ = literal("???()").parse_next(input)?;
     let _ = consume_whitespace(input)?;
     let _ = literal("= ?").parse_next(input)?;
@@ -331,7 +331,7 @@ fn parse_terminating_process_case3<'i>(input: &mut &'i str) -> PResult<InternalL
     })
 }
 
-fn parse_terminating_process_case4<'i>(input: &mut &'i str) -> PResult<InternalLineType<'i>> {
+fn parse_terminating_process_case4<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'i>> {
     let function_name = parse_function_name(input)?;
     let _ = literal("(").parse_next(input)?;
     let _: Vec<Argument> = separated(0.., parse_argument, literal(", ")).parse_next(input)?;
@@ -341,19 +341,19 @@ fn parse_terminating_process_case4<'i>(input: &mut &'i str) -> PResult<InternalL
     Ok(InternalLineType::ResumedUnfinished { function_name })
 }
 
-fn consume_whitespace<'i>(input: &mut &'i str) -> PResult<&'i str> {
+fn consume_whitespace<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     multispace1(input)
 }
 
-pub fn parse_pid<'i>(input: &mut &'i str) -> PResult<&'i str> {
+pub fn parse_pid<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     digit1(input)
 }
 
-fn parse_function_name<'i>(input: &mut &'i str) -> PResult<&'i str> {
+fn parse_function_name<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)
 }
 
-fn parse_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     alt((
         parse_named_argument,
         parse_null_argument,
@@ -369,19 +369,19 @@ fn parse_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
     .parse_next(input)
 }
 
-fn parse_named_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_named_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let name = take_while(1.., |c: char| c.is_ascii_lowercase() || c == '_').parse_next(input)?;
     let _ = literal("=").parse_next(input)?;
     let arg = parse_argument(input)?;
     Ok(Argument::Named(name, Box::new(arg)))
 }
 
-fn parse_null_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_null_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let _ = literal("NULL").parse_next(input)?;
     Ok(Argument::Null)
 }
 
-fn parse_enum_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_enum_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let arg = (
         one_of(|c: char| c.is_ascii_uppercase() || c == '_'),
         take_while(1.., |c: char| {
@@ -393,17 +393,17 @@ fn parse_enum_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
     Ok(Argument::Enum(arg))
 }
 
-fn parse_numeric_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_numeric_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let arg = (opt(literal("-")), digit1).take().parse_next(input)?;
     Ok(Argument::Numeric(arg))
 }
 
-fn parse_string_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_string_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let contents = extract_encoded_string(input)?;
     Ok(Argument::String(contents))
 }
 
-fn parse_partial_string_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_partial_string_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let contents = parse_string_argument(input)?;
     let _ = literal("...").parse_next(input)?;
     let Argument::String(inner_str) = contents else {
@@ -412,7 +412,7 @@ fn parse_partial_string_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i
     Ok(Argument::PartialString(inner_str))
 }
 
-fn parse_pointer_with_comment_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_pointer_with_comment_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let pointer = (literal("0x"), hex_digit1).take().parse_next(input)?;
     let _ = consume_whitespace(input)?;
     let comment = (literal("/*"), take_until(1.., "*/"), literal("*/"))
@@ -421,12 +421,12 @@ fn parse_pointer_with_comment_argument<'i>(input: &mut &'i str) -> PResult<Argum
     Ok(Argument::PointerWithComment(pointer, comment))
 }
 
-fn parse_pointer_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_pointer_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let something = (literal("0x"), hex_digit1).take().parse_next(input)?;
     Ok(Argument::Pointer(something))
 }
 
-fn parse_written_structure_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_written_structure_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let orig_struct = parse_structure_argument(input)?;
     let Argument::Structure(orig_struct) = orig_struct else {
         unreachable!()
@@ -438,7 +438,7 @@ fn parse_written_structure_argument<'i>(input: &mut &'i str) -> PResult<Argument
     Ok(Argument::WrittenStructure(orig_struct, upd_struct))
 }
 
-fn parse_written_structure_resumed<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_written_structure_resumed<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let _ = literal(" => ").parse_next(input)?;
     let upd_struct = parse_structure_argument(input)?;
     let Argument::Structure(upd_struct) = upd_struct else {
@@ -447,12 +447,12 @@ fn parse_written_structure_resumed<'i>(input: &mut &'i str) -> PResult<Argument<
     Ok(Argument::WrittenStructureResumed(upd_struct))
 }
 
-fn parse_structure_argument<'i>(input: &mut &'i str) -> PResult<Argument<'i>> {
+fn parse_structure_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let structure = alt((nested_brackets, nested_braces)).parse_next(input)?;
     Ok(Argument::Structure(structure))
 }
 
-fn nested_brackets<'i>(input: &mut &'i str) -> PResult<&'i str> {
+fn nested_brackets<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     delimited(
         literal("["),
         repeat::<_, _, Vec<_>, _, _>(
@@ -465,7 +465,7 @@ fn nested_brackets<'i>(input: &mut &'i str) -> PResult<&'i str> {
     .parse_next(input)
 }
 
-fn nested_braces<'i>(input: &mut &'i str) -> PResult<&'i str> {
+fn nested_braces<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     delimited(
         literal("{"),
         repeat::<_, _, Vec<_>, _, _>(
@@ -478,11 +478,11 @@ fn nested_braces<'i>(input: &mut &'i str) -> PResult<&'i str> {
     .parse_next(input)
 }
 
-fn parse_started_call_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+fn parse_started_call_outcome<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>> {
     alt((parse_complete_outcome, parse_unfinished_outcome)).parse_next(input)
 }
 
-fn parse_complete_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+fn parse_complete_outcome<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>> {
     let _ = literal(")").parse_next(input)?;
     let _ = consume_whitespace(input)?;
     let _ = literal("=").parse_next(input)?;
@@ -490,19 +490,19 @@ fn parse_complete_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
     alt((parse_end_with_retval, parse_end_with_qmark)).parse_next(input)
 }
 
-fn parse_end_with_retval<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+fn parse_end_with_retval<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>> {
     let _ = consume_whitespace(input)?;
     let retval = parse_retval(input)?;
     Ok(CallOutcome::Complete { retval })
 }
 
-fn parse_end_with_qmark<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+fn parse_end_with_qmark<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>> {
     let _ = consume_whitespace(input)?;
     let _ = literal("?").parse_next(input)?;
     Ok(CallOutcome::ResumedUnfinished)
 }
 
-fn parse_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+fn parse_retval<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
     alt((
         parse_error_retval,
         parse_success_retval,
@@ -511,25 +511,25 @@ fn parse_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
     .parse_next(input)
 }
 
-fn parse_success_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+fn parse_success_retval<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
     let arg = dec_int(input)?;
     Ok(Retval::Success(arg))
 }
 
-fn parse_error_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+fn parse_error_retval<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
     let value = dec_int(input)?;
     let _ = consume_whitespace(input)?;
     let err = rest(input)?;
     Ok(Retval::Failure(value, err))
 }
 
-fn parse_restart_retval<'i>(input: &mut &'i str) -> PResult<Retval<'i>> {
+fn parse_restart_retval<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
     let _ = literal("? ").parse_next(input)?;
     let rem = rest(input)?;
     Ok(Retval::Restart(rem))
 }
 
-fn parse_unfinished_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>> {
+fn parse_unfinished_outcome<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>> {
     // sometimes the last argument has a ",", then whitespace, then "<unfinished ...>".  Not sure why -- have observed
     // (and have test case covering) `read` doing this.
     let _ = opt(literal(",")).parse_next(input)?;
@@ -542,7 +542,7 @@ fn parse_unfinished_outcome<'i>(input: &mut &'i str) -> PResult<CallOutcome<'i>>
     }
 }
 
-fn extract_encoded_string<'i>(input: &mut &'i str) -> PResult<EncodedString<'i>> {
+fn extract_encoded_string<'i>(input: &mut &'i str) -> ModalResult<EncodedString<'i>> {
     let matched = delimited(
         one_of('"'),
         Parser::take(repeat::<_, _, Vec<_>, _, _>(
@@ -557,7 +557,7 @@ fn extract_encoded_string<'i>(input: &mut &'i str) -> PResult<EncodedString<'i>>
 
 // Two string escape methods; "extract" will just return the range of the string for fast parsing, and "parse" will
 // convert to u8 when the actual data is needed.  The separation is because often the data isn't really needed.
-fn extract_str_escape<'i>(input: &mut &'i str) -> PResult<&'i str> {
+fn extract_str_escape<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     preceded(
         one_of('\\'),
         alt((
@@ -578,7 +578,7 @@ fn extract_str_escape<'i>(input: &mut &'i str) -> PResult<&'i str> {
 }
 
 /// Parse an escaped character: \n, \t, \r, \u{00AC}, etc.
-fn parse_escaped_char(input: &mut &str) -> PResult<u8> {
+fn parse_escaped_char(input: &mut &str) -> ModalResult<u8> {
     preceded(
         one_of('\\'),
         alt((
@@ -597,21 +597,21 @@ fn parse_escaped_char(input: &mut &str) -> PResult<u8> {
     .parse_next(input)
 }
 
-fn extract_hex_byte(input: &mut &str) -> PResult<char> {
+fn extract_hex_byte(input: &mut &str) -> ModalResult<char> {
     let parse_hex = take_while(2..=2, |c: char| c.is_ascii_hexdigit());
     preceded(one_of('x'), parse_hex)
         .map(|_| ' ')
         .parse_next(input)
 }
 
-fn parse_hex_byte(input: &mut &str) -> PResult<u8> {
+fn parse_hex_byte(input: &mut &str) -> ModalResult<u8> {
     let parse_hex = take_while(2..=2, |c: char| c.is_ascii_hexdigit());
     let parse_delimited_hex = preceded(one_of('x'), parse_hex);
     let mut parse_u8 = Parser::try_map(parse_delimited_hex, move |hex| u8::from_str_radix(hex, 16));
     parse_u8.parse_next(input)
 }
 
-fn extract_str_literal<'i>(input: &mut &'i str) -> PResult<&'i str> {
+fn extract_str_literal<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     let not_quote_slash = take_till(1.., |c| c == '"' || c == '\\');
     not_quote_slash
         .verify(|s: &str| !s.is_empty())
@@ -624,7 +624,7 @@ enum StringFragment<'a> {
     EscapedChar(u8),
 }
 
-fn parse_str_fragment<'i>(input: &mut &'i str) -> PResult<StringFragment<'i>> {
+fn parse_str_fragment<'i>(input: &mut &'i str) -> ModalResult<StringFragment<'i>> {
     alt((
         Parser::map(extract_str_literal, StringFragment::Literal),
         Parser::map(parse_escaped_char, StringFragment::EscapedChar),
@@ -632,7 +632,7 @@ fn parse_str_fragment<'i>(input: &mut &'i str) -> PResult<StringFragment<'i>> {
     .parse_next(input)
 }
 
-fn parse_encoded_string(input: &mut &str) -> PResult<Vec<u8>> {
+fn parse_encoded_string(input: &mut &str) -> ModalResult<Vec<u8>> {
     repeat(0.., parse_str_fragment)
         .fold(
             || Vec::<u8>::with_capacity(input.len()), // capacity guess
