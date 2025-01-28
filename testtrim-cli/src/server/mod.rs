@@ -11,7 +11,7 @@ use actix_web::{
 };
 use anyhow::Result;
 use coverage_data::InstallCoverageDataHandlers as _;
-use log::{debug, info, warn};
+use log::{info, trace, warn};
 
 use crate::{
     coverage::{CoverageDatabase as _, CoverageDatabaseDispatch, create_db},
@@ -25,7 +25,7 @@ pub mod coverage_data;
 
 #[get("/")]
 async fn index(req: HttpRequest) -> &'static str {
-    debug!("REQ: {req:?}");
+    trace!("REQ: {req:?}");
     "Hello world!\r\n"
 }
 

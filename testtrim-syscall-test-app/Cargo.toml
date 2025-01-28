@@ -10,5 +10,5 @@ edition = "2024"
 [dependencies]
 clap = { workspace = true }
 dns-protocol = { workspace = true }
-nix = { workspace = true, features = ["fs", "process"] }
+nix = { workspace = true }
 rand = { workspace = true }
