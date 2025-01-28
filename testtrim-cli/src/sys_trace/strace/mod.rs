@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use nix::sys::wait::waitpid;
 use nix::unistd::Pid;
 use proc_synchronizer::ProcSynchronizer;
@@ -21,6 +21,7 @@ use tokio::{
     fs::File,
     io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt as _, BufReader, unix::AsyncFd},
     process::Command,
+    time::timeout,
 };
 
 use crate::{errors::SubcommandErrors, sys_trace::trace::SocketCaptureState};
@@ -153,9 +154,40 @@ impl STraceSysTraceCommand {
         let mut tgid_open_fd: HashMap<ThreadGroupId, HashMap<FileDescriptor, PathBuf>> =
             HashMap::new();
 
+        let mut most_recent_trace_output = Vec::with_capacity(100);
+
         let mut line_count = 0;
-        while let Some(line) = reader.next_line().await? {
+        loop {
+            // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, the simple path of
+            // `while let Some(line) = reader.next_line().await?` has been replaced with a timeout-monitoring future,
+            // and a buffer of recent trace output, as this is one of the likely places where we'll catch something
+            // weird that could cause #328.  This should be removed after #328 is diagnosed and solved.  30s timeout is
+            // arbitrary.
+            let timeout_read =
+                timeout(std::time::Duration::from_secs(30), reader.next_line()).await;
+            let line = match timeout_read {
+                Ok(Ok(Some(line))) => line,
+                Ok(Ok(None)) => {
+                    break;
+                }
+                Ok(Err(e)) => {
+                    return Err(e);
+                }
+                Err(_) => {
+                    // timeout; let's log the most recent messages
+                    for msg in most_recent_trace_output {
+                        warn!("recent trace output: {msg:?}");
+                    }
+                    return Err(anyhow!("LineReader.next_line timed out after 30 seconds"));
+                }
+            };
+
             line_count += 1;
+
+            most_recent_trace_output.push(line.clone());
+            while most_recent_trace_output.len() > 99 {
+                most_recent_trace_output.remove(0);
+            }
 
             for function_extractor_output in extractor
                 .extract(line)
@@ -363,7 +395,17 @@ impl STraceSysTraceCommand {
             }
         }
 
-        receptionist.shutdown().await;
+        // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, the simple path of
+        // `receptionist.shutdown().await`` has been replaced with a timeout-monitoring future. This should be removed
+        // after #328 is diagnosed and solved.  30s timeout is arbitrary.  This isn't likely to be a cause of #328.
+        if timeout(std::time::Duration::from_secs(30), receptionist.shutdown())
+            .await
+            .is_err()
+        {
+            return Err(anyhow!("receptionist shutdown timed out after 30 seconds"));
+        }
+        // receptionist.shutdown().await;
+
         trace.try_into()
     }
 
@@ -521,8 +563,11 @@ impl STraceSysTraceCommand {
                 debug!("trace_command_remotely found child exit code: {exit_code:?}");
 
                 // Finish collecting any output data
-                let stdout = stdout_join.await??;
-                let stderr = stderr_join.await??;
+                //
+                // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, added timeouts
+                // here.  Not likely to be relevant, and 30s is arbitrary.  Should probably be removed.
+                let stdout = timeout(std::time::Duration::from_secs(30), stdout_join).await???;
+                let stderr = timeout(std::time::Duration::from_secs(30), stderr_join).await???;
 
                 debug!("completed subprocess!  exit_code = {exit_code:?}");
                 let output = Output {
@@ -531,7 +576,28 @@ impl STraceSysTraceCommand {
                     stderr,
                 };
 
-                let trace = trace_reader.await??;
+                // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, the simple path
+                // of `trace_reader.await??` has been replaced with a timeout-monitoring future. This should be removed
+                // after #328 is diagnosed and solved.  30s timeout is arbitrary.
+                let join_result = timeout(std::time::Duration::from_secs(30), trace_reader).await;
+                let trace = match join_result {
+                    Ok(Ok(Ok(trace))) => trace,
+                    Ok(Ok(Err(e))) => {
+                        return Err(anyhow!(
+                            "error occurred in read_strace_output_from_trace_client: {e:?}"
+                        ));
+                    }
+                    Ok(Err(e)) => {
+                        return Err(anyhow!(
+                            "error occurred in join from read_strace_output_from_trace_client: {e:?}"
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(anyhow!("timeout in trace_reader join completion"));
+                    }
+                };
+                // let trace = trace_reader.await??;
+
                 Ok((output, trace))
             }
             ForkResult::Child => {
