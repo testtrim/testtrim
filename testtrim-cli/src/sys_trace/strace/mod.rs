@@ -81,7 +81,20 @@ impl STraceSysTraceCommand {
             .await
             .context(format!("failed to open strace output file {trace_path:?}"))?;
         let mut lines = BufReader::new(file).lines();
-        Self::read_strace_output(&mut lines, receptionist).await
+        let result = Self::read_strace_output(&mut lines, receptionist).await;
+        if result.is_err() {
+            // `trace_path` is presently going to be a fifo that strace is writing into.  If we encountered an error and
+            // we stop reading from that fifo, then strace will be unable to write to it and might block and prevent the
+            // completion of the process under trace.  To avoid that, in any exit condition, continue to read the file
+            // to EOF.  (It's arguable that this responsibility is misplaced and should be done where the FIFO was
+            // created, since this is unusual behavior for a method that just takes a path which could be a regular
+            // file.  But we already have it open here.)
+            //
+            // If an error occurs in this read, we want to return the error from `result` because it occurred first, so
+            // we'll just abort the loop on any error but not use `?` which would return with that error.
+            while lines.next_line().await.is_ok_and(|line| line.is_some()) {}
+        }
+        result
     }
 
     async fn read_strace_output_from_trace_client(mut trace_client: TraceClient) -> Result<Trace> {
@@ -134,9 +147,25 @@ impl STraceSysTraceCommand {
         }
 
         let receptionist = NoopReceptionist {};
-        let trace = Self::read_strace_output(&mut trace_client, receptionist).await?;
+        let result = Self::read_strace_output(&mut trace_client, receptionist).await;
+        if result.is_err() {
+            // Similar to the logic in read_strace_output_from_reader -- if an error occurs in `read_strace_output`, and
+            // we're reading trace data through the shared memory buffer, as a client if we don't continue reading that
+            // data we might block the other side from writing and continuing its work.
+            //
+            // Dropping our client (or shutting it down) doesn't deregister it from the server -- that might be a better
+            // way to handle this, but would add complexity by requiring bidirectional communication.
+            //
+            // If an error occurs in this read, we want to return the error from `result` because it occurred first, so
+            // we'll just abort the loop on any error but not use `?` which would return with that error.
+            while trace_client
+                .next_line()
+                .await
+                .is_ok_and(|line| line.is_some())
+            {}
+        }
         trace_client.shutdown().await;
-        Ok(trace)
+        result
     }
 
     async fn read_strace_output<Rd: LineReader, Rcpt: ReceptionistFacade>(
