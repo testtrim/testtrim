@@ -66,7 +66,12 @@ impl TestIdentifierCore for RustTestIdentifier {
 
 impl fmt::Display for RustTestIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} / {}", self.test_src_path, self.test_name)
+        write!(
+            f,
+            "{} / {}",
+            self.test_src_path.to_string_lossy(),
+            self.test_name
+        )
     }
 }
 
@@ -786,7 +791,7 @@ impl TestPlatform for RustTestPlatform {
                 RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl)
                     .instrument(info_span!("cargo test",
                         ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
-                        test_case = ?tc,
+                        test_case = %tc.test_identifier(),
                     ))
                     .await
             });

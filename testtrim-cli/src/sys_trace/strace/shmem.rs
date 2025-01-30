@@ -61,6 +61,7 @@ impl Receptionist {
         // SUN_LEN is the max UNIX socket length, which is short...
         if path.as_os_str().len() > 107 {
             path.pop();
+            #[allow(clippy::string_slice)] // safe as we know the UUID will be ASCII
             path.push(&Uuid::new_v4().to_string()[0..5]);
         }
         path

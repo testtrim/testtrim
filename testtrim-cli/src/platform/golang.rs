@@ -1269,6 +1269,10 @@ impl TestPlatform for GolangTestPlatform {
             let module_info_ref = &module_info;
             futures.push(async move {
                 GolangTestPlatform::run_test(&tc, &tmp_path, module_info_ref, package_baseline_ref)
+                    .instrument(info_span!("go test",
+                        ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
+                        test_case = %tc.test_identifier(),
+                    ))
                     .await
             });
         }

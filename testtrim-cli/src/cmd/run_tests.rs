@@ -8,14 +8,18 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use log::{Log, error, info, set_boxed_logger};
+use log::{Log, error, info};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::{Instrument as _, info_span, instrument::WithSubscriber};
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::{
-    cmd::get_test_identifiers::{AncestorSearchMode, get_target_test_cases, tags},
+    cmd::{
+        get_test_identifiers::{AncestorSearchMode, get_target_test_cases, tags},
+        run_tests_ui::RunTestsConsole,
+        ui::UiStage,
+    },
     coverage::{
         CoverageDatabase, Tag, commit_coverage_data::CoverageIdentifier, create_db_infallible,
     },
@@ -29,67 +33,33 @@ use crate::{
 };
 
 use super::cli::{
-    GetTestIdentifierMode, PlatformTaggingMode, SourceMode, TestProjectType,
+    CommonOptions, GetTestIdentifierMode, RunTestsOptions, SourceMode, TestProjectType,
     autodetect_test_project_type,
 };
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-//
-// FIXME: I think `too_many_arguments` is true, but don't want to resolve this at this time.
-#[allow(clippy::too_many_arguments)]
 pub async fn cli(
     logger: Box<dyn Log>,
-    test_project_type: TestProjectType,
-    test_selection_mode: GetTestIdentifierMode,
-    source_mode: SourceMode,
-    jobs: u16,
-    user_tags: &[Tag],
-    platform_tagging_mode: PlatformTaggingMode,
-    override_config: Option<&String>,
+    common_opts: &CommonOptions,
+    run_opts: &RunTestsOptions,
 ) -> ExitCode {
-    let test_project_type = if test_project_type == TestProjectType::AutoDetect {
-        autodetect_test_project_type()
-    } else {
-        test_project_type
-    };
+    let test_project_type =
+        if run_opts.target_parameters.test_project_type == TestProjectType::AutoDetect {
+            autodetect_test_project_type()
+        } else {
+            run_opts.target_parameters.test_project_type
+        };
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(
-                logger,
-                test_selection_mode,
-                source_mode,
-                jobs,
-                user_tags,
-                platform_tagging_mode,
-                override_config,
-            )
-            .await
+            specific_cli::<_, _, _, _, RustTestPlatform>(logger, common_opts, run_opts).await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(
-                logger,
-                test_selection_mode,
-                source_mode,
-                jobs,
-                user_tags,
-                platform_tagging_mode,
-                override_config,
-            )
-            .await
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(logger, common_opts, run_opts).await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(
-                logger,
-                test_selection_mode,
-                source_mode,
-                jobs,
-                user_tags,
-                platform_tagging_mode,
-                override_config,
-            )
-            .await
+            specific_cli::<_, _, _, _, GolangTestPlatform>(logger, common_opts, run_opts).await
         }
     }
 }
@@ -97,12 +67,8 @@ pub async fn cli(
 #[allow(clippy::print_stdout)]
 async fn specific_cli<TI, CI, TD, CTI, TP>(
     logger: Box<dyn Log>,
-    test_selection_mode: GetTestIdentifierMode,
-    source_mode: SourceMode,
-    jobs: u16,
-    user_tags: &[Tag],
-    platform_tagging_mode: PlatformTaggingMode,
-    override_config: Option<&String>,
+    common_opts: &CommonOptions,
+    run_opts: &RunTestsOptions,
 ) -> ExitCode
 where
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
@@ -111,82 +77,83 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
-    // FIXME: global logger installation until an instrumentation-based UI is implemented for this subcommand
-    set_boxed_logger(logger).unwrap();
-
     let perf_storage = Arc::new(PerformanceStorage::new());
     let perf_layer = PerformanceStoringLayer::new(perf_storage.clone());
 
+    let terminal_output = RunTestsConsole::new(common_opts.no_progress, logger);
+
     // At the core of our subscriber, use tracing-subscriber's Registry which does nothing but generate span IDs.
-    let subscriber = tracing_subscriber::registry::Registry::default().with(perf_layer);
+    let subscriber = tracing_subscriber::registry::Registry::default()
+        .with(perf_layer)
+        .with(terminal_output);
 
-    let tags = tags::<TP>(user_tags, platform_tagging_mode);
+    let tags = tags::<TP>(
+        &run_opts.target_parameters.tags,
+        run_opts.target_parameters.platform_tagging_mode,
+    );
 
-    let exit_code = async {
-        match run_tests::<_, _, _, _, _, _, TP>(
-            test_selection_mode,
-            &GitScm {},
-            source_mode,
-            jobs,
-            &tags,
-            &create_db_infallible(),
-            override_config,
-        )
-        .await
-        {
-            Ok(out) => {
-                println!("successfully executed tests");
-                println!(
-                    "target test cases were {} of {}, {}%",
-                    out.target_test_cases.len(),
-                    out.all_test_cases.len(),
-                    100 * out.target_test_cases.len() / out.all_test_cases.len(),
-                );
-                ExitCode::SUCCESS
-            }
-            Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
-                ref test_failures,
-            ))) => {
-                println!("{} test(s) failed:", test_failures.len());
-                for failure in test_failures {
-                    println!();
-                    println!("Test: {}", failure.test_identifier);
-                    match failure.failure {
-                        TestFailure::NonZeroExitCode {
-                            ref exit_code,
-                            ref stdout,
-                            ref stderr,
-                        } => {
-                            if let Some(exit_code) = exit_code {
-                                println!(
-                                    "\ttest failed when test process exited with code {exit_code}"
-                                );
+    let exit_code = match run_tests::<_, _, _, _, _, _, TP>(
+        run_opts.target_parameters.test_selection_mode,
+        &GitScm {},
+        run_opts.source_mode,
+        run_opts.execution_parameters.jobs,
+        &tags,
+        &create_db_infallible(),
+        run_opts.target_parameters.override_config.as_ref(),
+    )
+    .with_subscriber(subscriber)
+    .await
+    {
+        Ok(out) => {
+            println!("successfully executed tests");
+            println!(
+                "target test cases were {} of {}, {}%",
+                out.target_test_cases.len(),
+                out.all_test_cases.len(),
+                100 * out.target_test_cases.len() / out.all_test_cases.len(),
+            );
+            ExitCode::SUCCESS
+        }
+        Err(RunTestsCommandErrors::RunTestsErrors(RunTestsErrors::TestExecutionFailures(
+            ref test_failures,
+        ))) => {
+            println!("{} test(s) failed:", test_failures.len());
+            for failure in test_failures {
+                println!();
+                println!("Test: {}", failure.test_identifier);
+                match failure.failure {
+                    TestFailure::NonZeroExitCode {
+                        ref exit_code,
+                        ref stdout,
+                        ref stderr,
+                    } => {
+                        if let Some(exit_code) = exit_code {
+                            println!(
+                                "\ttest failed when test process exited with code {exit_code}"
+                            );
+                        }
+                        if !stdout.is_empty() {
+                            println!("\tstdout:");
+                            for line in stdout.lines() {
+                                println!("\t{line}");
                             }
-                            if !stdout.is_empty() {
-                                println!("\tstdout:");
-                                for line in stdout.lines() {
-                                    println!("\t{line}");
-                                }
-                            }
-                            if !stderr.is_empty() {
-                                println!("\tstderr:");
-                                for line in stderr.lines() {
-                                    println!("\t{line}");
-                                }
+                        }
+                        if !stderr.is_empty() {
+                            println!("\tstderr:");
+                            for line in stderr.lines() {
+                                println!("\t{line}");
                             }
                         }
                     }
                 }
-                ExitCode::FAILURE
             }
-            Err(err) => {
-                error!("error occurred in run_tests: {err:?}");
-                ExitCode::FAILURE
-            }
+            ExitCode::FAILURE
         }
-    }
-    .with_subscriber(subscriber)
-    .await;
+        Err(err) => {
+            error!("error occurred in run_tests: {err:?}");
+            ExitCode::FAILURE
+        }
+    };
 
     // FIXME: probably not the right choice to print this to stdout; maybe log info?
     println!("Performance stats:");
@@ -266,7 +233,13 @@ where
     )
     .await?;
 
-    let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs).await?;
+    let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs)
+        .instrument(info_span!(
+            "run_tests",
+            ui_stage = Into::<u64>::into(UiStage::RunTests),
+            test_count = test_cases.target_test_cases.keys().len(),
+        ))
+        .await?;
     for tc in &test_cases.all_test_cases {
         coverage_data.add_existing_test(tc.test_identifier().clone());
     }
@@ -301,7 +274,8 @@ where
         }
         .instrument(info_span!(
             "save_coverage_data",
-            perftrace = "write-coverage-data"
+            perftrace = "write-coverage-data",
+            ui_stage = Into::<u64>::into(UiStage::WriteCoverageData),
         ))
         .await?;
     }

@@ -15,6 +15,8 @@ pub struct RawUiInformation {
     pub is_subcommand: bool,
     pub subcommand_binary: Option<String>,
     pub subcommand_args: Option<String>,
+    pub test_count: Option<u64>,
+    pub test_case: Option<String>,
 }
 
 impl Visit for RawUiInformation {
@@ -22,11 +24,17 @@ impl Visit for RawUiInformation {
         if field.name() == "subcommand_args" {
             self.subcommand_args = Some(format!("{value:?}"));
         }
+        if field.name() == "test_case" {
+            self.test_case = Some(format!("{value:?}"));
+        }
     }
 
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
         if field.name() == "ui_stage" {
             self.ui_stage = UiStage::try_from(value).ok();
+        }
+        if field.name() == "test_count" {
+            self.test_count = Some(value);
         }
     }
 
@@ -59,6 +67,7 @@ pub enum UiStage {
     ComputeTestCases,
 
     // RunTests...
+    RunTests,
     RunSingleTest,
     WriteCoverageData,
 }

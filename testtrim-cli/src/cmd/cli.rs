@@ -45,17 +45,7 @@ enum Commands {
     GetTestIdentifiers(GetTestIdentifiersOptions),
 
     /// Execute tests in the target project, recording per-test coverage data
-    RunTests {
-        #[command(flatten)]
-        target_parameters: TestTargetingParameters,
-
-        #[command(flatten)]
-        execution_parameters: TestExecutionParameters,
-
-        /// Strategy for treating the working directory and coverage map storage
-        #[arg(value_enum, long, default_value_t = SourceMode::Automatic)]
-        source_mode: SourceMode,
-    },
+    RunTests(RunTestsOptions),
 
     /// Run through a series of historical commits and simulate using testtrim
     SimulateHistory {
@@ -87,6 +77,19 @@ enum Commands {
 struct GetTestIdentifiersOptions {
     #[command(flatten)]
     target_parameters: TestTargetingParameters,
+}
+
+#[derive(Args, Debug)]
+pub struct RunTestsOptions {
+    #[command(flatten)]
+    pub target_parameters: TestTargetingParameters,
+
+    #[command(flatten)]
+    pub execution_parameters: TestExecutionParameters,
+
+    /// Strategy for treating the working directory and coverage map storage
+    #[arg(value_enum, long, default_value_t = SourceMode::Automatic)]
+    pub source_mode: SourceMode,
 }
 
 #[derive(Args, Debug)]
@@ -151,10 +154,10 @@ pub enum PlatformTaggingMode {
 }
 
 #[derive(Args, Debug)]
-struct TestExecutionParameters {
+pub struct TestExecutionParameters {
     /// Number of parallel jobs for test execution; defaults to # of CPUs
     #[arg(short, long, default_value_t = 0)]
-    jobs: u16,
+    pub jobs: u16,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -190,7 +193,7 @@ pub async fn run_cli() -> ExitCode {
     let logger = TermLogger::new(
         cli.common.verbose.log_level_filter(),
         Config::default(),
-        TerminalMode::Mixed,
+        TerminalMode::Stdout, // progress bars go on stderr, so by logging to stdout we can redirect this output to get a clean log
         ColorChoice::Auto,
     );
     set_max_level(cli.common.verbose.log_level_filter());
@@ -200,23 +203,7 @@ pub async fn run_cli() -> ExitCode {
         Commands::GetTestIdentifiers(options) => {
             get_test_identifiers::cli(logger, &cli.common, &options.target_parameters).await
         }
-        Commands::RunTests {
-            target_parameters,
-            source_mode,
-            execution_parameters,
-        } => {
-            run_tests::cli(
-                logger,
-                target_parameters.test_project_type,
-                target_parameters.test_selection_mode,
-                *source_mode,
-                execution_parameters.jobs,
-                &target_parameters.tags,
-                target_parameters.platform_tagging_mode,
-                target_parameters.override_config.as_ref(),
-            )
-            .await
-        }
+        Commands::RunTests(options) => run_tests::cli(logger, &cli.common, options).await,
         Commands::SimulateHistory {
             test_project_type,
             num_commits,

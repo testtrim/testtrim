@@ -736,7 +736,14 @@ impl TestPlatform for DotnetTestPlatform {
             let tmp_path = PathBuf::from(tmp_dir.path());
             let b = binaries.clone();
             // let dep_map = dep_map.clone(); // TODO: external dependency tracking
-            futures.push(async move { Self::run_test(&tc, &tmp_path, &b).await });
+            futures.push(async move {
+                Self::run_test(&tc, &tmp_path, &b)
+                    .instrument(info_span!("dotnet test",
+                        ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
+                        test_case = %tc.test_identifier(),
+                    ))
+                    .await
+            });
         }
 
         let concurrency = 1; /* if jobs == 0 {

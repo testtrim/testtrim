@@ -14,6 +14,7 @@
 #![allow(clippy::too_many_lines)] // probably the right thing to warn on, but somewhat arbitrary
 #![warn(clippy::print_stderr)]
 #![warn(clippy::print_stdout)]
+#![warn(clippy::string_slice)]
 
 pub mod cmd;
 pub mod coverage;
