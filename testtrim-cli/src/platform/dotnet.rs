@@ -13,7 +13,6 @@ use std::env::current_dir;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::process::Command as SyncCommand;
 use std::sync::Arc;
 use std::{fmt, fs};
 use std::{hash::Hash, path::Path};
@@ -21,6 +20,7 @@ use tempdir::TempDir;
 use tokio::process::Command;
 use tracing::{Instrument as _, info_span, instrument};
 
+use crate::cmd::ui::UiStage;
 use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage};
 use crate::coverage::full_coverage_data::FullCoverageData;
@@ -173,18 +173,26 @@ impl DotnetTestPlatform {
         }
     }
 
-    fn get_all_test_cases() -> Result<HashSet<DotnetConcreteTestIdentifier>> {
+    async fn get_all_test_cases() -> Result<HashSet<DotnetConcreteTestIdentifier>> {
         let mut result: HashSet<DotnetConcreteTestIdentifier> = HashSet::new();
 
-        let output = SyncCommand::new("dotnet")
-            .args([
-                "test",
-                "--list-tests",
-                "--disable-build-servers",
-                "--",
-                "NUnit.DisplayName=FullName",
-            ])
+        let args = [
+            "test",
+            "--list-tests",
+            "--disable-build-servers",
+            "--",
+            "NUnit.DisplayName=FullName",
+        ];
+        let output = Command::new("dotnet")
+            .args(args)
             .output()
+            .instrument(info_span!("dotnet test",
+                ui_stage = Into::<u64>::into(UiStage::Compiling),
+                subcommand = true,
+                subcommand_binary = "dotnet",
+                subcommand_args = ?args
+            ))
+            .await
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "dotnet test --list-tests".to_string(),
                 error: e,
@@ -200,19 +208,28 @@ impl DotnetTestPlatform {
         }
 
         let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
-        let mut found_intro = false;
-        for line in stdout.lines() {
-            if found_intro {
-                result.insert(DotnetConcreteTestIdentifier {
-                    test_identifier: DotnetTestIdentifier {
-                        fully_qualified_name: String::from(line.trim_start()),
-                    },
-                });
+        // This isn't a super interesting span -- we're really "compiling" and "listing tests" together in one above.
+        // Which I guess technically we could do by entering both spans.  But anyway, this instrumentation is part of
+        // the get-test-identifiers step and provides correct console output.
+        info_span!(
+            "dotnet test parse",
+            ui_stage = Into::<u64>::into(UiStage::ListingTests),
+        )
+        .in_scope(|| {
+            let mut found_intro = false;
+            for line in stdout.lines() {
+                if found_intro {
+                    result.insert(DotnetConcreteTestIdentifier {
+                        test_identifier: DotnetTestIdentifier {
+                            fully_qualified_name: String::from(line.trim_start()),
+                        },
+                    });
+                }
+                if line.starts_with("The following Tests are available:") {
+                    found_intro = true;
+                }
             }
-            if line.starts_with("The following Tests are available:") {
-                found_intro = true;
-            }
-        }
+        });
 
         Ok(result)
     }
@@ -657,8 +674,8 @@ impl TestPlatform for DotnetTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    fn discover_tests() -> Result<DotnetTestDiscovery> {
-        let all_test_cases = Self::get_all_test_cases()?;
+    async fn discover_tests() -> Result<DotnetTestDiscovery> {
+        let all_test_cases = Self::get_all_test_cases().await?;
         trace!("all_test_cases: {:?}", all_test_cases);
         Ok(DotnetTestDiscovery { all_test_cases })
     }

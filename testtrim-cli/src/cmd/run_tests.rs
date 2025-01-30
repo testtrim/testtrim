@@ -8,10 +8,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use log::{error, info};
+use log::{Log, error, info, set_boxed_logger};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::{Instrument as _, info_span, instrument::WithSubscriber};
+use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::{
     cmd::get_test_identifiers::{AncestorSearchMode, get_target_test_cases, tags},
@@ -24,7 +25,7 @@ use crate::{
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
     },
     scm::{Scm, ScmCommit, git::GitScm},
-    timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
+    timing_tracer::{PerformanceStorage, PerformanceStoringLayer},
 };
 
 use super::cli::{
@@ -34,7 +35,11 @@ use super::cli::{
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
+//
+// FIXME: I think `too_many_arguments` is true, but don't want to resolve this at this time.
+#[allow(clippy::too_many_arguments)]
 pub async fn cli(
+    logger: Box<dyn Log>,
     test_project_type: TestProjectType,
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,
@@ -52,6 +57,7 @@ pub async fn cli(
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
             specific_cli::<_, _, _, _, RustTestPlatform>(
+                logger,
                 test_selection_mode,
                 source_mode,
                 jobs,
@@ -63,6 +69,7 @@ pub async fn cli(
         }
         TestProjectType::Dotnet => {
             specific_cli::<_, _, _, _, DotnetTestPlatform>(
+                logger,
                 test_selection_mode,
                 source_mode,
                 jobs,
@@ -74,6 +81,7 @@ pub async fn cli(
         }
         TestProjectType::Golang => {
             specific_cli::<_, _, _, _, GolangTestPlatform>(
+                logger,
                 test_selection_mode,
                 source_mode,
                 jobs,
@@ -88,6 +96,7 @@ pub async fn cli(
 
 #[allow(clippy::print_stdout)]
 async fn specific_cli<TI, CI, TD, CTI, TP>(
+    logger: Box<dyn Log>,
     test_selection_mode: GetTestIdentifierMode,
     source_mode: SourceMode,
     jobs: u16,
@@ -102,8 +111,14 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
+    // FIXME: global logger installation until an instrumentation-based UI is implemented for this subcommand
+    set_boxed_logger(logger).unwrap();
+
     let perf_storage = Arc::new(PerformanceStorage::new());
-    let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
+    let perf_layer = PerformanceStoringLayer::new(perf_storage.clone());
+
+    // At the core of our subscriber, use tracing-subscriber's Registry which does nothing but generate span IDs.
+    let subscriber = tracing_subscriber::registry::Registry::default().with(perf_layer);
 
     let tags = tags::<TP>(user_tags, platform_tagging_mode);
 
@@ -170,7 +185,7 @@ where
             }
         }
     }
-    .with_subscriber(my_subscriber)
+    .with_subscriber(subscriber)
     .await;
 
     // FIXME: probably not the right choice to print this to stdout; maybe log info?

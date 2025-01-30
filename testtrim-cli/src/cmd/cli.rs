@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_verbosity_flag::{Verbosity, WarnLevel};
+use log::set_max_level;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
 use std::{fmt::Debug, net::SocketAddr, process::ExitCode};
 
@@ -18,10 +20,20 @@ use super::{get_test_identifiers, run_tests, simulate_history};
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(flatten)]
-    verbose: clap_verbosity_flag::Verbosity,
+    common: CommonOptions,
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Args, Debug)]
+pub struct CommonOptions {
+    #[command(flatten)]
+    verbose: Verbosity<WarnLevel>,
+
+    /// Disable progress bars and spinners, even if the terminal supports them.
+    #[arg(short, long, global = true)]
+    pub no_progress: bool,
 }
 
 #[derive(Subcommand)]
@@ -30,10 +42,7 @@ enum Commands {
     Noop,
 
     /// List test identifiers in the target project
-    GetTestIdentifiers {
-        #[command(flatten)]
-        target_parameters: TestTargetingParameters,
-    },
+    GetTestIdentifiers(GetTestIdentifiersOptions),
 
     /// Execute tests in the target project, recording per-test coverage data
     RunTests {
@@ -75,14 +84,20 @@ enum Commands {
 }
 
 #[derive(Args, Debug)]
-struct TestTargetingParameters {
+struct GetTestIdentifiersOptions {
+    #[command(flatten)]
+    target_parameters: TestTargetingParameters,
+}
+
+#[derive(Args, Debug)]
+pub struct TestTargetingParameters {
     /// Software platform for running tests
     #[arg(value_enum, long, default_value_t=TestProjectType::AutoDetect)]
-    test_project_type: TestProjectType,
+    pub test_project_type: TestProjectType,
 
     /// Strategy for test selection
     #[arg(value_enum, long, default_value_t = GetTestIdentifierMode::Relevant)]
-    test_selection_mode: GetTestIdentifierMode,
+    pub test_selection_mode: GetTestIdentifierMode,
 
     /// Tags in a key=value format
     ///
@@ -91,25 +106,28 @@ struct TestTargetingParameters {
     /// the two tags would have coverage maps tracked separately.  This would allow a change that only affects one
     /// codepath to trigger only tests that are related to that codepath.
     #[arg(long)]
-    tags: Vec<Tag>,
+    pub tags: Vec<Tag>,
 
     /// Whether or not to add the `platform` tag automatically to test results
     #[arg(value_enum, long, default_value_t=PlatformTaggingMode::Automatic)]
-    platform_tagging_mode: PlatformTaggingMode,
+    pub platform_tagging_mode: PlatformTaggingMode,
 
     /// Override the in-repo testtrim.toml with a static config file
     #[arg(short, long)]
-    override_config: Option<String>,
+    pub override_config: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum TestProjectType {
     /// Will attempt to identify the test project via simple heuristics
     AutoDetect,
+
     /// Operate on Rust tests; eg. using `cargo test`
     Rust,
+
     /// Operate on .NET tests; eg. using `dotnet test`
     Dotnet,
+
     /// Operate on Go language tests; eg. using `go test`
     Golang,
 }
@@ -118,6 +136,7 @@ pub enum TestProjectType {
 pub enum GetTestIdentifierMode {
     /// All tests will be executed.
     All,
+
     /// Coverage maps and diffs will be used to identify a subset of tests to run
     Relevant,
 }
@@ -126,6 +145,7 @@ pub enum GetTestIdentifierMode {
 pub enum PlatformTaggingMode {
     /// Automatically add the `platform` tag based upon the target triplet (eg. `x86_64-unknown-linux-gnu`)
     Automatic,
+
     /// Do not automatically add the `platform` tag
     None,
 }
@@ -141,6 +161,7 @@ struct TestExecutionParameters {
 pub enum SourceMode {
     /// Automatically selects `CleanCommit` if the working tree is clean, and `WorkingTree` otherwise.
     Automatic,
+
     /// Tests run on the working tree, and a coverage map is saved under the HEAD commit; working tree must be clean.
     ///
     /// `CleanCommit` will fail if the current working tree is not clean, as that could indicate uncommited changes that
@@ -149,12 +170,14 @@ pub enum SourceMode {
     /// for other developers, or for future continuous integration runs -- the advantage it has over `Automatic` is that
     /// it will never silently skip producing a coverage map.
     CleanCommit,
+
     /// Tests run on the working tree, and a coverage map is saved under the HEAD commit.
     ///
     /// This is similar to `CleanCommit` but overriding the check for a clean repository.  This is provided for
     /// situations where a continuous integration system might expect to have a dirty working tree, but it's still the
     /// correct functional implementation of the tests.
     OverrideCleanCommit,
+
     /// Tests will be run with the contents of the current working tree, and no coverage map will be saved.
     ///
     /// If available, a recent commit may still be used as a basis for identifying useful tests to run.  This mode is
@@ -164,26 +187,18 @@ pub enum SourceMode {
 
 pub async fn run_cli() -> ExitCode {
     let cli = Cli::parse();
-
-    TermLogger::init(
-        cli.verbose.log_level_filter(),
+    let logger = TermLogger::new(
+        cli.common.verbose.log_level_filter(),
         Config::default(),
         TerminalMode::Mixed,
         ColorChoice::Auto,
-    )
-    .expect("termlogger init failed");
+    );
+    set_max_level(cli.common.verbose.log_level_filter());
 
     match &cli.command {
         Commands::Noop => ExitCode::SUCCESS,
-        Commands::GetTestIdentifiers { target_parameters } => {
-            get_test_identifiers::cli(
-                target_parameters.test_project_type,
-                target_parameters.test_selection_mode,
-                &target_parameters.tags,
-                target_parameters.platform_tagging_mode,
-                target_parameters.override_config.as_ref(),
-            )
-            .await
+        Commands::GetTestIdentifiers(options) => {
+            get_test_identifiers::cli(logger, &cli.common, &options.target_parameters).await
         }
         Commands::RunTests {
             target_parameters,
@@ -191,6 +206,7 @@ pub async fn run_cli() -> ExitCode {
             execution_parameters,
         } => {
             run_tests::cli(
+                logger,
                 target_parameters.test_project_type,
                 target_parameters.test_selection_mode,
                 *source_mode,
@@ -208,6 +224,7 @@ pub async fn run_cli() -> ExitCode {
             override_config,
         } => {
             simulate_history::cli(
+                logger,
                 *test_project_type,
                 *num_commits,
                 execution_parameters.jobs,
@@ -216,7 +233,7 @@ pub async fn run_cli() -> ExitCode {
             .await
         }
         Commands::RunServer { bind_socket } => {
-            server::cli(bind_socket).await;
+            server::cli(logger, bind_socket).await;
             ExitCode::SUCCESS
         }
     }

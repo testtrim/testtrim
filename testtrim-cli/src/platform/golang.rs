@@ -15,13 +15,13 @@ use std::fs::{File, read_to_string};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command as SyncCommand;
 use std::sync::Arc;
 use std::{fmt, fs, io};
 use tempdir::TempDir;
 use tokio::process::Command;
 use tracing::{Instrument as _, info_span, instrument};
 
+use crate::cmd::ui::UiStage;
 use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, HeuristicCoverage,
@@ -311,7 +311,7 @@ impl GolangTestPlatform {
         module_info: &ModuleInfo,
         tmp_dir: &TempDir,
         module: &ModulePath,
-    ) -> SyncCommand {
+    ) -> Command {
         // form the coverpkg arg out of all the dependencies
         let mut coverpkg = String::with_capacity(1024);
         for dep in &module_info.dependencies {
@@ -320,7 +320,7 @@ impl GolangTestPlatform {
         }
         coverpkg.push_str("./..."); // include this package and all local subpackages
 
-        let mut cmd = SyncCommand::new("go");
+        let mut cmd = Command::new("go");
         cmd.args([
             "test",
             "-c",
@@ -1003,7 +1003,7 @@ impl GolangTestPlatform {
         Ok(result)
     }
 
-    fn discover_tests_in_module(
+    async fn discover_tests_in_module(
         module_info: &ModuleInfo,
         module_path: &ModulePath,
     ) -> Result<HashSet<GolangConcreteTestIdentifier>> {
@@ -1023,10 +1023,19 @@ impl GolangTestPlatform {
         // First we build all test binaries:
         let mut cmd = Self::get_build_test_command(module_info, &tmp_dir, module_path);
         debug!("running: {cmd:?}");
-        let output = cmd.output().map_err(|e| SubcommandErrors::UnableToStart {
-            command: "go test ...build...".to_string(),
-            error: e,
-        })?;
+        let output = cmd
+            .output()
+            .instrument(info_span!(
+                "get test build",
+                subcommand = true,
+                subcommand_binary = "go",
+                subcommand_args = format!("test -c [...] {}", module_path.0), // this isn't technically the args, but the args are huge
+            ))
+            .await
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: "go test ...build...".to_string(),
+                error: e,
+            })?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
@@ -1046,13 +1055,22 @@ impl GolangTestPlatform {
         let mut all_test_cases: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
         for dirent in fs::read_dir(tmp_dir.path())? {
             let dirent = dirent?;
-            let mut cmd = SyncCommand::new(dirent.path());
-            cmd.args(["-test.list", "."]);
+            let mut cmd = Command::new(dirent.path());
+            let args = ["-test.list", "."];
+            cmd.args(args);
             debug!("running: {cmd:?}");
-            let output = cmd.output().map_err(|e| SubcommandErrors::UnableToStart {
-                command: format!("{:?} -test.list", cmd.get_program()).to_string(),
-                error: e,
-            })?;
+            let output = cmd
+                .output()
+                .instrument(info_span!("get test list",
+                    subcommand = true,
+                    subcommand_binary = dirent.path().to_string_lossy().to_string(),
+                    subcommand_args = ?args
+                ))
+                .await
+                .map_err(|e| SubcommandErrors::UnableToStart {
+                    command: format!("{:?} -test.list", cmd.as_std().get_program()).to_string(),
+                    error: e,
+                })?;
             if !output.status.success() {
                 return Err(SubcommandErrors::SubcommandFailed {
                     command: String::from("'test-binary' -test.list ."),
@@ -1067,12 +1085,6 @@ impl GolangTestPlatform {
                 debug!("Found test case: {line:?}");
                 all_test_cases.insert(GolangConcreteTestIdentifier {
                     test_identifier: GolangTestIdentifier {
-                        // binary_name: BinaryName(
-                        //     dirent
-                        //         .file_name()
-                        //         .into_string()
-                        //         .expect("must have unicode file names"),
-                        // ),
                         module_path: module_path.clone(),
                         test_name: String::from(line),
                     },
@@ -1114,22 +1126,31 @@ impl TestPlatform for GolangTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    fn discover_tests() -> Result<GolangTestDiscovery> {
+    async fn discover_tests() -> Result<GolangTestDiscovery> {
         let module_info = Self::parse_module_info()?;
 
         // Discover the modules to work with; this limits it to those with tests:
-        let mut cmd = SyncCommand::new("go");
-        cmd.args([
+        let mut cmd = Command::new("go");
+        let args = [
             "list",
             "-f",
             "{{if .TestGoFiles}}{{.ImportPath}}{{end}}",
             "./...",
-        ]);
+        ];
+        cmd.args(args);
         debug!("running: {cmd:?}");
-        let output = cmd.output().map_err(|e| SubcommandErrors::UnableToStart {
-            command: "go list ...discover modules...".to_string(),
-            error: e,
-        })?;
+        let output = cmd
+            .output()
+            .instrument(info_span!("go list",
+                subcommand = true,
+                subcommand_binary = "go",
+                subcommand_args = ?args
+            ))
+            .await
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: "go list ...discover modules...".to_string(),
+                error: e,
+            })?;
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
                 command: String::from("go list -f {{if .TestGoFiles}}{{.ImportPath}}{{end}} ./..."),
@@ -1140,12 +1161,30 @@ impl TestPlatform for GolangTestPlatform {
         }
         let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
         let mut all_test_cases: HashSet<GolangConcreteTestIdentifier> = HashSet::new();
-        // FIXME: we might be able to do this in parallel to reduce build times... or maybe there's some way we can make
-        // the go cmdline build multiple packages like this?
-        for line in stdout.lines() {
-            let module_path = ModulePath(String::from(line));
-            all_test_cases.extend(Self::discover_tests_in_module(&module_info, &module_path)?);
+        let all_test_cases = async {
+            // FIXME: we might be able to do this in parallel to reduce build times... or maybe there's some way we can make
+            // the go cmdline build multiple packages like this?
+            for line in stdout.lines() {
+                let module_path = ModulePath(String::from(line));
+                all_test_cases
+                    .extend(Self::discover_tests_in_module(&module_info, &module_path).await?);
+            }
+            Ok::<_, anyhow::Error>(all_test_cases)
         }
+        .instrument(info_span!(
+            "go test",
+            ui_stage = Into::<u64>::into(UiStage::Compiling)
+        ))
+        .await?;
+
+        // FIXME: compiling and listing tests is integrated together into `discover_tests_in_module` right now, making
+        // instrumenting these (and therefore displaying a separate UI) require a prereq of splitting them apart.  As a
+        // temporary measure just emit the ListingTests event for the UI at a zero-length span.
+        info_span!(
+            "fake list tests",
+            ui_stage = Into::<u64>::into(UiStage::ListingTests)
+        )
+        .in_scope(|| {});
 
         Ok(GolangTestDiscovery { all_test_cases })
     }

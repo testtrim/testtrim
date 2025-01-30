@@ -4,7 +4,6 @@
 
 use dashmap::DashMap;
 use log::warn;
-use rand::{RngCore, rng};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -12,18 +11,13 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{
-    Event, Metadata, Subscriber,
+    Metadata,
     field::Visit,
     span::{Attributes, Id, Record},
 };
+use tracing_subscriber::{Layer, layer::Context};
 
 use crate::util::duration_to_seconds;
-
-// FIXME: in the future it might make more sense to use the tracing-subscriber library to create a "Layer" that does
-// this performance tracing work.  That would allow us to have a truely useful tracing subscriber for the traditional
-// use-case, and a separate implementation for our performance timing tracing that just handles that use-case.  But for
-// now we're only using tracing for performance data capture, so it's simpler to just use a Subscriber that has that
-// single purpose.
 
 #[derive(Debug)]
 struct SpanData {
@@ -143,38 +137,36 @@ impl PerformanceStorage {
     }
 }
 
-pub struct PerformanceStoringTracingSubscriber {
+pub struct PerformanceStoringLayer {
     storage: Arc<PerformanceStorage>,
 }
 
-impl PerformanceStoringTracingSubscriber {
+impl PerformanceStoringLayer {
     #[must_use]
     pub fn new(storage: Arc<PerformanceStorage>) -> Self {
-        PerformanceStoringTracingSubscriber { storage }
+        PerformanceStoringLayer { storage }
     }
 }
 
-impl Subscriber for PerformanceStoringTracingSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+impl<S> Layer<S> for PerformanceStoringLayer
+where
+    S: tracing::Subscriber,
+{
+    fn enabled(&self, _metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
         true
     }
 
-    fn new_span(&self, span: &Attributes<'_>) -> Id {
-        let span_id = Id::from_u64(rng().next_u64());
-
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
         let mut span_data = SpanData {
             perftrace: None,
             entered_at: None,
             exited_at: None,
         };
-        span.record(&mut span_data);
-
-        self.storage.span_storage.insert(span_id.clone(), span_data);
-
-        span_id
+        attrs.record(&mut span_data);
+        self.storage.span_storage.insert(id.clone(), span_data);
     }
 
-    fn record(&self, span: &Id, values: &Record<'_>) {
+    fn on_record(&self, span: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
         if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
             values.record(span_data.value_mut());
         } else {
@@ -182,15 +174,10 @@ impl Subscriber for PerformanceStoringTracingSubscriber {
         }
     }
 
-    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
-
-    fn event(&self, _event: &Event<'_>) {}
-
-    fn enter(&self, span: &Id) {
+    fn on_enter(&self, span: &Id, _ctx: Context<'_, S>) {
         if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
-            // for futures we seem to enter and exit the span multiple times, probably each time it is polled; I guess
-            // that in the spirit of measuring the entire length of the span capturing the first enter and last exit is
-            // the right thing to do
+            // For futures we seem to enter and exit the span multiple times, probably each time it is polled.
+            // Capturing the first enter and last exit is the right approach for measuring the entire span length.
             if span_data.entered_at.is_none() {
                 span_data.entered_at = Some(Instant::now());
             }
@@ -199,7 +186,7 @@ impl Subscriber for PerformanceStoringTracingSubscriber {
         }
     }
 
-    fn exit(&self, span: &Id) {
+    fn on_exit(&self, span: &Id, _ctx: Context<'_, S>) {
         if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
             span_data.exited_at = Some(Instant::now());
         } else {

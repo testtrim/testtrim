@@ -11,7 +11,7 @@ use actix_web::{
 };
 use anyhow::Result;
 use coverage_data::InstallCoverageDataHandlers as _;
-use log::{info, trace, warn};
+use log::{Log, info, set_boxed_logger, trace, warn};
 
 use crate::{
     coverage::{CoverageDatabase as _, CoverageDatabaseDispatch, create_db},
@@ -60,7 +60,8 @@ where
     }
 }
 
-pub async fn cli(socket_addrs: impl ToSocketAddrs) {
+pub async fn cli(logger: Box<dyn Log>, socket_addrs: impl ToSocketAddrs) {
+    set_boxed_logger(logger).unwrap();
     run_server(socket_addrs).await.expect("run_server failure");
 }
 

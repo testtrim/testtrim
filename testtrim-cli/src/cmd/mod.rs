@@ -4,5 +4,7 @@
 
 pub mod cli;
 pub mod get_test_identifiers;
+pub mod get_test_identifiers_ui;
 pub mod run_tests;
 pub mod simulate_history;
+pub mod ui;

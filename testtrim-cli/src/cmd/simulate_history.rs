@@ -10,10 +10,11 @@ use std::{
 };
 
 use anyhow::Result;
-use log::{error, info, trace, warn};
+use log::{Log, error, info, set_boxed_logger, trace, warn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::instrument::WithSubscriber;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::{
     cmd::{cli::PlatformTaggingMode, get_test_identifiers, run_tests::run_tests},
@@ -24,7 +25,7 @@ use crate::{
         dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
     },
     scm::{Scm, ScmCommit, git::GitScm},
-    timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber},
+    timing_tracer::{PerformanceStorage, PerformanceStoringLayer},
     util::duration_to_seconds,
 };
 
@@ -35,6 +36,7 @@ use super::cli::{
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
 pub async fn cli(
+    logger: Box<dyn Log>,
     test_project_type: TestProjectType,
     num_commits: u16,
     jobs: u16,
@@ -48,18 +50,32 @@ pub async fn cli(
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(num_commits, jobs, override_config).await
+            specific_cli::<_, _, _, _, RustTestPlatform>(logger, num_commits, jobs, override_config)
+                .await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(num_commits, jobs, override_config).await
+            specific_cli::<_, _, _, _, DotnetTestPlatform>(
+                logger,
+                num_commits,
+                jobs,
+                override_config,
+            )
+            .await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(num_commits, jobs, override_config).await
+            specific_cli::<_, _, _, _, GolangTestPlatform>(
+                logger,
+                num_commits,
+                jobs,
+                override_config,
+            )
+            .await
         }
     }
 }
 
 async fn specific_cli<TI, CI, TD, CTI, TP>(
+    logger: Box<dyn Log>,
     num_commits: u16,
     jobs: u16,
     override_config: Option<&String>,
@@ -71,6 +87,9 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
+    // FIXME: global logger installation until an instrumentation-based UI is implemented for this subcommand
+    set_boxed_logger(logger).unwrap();
+
     match simulate_history::<_, _, _, _, _, _, TP>(
         &GitScm {},
         num_commits,
@@ -269,7 +288,10 @@ where
     scm.clean_lightly()?;
 
     let perf_storage = Arc::new(PerformanceStorage::new());
-    let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
+    let perf_layer = PerformanceStoringLayer::new(perf_storage.clone());
+
+    // At the core of our subscriber, use tracing-subscriber's Registry which does nothing but generate span IDs.
+    let subscriber = tracing_subscriber::registry::Registry::default().with(perf_layer);
     let start_instant = Instant::now();
 
     trace!("beginning run test subcommand");
@@ -285,7 +307,7 @@ where
         )
         .await
     }
-    .with_subscriber(my_subscriber)
+    .with_subscriber(subscriber)
     .await;
 
     let total_time = Instant::now().duration_since(start_instant);

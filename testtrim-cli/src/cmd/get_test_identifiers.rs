@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use current_platform::CURRENT_PLATFORM;
-use log::{debug, error, info, trace, warn};
+use log::{Log, debug, error, info, trace, warn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -13,13 +13,15 @@ use std::marker::PhantomData;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
-use tracing::instrument;
 use tracing::instrument::WithSubscriber;
+use tracing::{Instrument as _, info_span, instrument};
+use tracing_subscriber::layer::SubscriberExt as _;
 
+use crate::cmd::ui::UiStage;
 use crate::coverage::{Tag, create_db_infallible};
 use crate::network::compute_tests_from_network_accesses;
 use crate::repo_config::get_repo_config;
-use crate::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
+use crate::timing_tracer::{PerformanceStorage, PerformanceStoringLayer};
 use crate::{
     coverage::{
         CoverageDatabase, commit_coverage_data::CoverageIdentifier,
@@ -33,49 +35,42 @@ use crate::{
 };
 
 use super::cli::{
-    GetTestIdentifierMode, PlatformTaggingMode, TestProjectType, autodetect_test_project_type,
+    CommonOptions, GetTestIdentifierMode, PlatformTaggingMode, TestProjectType,
+    TestTargetingParameters, autodetect_test_project_type,
 };
+use super::get_test_identifiers_ui::GetTestIdentifiersConsole;
 
 // Design note: the `cli` function of each command performs the interactive output, while delegating as much actual
 // functionality as possible to library methods that don't do interactive output but instead return data structures.
-pub async fn cli(
-    test_project_type: TestProjectType,
-    test_selection_mode: GetTestIdentifierMode,
-    user_tags: &[Tag],
-    platform_tagging_mode: PlatformTaggingMode,
-    override_config: Option<&String>,
+pub async fn cli<Logger: Log + 'static>(
+    logger: Logger,
+    common_opts: &CommonOptions,
+    target_parameters: &TestTargetingParameters,
 ) -> ExitCode {
-    let test_project_type = if test_project_type == TestProjectType::AutoDetect {
+    let test_project_type = if target_parameters.test_project_type == TestProjectType::AutoDetect {
         autodetect_test_project_type()
     } else {
-        test_project_type
+        target_parameters.test_project_type
     };
     match test_project_type {
         TestProjectType::AutoDetect => panic!("autodetect failed"),
         TestProjectType::Rust => {
-            specific_cli::<_, _, _, _, RustTestPlatform>(
-                test_selection_mode,
-                user_tags,
-                platform_tagging_mode,
-                override_config,
-            )
-            .await
+            specific_cli::<_, _, _, _, _, RustTestPlatform>(logger, common_opts, target_parameters)
+                .await
         }
         TestProjectType::Dotnet => {
-            specific_cli::<_, _, _, _, DotnetTestPlatform>(
-                test_selection_mode,
-                user_tags,
-                platform_tagging_mode,
-                override_config,
+            specific_cli::<_, _, _, _, _, DotnetTestPlatform>(
+                logger,
+                common_opts,
+                target_parameters,
             )
             .await
         }
         TestProjectType::Golang => {
-            specific_cli::<_, _, _, _, GolangTestPlatform>(
-                test_selection_mode,
-                user_tags,
-                platform_tagging_mode,
-                override_config,
+            specific_cli::<_, _, _, _, _, GolangTestPlatform>(
+                logger,
+                common_opts,
+                target_parameters,
             )
             .await
         }
@@ -83,13 +78,13 @@ pub async fn cli(
 }
 
 #[allow(clippy::print_stdout)]
-async fn specific_cli<TI, CI, TD, CTI, TP>(
-    test_selection_mode: GetTestIdentifierMode,
-    user_tags: &[Tag],
-    platform_tagging_mode: PlatformTaggingMode,
-    override_config: Option<&String>,
+async fn specific_cli<Logger, TI, CI, TD, CTI, TP>(
+    logger: Logger,
+    common_opts: &CommonOptions,
+    target_parameters: &TestTargetingParameters,
 ) -> ExitCode
 where
+    Logger: Log + 'static,
     TI: TestIdentifier + Serialize + DeserializeOwned + 'static,
     CI: CoverageIdentifier + Serialize + DeserializeOwned + 'static,
     TD: TestDiscovery<CTI, TI>,
@@ -97,44 +92,53 @@ where
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
     let perf_storage = Arc::new(PerformanceStorage::new());
-    let my_subscriber = PerformanceStoringTracingSubscriber::new(perf_storage.clone());
+    let perf_layer = PerformanceStoringLayer::new(perf_storage.clone());
 
-    let tags = tags::<TP>(user_tags, platform_tagging_mode);
+    let terminal_output = GetTestIdentifiersConsole::new(common_opts.no_progress, logger);
 
-    let exit_code = async {
-        let test_cases = match get_target_test_cases::<_, _, _, _, _, _, TP>(
-            test_selection_mode,
-            &GitScm {},
-            AncestorSearchMode::AllCommits,
-            &tags,
-            &create_db_infallible(),
-            override_config,
-        )
-        .await
-        {
-            Ok(test_cases) => test_cases,
-            Err(err) => {
-                error!("error occurred in get_target_test_cases: {:?}", err);
-                return ExitCode::FAILURE;
-            }
-        };
-        for (cti, reasons) in test_cases.target_test_cases {
-            println!("{:?}", cti.test_identifier());
-            for reason in reasons {
-                println!("\t{reason:?}");
-            }
-        }
-        ExitCode::SUCCESS
-    }
-    .with_subscriber(my_subscriber)
+    // At the core of our subscriber, use tracing-subscriber's Registry which does nothing but generate span IDs.
+    let subscriber = tracing_subscriber::registry::Registry::default()
+        .with(perf_layer)
+        .with(terminal_output);
+
+    let tags = tags::<TP>(
+        &target_parameters.tags,
+        target_parameters.platform_tagging_mode,
+    );
+
+    let test_cases = get_target_test_cases::<_, _, _, _, _, _, TP>(
+        target_parameters.test_selection_mode,
+        &GitScm {},
+        AncestorSearchMode::AllCommits,
+        &tags,
+        &create_db_infallible(),
+        target_parameters.override_config.as_ref(),
+    )
+    .with_subscriber(subscriber)
     .await;
+
+    // Note: println output needs to come after `subscriber` is dropped so that we don't fight the
+    // `GetTestIdentifiersConsole` for control over the console.
+    let test_cases = match test_cases {
+        Ok(test_cases) => test_cases,
+        Err(err) => {
+            error!("error occurred in get_target_test_cases: {:?}", err);
+            return ExitCode::FAILURE;
+        }
+    };
+    for (cti, reasons) in test_cases.target_test_cases {
+        println!("{:?}", cti.test_identifier());
+        for reason in reasons {
+            println!("\t{reason:?}");
+        }
+    }
 
     // FIXME: probably not the right choice to print this to stdout; ideally this cli command just prints the test
     // identifiers.
     println!("Performance stats:");
     perf_storage.print();
 
-    exit_code
+    ExitCode::SUCCESS
 }
 
 #[must_use]
@@ -199,7 +203,7 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
-    let test_discovery = TP::discover_tests()?;
+    let test_discovery = TP::discover_tests().await?;
     let all_test_cases = test_discovery.all_test_cases();
 
     if mode == GetTestIdentifierMode::All {
@@ -225,6 +229,10 @@ where
             coverage_db,
             tags,
         )
+        .instrument(info_span!(
+            "find_ancestor_commit_with_coverage_data",
+            ui_stage = Into::<u64>::into(UiStage::FindingAncestorCommit),
+        ))
         .await?
     {
         info!(
@@ -236,6 +244,14 @@ where
             ancestor_retval.coverage_data,
         )
     } else {
+        // FIXME: this is ugly -- but in order to prevent a "3/4" output being the last output if we didn't find an
+        // ancestor commit, we pretend that we did a ComputeTestCases span here -- this can definitely be cleaned up at
+        // some point once the console output stuff is a little more solid.
+        info_span!(
+            "find_ancestor_commit_with_coverage_data",
+            ui_stage = Into::<u64>::into(UiStage::ComputeTestCases),
+        )
+        .in_scope(|| {});
         warn!("no base commit identified with coverage data to work from");
         return Ok(TargetTestCases {
             all_test_cases: all_test_cases.clone(),
@@ -250,39 +266,51 @@ where
         });
     };
 
-    let changed_files = scm.get_changed_files(&ancestor_commit)?;
-    debug!("changed files: {:?}", changed_files);
+    let (relevant_test_cases, changed_files, external_dependencies_changed) = info_span!(
+        "find_ancestor_commit_with_coverage_data",
+        ui_stage = Into::<u64>::into(UiStage::ComputeTestCases),
+    )
+    .in_scope(|| {
+        let changed_files = scm.get_changed_files(&ancestor_commit)?;
+        debug!("changed files: {:?}", changed_files);
 
-    let all_test_identifiers = all_test_cases
-        .iter()
-        .map(|tc| tc.test_identifier().clone())
-        .collect();
-    let mut relevant_test_cases =
-        compute_relevant_test_cases(&all_test_identifiers, &changed_files, &coverage_data)?;
+        let all_test_identifiers = all_test_cases
+            .iter()
+            .map(|tc| tc.test_identifier().clone())
+            .collect();
+        let mut relevant_test_cases =
+            compute_relevant_test_cases(&all_test_identifiers, &changed_files, &coverage_data)?;
 
-    let platform_specific = TP::platform_specific_relevant_test_cases(
-        &all_test_identifiers,
-        &changed_files,
-        scm,
-        &ancestor_commit,
-        &coverage_data,
-    )?;
-    for (ti, reasons) in platform_specific.additional_test_cases {
-        relevant_test_cases.entry(ti).or_default().extend(reasons);
-    }
-
-    let repo_config = get_repo_config(override_config)?;
-
-    for (ti, reasons) in compute_tests_from_network_accesses::<TP>(
-        &coverage_data,
-        repo_config.network_policy(),
-        &changed_files,
-    ) {
-        if all_test_identifiers.contains(&ti) {
-            // ignore deleted tests
+        let platform_specific = TP::platform_specific_relevant_test_cases(
+            &all_test_identifiers,
+            &changed_files,
+            scm,
+            &ancestor_commit,
+            &coverage_data,
+        )?;
+        for (ti, reasons) in platform_specific.additional_test_cases {
             relevant_test_cases.entry(ti).or_default().extend(reasons);
         }
-    }
+
+        let repo_config = get_repo_config(override_config)?;
+
+        for (ti, reasons) in compute_tests_from_network_accesses::<TP>(
+            &coverage_data,
+            repo_config.network_policy(),
+            &changed_files,
+        ) {
+            if all_test_identifiers.contains(&ti) {
+                // ignore deleted tests
+                relevant_test_cases.entry(ti).or_default().extend(reasons);
+            }
+        }
+
+        Ok::<_, anyhow::Error>((
+            relevant_test_cases,
+            changed_files,
+            platform_specific.external_dependencies_changed,
+        ))
+    })?;
 
     debug!("relevant_test_cases: {:?}", relevant_test_cases);
 
@@ -294,7 +322,7 @@ where
             .collect::<HashMap<_, _>>(),
         ancestor_commit: Some(ancestor_commit),
         files_changed: Some(changed_files),
-        external_dependencies_changed: platform_specific.external_dependencies_changed,
+        external_dependencies_changed,
         test_identifier_type: PhantomData,
     })
 }

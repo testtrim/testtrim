@@ -16,7 +16,6 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Component, PathBuf};
-use std::process::Command as SyncCommand;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::{env, fmt, fs, io};
@@ -25,6 +24,7 @@ use tempdir::TempDir;
 use tokio::process::Command;
 use tracing::{Instrument, info_span, instrument};
 
+use crate::cmd::ui::UiStage;
 use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{
     CommitCoverageData, CoverageIdentifier, FileCoverage, FileReference, FunctionCoverage,
@@ -275,18 +275,20 @@ impl RustTestPlatform {
         Ok(changed_external_dependencies)
     }
 
-    fn find_test_binaries() -> Result<HashSet<RustTestBinary>> {
+    async fn find_test_binaries() -> Result<HashSet<RustTestBinary>> {
         let tmp_dir = TempDir::new("testtrim")?;
         let repo_root = env::current_dir()?;
 
-        let output = SyncCommand::new("cargo")
-            .args([
-                "test",
-                "--workspace",
-                "--tests",
-                "--no-run",
-                "--message-format=json",
-            ])
+        let args = [
+            "test",
+            "--workspace",
+            "--tests",
+            "--no-run",
+            "--message-format=json",
+        ];
+
+        let output = Command::new("cargo")
+            .args(args)
             // RUSTFLAGS is needed because we'll load these binaries for their profiling data later; and
             // LLVM_PROFILE_FILE is set to avoid polluting the working-dir with default_*.profraw files during build
             // process.
@@ -296,6 +298,13 @@ impl RustTestPlatform {
             )
             .env("RUSTFLAGS", "-C instrument-coverage")
             .output()
+            .instrument(info_span!("cargo test",
+                ui_stage = Into::<u64>::into(UiStage::Compiling),
+                subcommand = true,
+                subcommand_binary = "cargo",
+                subcommand_args = ?args
+            ))
+            .await
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "cargo test --no-run".to_string(),
                 error: e,
@@ -356,20 +365,26 @@ impl RustTestPlatform {
         Ok(test_binaries)
     }
 
-    fn get_all_test_cases(
+    async fn get_all_test_cases(
         test_binaries: &HashSet<RustTestBinary>,
     ) -> Result<HashSet<RustConcreteTestIdentifier>> {
         let tmp_dir = TempDir::new("testtrim")?;
         let mut result: HashSet<RustConcreteTestIdentifier> = HashSet::new();
 
         for binary in test_binaries {
-            let output = SyncCommand::new(&binary.executable_path)
+            let output = Command::new(&binary.executable_path)
                 .arg("--list")
                 .env(
                     "LLVM_PROFILE_FILE",
                     Path::join(tmp_dir.path(), "get_all_test_cases_%m_%p.profraw"),
                 )
                 .output()
+                .instrument(info_span!("list tests",
+                    subcommand = true,
+                    subcommand_binary = ?&binary.executable_path,
+                    subcommand_args = ?["--list"],
+                ))
+                .await
                 .map_err(|e| SubcommandErrors::UnableToStart {
                     command: format!("{binary:?} --list").to_string(),
                     error: e,
@@ -592,8 +607,8 @@ impl RustTestPlatform {
         );
 
         let mut cmd = Command::new(&test_case.test_binary.executable_path);
-        cmd.arg("--exact")
-            .arg(&test_case.test_identifier.test_name)
+        let args = ["--exact", &test_case.test_identifier.test_name];
+        cmd.args(args)
             .env("LLVM_PROFILE_FILE", &profile_file)
             .env("RUSTFLAGS", "-C instrument-coverage")
             .current_dir(test_wd);
@@ -603,7 +618,10 @@ impl RustTestPlatform {
             .instrument(info_span!(
                 "execute-test",
                 perftrace = "run-test",
-                parallel = true
+                parallel = true,
+                subcommand = true,
+                subcommand_binary = ?&test_case.test_binary.executable_path,
+                subcommand_args = ?args,
             ))
             .await?;
 
@@ -692,11 +710,16 @@ impl TestPlatform for RustTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    fn discover_tests() -> Result<RustTestDiscovery> {
-        let test_binaries = RustTestPlatform::find_test_binaries()?;
+    async fn discover_tests() -> Result<RustTestDiscovery> {
+        let test_binaries = RustTestPlatform::find_test_binaries().await?;
         trace!("test_binaries: {:?}", test_binaries);
 
-        let all_test_cases = RustTestPlatform::get_all_test_cases(&test_binaries)?;
+        let all_test_cases = RustTestPlatform::get_all_test_cases(&test_binaries)
+            .instrument(info_span!(
+                "get_all_test_cases",
+                ui_stage = Into::<u64>::into(UiStage::ListingTests)
+            ))
+            .await?;
         trace!("all_test_cases: {:?}", all_test_cases);
 
         Ok(RustTestDiscovery {
@@ -759,14 +782,25 @@ impl TestPlatform for RustTestPlatform {
             let b = binaries.clone();
             let cl = coverage_library.clone();
             let tc = test_case.clone();
-            futures.push(async move { RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl).await });
+            futures.push(async move {
+                RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl)
+                    .instrument(info_span!("cargo test",
+                        ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
+                        test_case = ?tc,
+                    ))
+                    .await
+            });
         }
-
         let concurrency = if jobs == 0 {
             num_cpus::get()
         } else {
             jobs.into()
         };
+        tracing::info!(
+            ui_info = "run-test-count",
+            count = futures.len(),
+            concurrency
+        );
         let results = spawn_limited_concurrency(concurrency, futures).await;
 
         let mut failed_test_results = vec![];

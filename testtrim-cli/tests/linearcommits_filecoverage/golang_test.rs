@@ -5,8 +5,10 @@
 use anyhow::Result;
 use std::sync::Arc;
 use testtrim::platform::golang::GolangTestPlatform;
-use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringTracingSubscriber};
+use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringLayer};
 use tracing::instrument::WithSubscriber as _;
+use tracing_subscriber::Registry;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::assert_performance_tracing;
 use crate::linearcommits_filecoverage::{CommitTestData, execute_test, setup_test};
@@ -34,9 +36,9 @@ async fn add_new_test() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -127,9 +129,9 @@ async fn modify_single_file() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -186,9 +188,9 @@ async fn remove_test() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -246,9 +248,9 @@ async fn change_external_dependency() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -309,9 +311,9 @@ async fn change_read_file() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -380,9 +382,9 @@ async fn change_embed_file() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -465,9 +467,9 @@ async fn change_constants() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
@@ -562,9 +564,9 @@ async fn network_test_rerun() -> Result<()> {
     let perf_storage = Arc::new(PerformanceStorage::new());
     for commit_test_data in test_commits {
         execute_test::<GolangTestPlatform>(&commit_test_data, &coverage_db)
-            .with_subscriber(PerformanceStoringTracingSubscriber::new(
-                perf_storage.clone(),
-            ))
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
             .await?;
     }
     assert_performance_tracing(perf_storage.interpret_run_test_timing());
