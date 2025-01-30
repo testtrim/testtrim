@@ -162,7 +162,7 @@
               # Bump output up to DEBUG level -- the actix-web logger middleware only logs internal error details at
               # the DEBUG level.  This seems weird to me, but arguably could make sense -- some errors are not
               # internal server errors that you would treat as such.
-              "-vvv"
+              "-vv"
             ];
             Env = [];
             ExposedPorts = {
