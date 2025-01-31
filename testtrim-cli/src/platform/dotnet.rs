@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fmt, fs};
 use std::{hash::Hash, path::Path};
-use tempdir::TempDir;
 use tokio::process::Command;
 use tracing::{Instrument as _, info_span, instrument};
 
@@ -712,7 +711,7 @@ impl TestPlatform for DotnetTestPlatform {
         I: IntoIterator<Item = &'a DotnetConcreteTestIdentifier>,
         DotnetConcreteTestIdentifier: 'a,
     {
-        let tmp_dir = TempDir::new("testtrim")?;
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
 
         // TODO: external dependency tracking
         // Before running any tests with coverage, evaluate whether there are any PDB files that need to be restored for

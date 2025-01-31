@@ -17,7 +17,7 @@ use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, fs, io};
-use tempdir::TempDir;
+use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::{Instrument as _, info_span, instrument};
 
@@ -1018,7 +1018,7 @@ impl GolangTestPlatform {
         //
         // FIXME: as a final problem, we're creating one of these temp dirs for every module.  I guess that's OK?  But
         // it seems like maybe we could just create one and use subdirectories.
-        let tmp_dir = Arc::new(TempDir::new("testtrim")?);
+        let tmp_dir = Arc::new(tempfile::Builder::new().prefix("testtrim").tempdir()?);
 
         // First we build all test binaries:
         let mut cmd = Self::get_build_test_command(module_info, &tmp_dir, module_path);
@@ -1240,7 +1240,7 @@ impl TestPlatform for GolangTestPlatform {
         I: IntoIterator<Item = &'a GolangConcreteTestIdentifier>,
         GolangConcreteTestIdentifier: 'a,
     {
-        let tmp_dir = TempDir::new("testtrim")?;
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
 
         let module_info =
             Self::parse_module_info().map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?;

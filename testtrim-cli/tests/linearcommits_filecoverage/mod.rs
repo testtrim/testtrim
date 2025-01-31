@@ -5,7 +5,7 @@
 use anyhow::{Result, anyhow};
 use log::info;
 use std::collections::HashSet;
-use tempdir::TempDir;
+use tempfile::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, AncestorSearchMode, get_target_test_cases};
 use testtrim::cmd::run_tests::run_tests;
@@ -41,7 +41,7 @@ async fn setup_test<TP: TestPlatform>(
 
     let _cwd_mutex = CWD_MUTEX.lock().await;
 
-    let tmp_dir = TempDir::new("testtrim-test")?;
+    let tmp_dir = tempfile::Builder::new().prefix("testtrim-test").tempdir()?;
     let _tmp_dir_cwd = ChangeWorkingDirectory::new(tmp_dir.path());
     git_clone(test_project)?;
     drop(_tmp_dir_cwd);

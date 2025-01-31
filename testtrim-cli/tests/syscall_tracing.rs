@@ -10,7 +10,6 @@ use std::{
 };
 
 use anyhow::Result;
-use tempdir::TempDir;
 use testtrim::sys_trace::{
     SysTraceCommand as _, SysTraceCommandDispatch,
     strace::STraceSysTraceCommand,
@@ -46,7 +45,7 @@ fn get_test_binary() -> PathBuf {
 }
 
 async fn run_test_binary(trace_command: &SysTraceCommandDispatch, arg: &str) -> Result<Trace> {
-    let tmp_dir = TempDir::new("testtrim-test")?;
+    let tmp_dir = tempfile::Builder::new().prefix("testtrim-test").tempdir()?;
     let trace_file = tmp_dir.path().join(format!("test_{}.trace", arg));
     let mut cmd = Command::new(get_test_binary());
     cmd.arg(arg);
@@ -249,7 +248,7 @@ async fn nested_strace() -> Result<()> {
     // Theoretically that should work.
 
     let trace_command = STraceSysTraceCommand::new();
-    let tmp_dir = TempDir::new("testtrim-test")?;
+    let tmp_dir = tempfile::Builder::new().prefix("testtrim-test").tempdir()?;
     let trace_file = tmp_dir.path().join("test_nested_strace.trace");
     let test_binary = current_exe()?;
 

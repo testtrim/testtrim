@@ -20,7 +20,6 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::{env, fmt, fs, io};
 use std::{hash::Hash, path::Path};
-use tempdir::TempDir;
 use tokio::process::Command;
 use tracing::{Instrument, info_span, instrument};
 
@@ -281,7 +280,7 @@ impl RustTestPlatform {
     }
 
     async fn find_test_binaries() -> Result<HashSet<RustTestBinary>> {
-        let tmp_dir = TempDir::new("testtrim")?;
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
         let repo_root = env::current_dir()?;
 
         let args = [
@@ -373,7 +372,7 @@ impl RustTestPlatform {
     async fn get_all_test_cases(
         test_binaries: &HashSet<RustTestBinary>,
     ) -> Result<HashSet<RustConcreteTestIdentifier>> {
-        let tmp_dir = TempDir::new("testtrim")?;
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
         let mut result: HashSet<RustConcreteTestIdentifier> = HashSet::new();
 
         for binary in test_binaries {
@@ -775,7 +774,7 @@ impl TestPlatform for RustTestPlatform {
         I: IntoIterator<Item = &'a RustConcreteTestIdentifier>,
         RustConcreteTestIdentifier: 'a,
     {
-        let tmp_dir = TempDir::new("testtrim")?;
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
 
         let coverage_library = Arc::new(RwLock::new(CoverageLibrary::new()));
         let mut coverage_data = CommitCoverageData::new();
