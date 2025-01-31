@@ -5,6 +5,8 @@
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
 use log::{debug, trace, warn};
+use nix::sys::signal::{Signal, kill};
+use nix::sys::wait::WaitPidFlag;
 use nix::sys::wait::waitpid;
 use nix::unistd::Pid;
 use proc_synchronizer::ProcSynchronizer;
@@ -640,6 +642,9 @@ impl STraceSysTraceCommand {
                 // the child process because it will wait until the parent process has subscribed to the strace stream,
                 // and, there's special handling in read_strace_output_from_trace_client for this syscall since the
                 // trace may be incomplete.  syscalls following this don't require any special behavior.
+                //
+                // If the parent process failed to startup its trace client, we may wait here indefinitely.  In that
+                // event, we're relying on the OwnedPid object in the parent to SIGTERM us when dropped.
                 let mut buf = [0u8; 1];
                 let mut read_file = File::from(read_goahead_fd);
                 read_file.read_exact(&mut buf).expect("pipe read_exact()");
@@ -723,7 +728,26 @@ impl From<Pid> for OwnedChildPid {
 impl Drop for OwnedChildPid {
     fn drop(&mut self) {
         if let Some(pid) = self.0.take() {
-            tokio::task::spawn_blocking(move || waitpid(Pid::from_raw(pid), None).unwrap());
+            tokio::task::spawn_blocking(move || {
+                let pid = Pid::from_raw(pid);
+                let _ = kill(pid, Signal::SIGTERM); // Ignore error -- we're doing our best here.
+                // Wait up to 5 seconds for graceful termination
+                let start = std::time::Instant::now();
+                loop {
+                    match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+                        Ok(_) => return, // Child exited
+                        Err(_) => {
+                            if start.elapsed() >= std::time::Duration::from_secs(5) {
+                                // Timeout reached, send SIGKILL
+                                let _ = kill(pid, Signal::SIGKILL);
+                                let _ = waitpid(pid, None);
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                }
+            });
         }
     }
 }

@@ -36,7 +36,7 @@ lazy_static = "1.5.0"
 llvm_profparser = "0.7.0"
 log = "0.4.22"
 named-lock = "0.4.1"
-nix = { version = "^0.29.0", features = ["fs", "process", "socket", "user"] }
+nix = { version = "^0.29.0", features = ["fs", "process", "socket", "user", "signal"] }
 num_cpus = "1.16.0"
 num_enum = "0.7.3"
 num-derive = "0.4.2"
