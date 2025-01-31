@@ -58,7 +58,7 @@
               jq # needed for release.yaml workflow
               my-rust-bin
               reuse
-              rustfilt # LLVM rust demangler
+              # rustfilt # LLVM rust demangler -- not available in nixpkgs anymore 2025-01-26 -- https://github.com/NixOS/nixpkgs/pull/377036
               sqlx-cli
               strace
 
