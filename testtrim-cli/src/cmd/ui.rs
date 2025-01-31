@@ -17,6 +17,8 @@ pub struct RawUiInformation {
     pub subcommand_args: Option<String>,
     pub test_count: Option<u64>,
     pub test_case: Option<String>,
+    pub commit_count: Option<u64>,
+    pub commit_identifier: Option<String>,
 }
 
 impl Visit for RawUiInformation {
@@ -36,6 +38,9 @@ impl Visit for RawUiInformation {
         if field.name() == "test_count" {
             self.test_count = Some(value);
         }
+        if field.name() == "commit_count" {
+            self.commit_count = Some(value);
+        }
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
@@ -44,6 +49,9 @@ impl Visit for RawUiInformation {
         }
         if field.name() == "subcommand_args" {
             self.subcommand_args = Some(String::from(value));
+        }
+        if field.name() == "commit_identifier" {
+            self.commit_identifier = Some(String::from(value));
         }
     }
 
@@ -70,4 +78,10 @@ pub enum UiStage {
     RunTests,
     RunSingleTest,
     WriteCoverageData,
+
+    // SimulateHistory...
+    ClearProjectData,
+    IdentifyTestCommits,
+    SimulateCommits,
+    SimulateSingleCommit,
 }

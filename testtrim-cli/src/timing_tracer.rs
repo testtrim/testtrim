@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use dashmap::DashMap;
-use log::warn;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -78,6 +77,10 @@ impl PerformanceStorage {
         PerformanceStorage {
             span_storage: DashMap::new(),
         }
+    }
+
+    pub fn clear(&self) {
+        self.span_storage.clear();
     }
 
     /// For every span marked with perftrace, accumulate all the time in those spans by their perftrace value.
@@ -169,9 +172,8 @@ where
     fn on_record(&self, span: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
         if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
             values.record(span_data.value_mut());
-        } else {
-            warn!("record({span:?}) referenced a span that was not stored in span_storage");
         }
+        // else case can occur after storage is clear()'d
     }
 
     fn on_enter(&self, span: &Id, _ctx: Context<'_, S>) {
@@ -181,16 +183,14 @@ where
             if span_data.entered_at.is_none() {
                 span_data.entered_at = Some(Instant::now());
             }
-        } else {
-            warn!("enter({span:?}) referenced a span that was not stored in span_storage");
         }
+        // else case can occur after storage is clear()'d
     }
 
     fn on_exit(&self, span: &Id, _ctx: Context<'_, S>) {
         if let Some(mut span_data) = self.storage.span_storage.get_mut(span) {
             span_data.exited_at = Some(Instant::now());
-        } else {
-            warn!("exit({span:?}) referenced a span that was not stored in span_storage");
         }
+        // else case can occur after storage is clear()'d
     }
 }

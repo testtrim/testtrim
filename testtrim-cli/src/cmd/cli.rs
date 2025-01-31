@@ -48,22 +48,7 @@ enum Commands {
     RunTests(RunTestsOptions),
 
     /// Run through a series of historical commits and simulate using testtrim
-    SimulateHistory {
-        /// Software platform for running tests
-        #[arg(value_enum, long, default_value_t=TestProjectType::AutoDetect)]
-        test_project_type: TestProjectType,
-
-        #[command(flatten)]
-        execution_parameters: TestExecutionParameters,
-
-        /// Number of historical commits to simulate
-        #[arg(short, long, default_value_t = 100)]
-        num_commits: u16,
-
-        /// Override the in-repo testtrim.toml with a static config file
-        #[arg(short, long)]
-        override_config: Option<String>,
-    },
+    SimulateHistory(SimulateHistoryOptions),
 
     /// Run a testtrim web server for remote access to a coverage database
     RunServer {
@@ -90,6 +75,24 @@ pub struct RunTestsOptions {
     /// Strategy for treating the working directory and coverage map storage
     #[arg(value_enum, long, default_value_t = SourceMode::Automatic)]
     pub source_mode: SourceMode,
+}
+
+#[derive(Args, Debug)]
+pub struct SimulateHistoryOptions {
+    /// Software platform for running tests
+    #[arg(value_enum, long, default_value_t=TestProjectType::AutoDetect)]
+    pub test_project_type: TestProjectType,
+
+    #[command(flatten)]
+    pub execution_parameters: TestExecutionParameters,
+
+    /// Number of historical commits to simulate
+    #[arg(short, long, default_value_t = 100)]
+    pub num_commits: u16,
+
+    /// Override the in-repo testtrim.toml with a static config file
+    #[arg(short, long)]
+    pub override_config: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -204,20 +207,8 @@ pub async fn run_cli() -> ExitCode {
             get_test_identifiers::cli(logger, &cli.common, &options.target_parameters).await
         }
         Commands::RunTests(options) => run_tests::cli(logger, &cli.common, options).await,
-        Commands::SimulateHistory {
-            test_project_type,
-            num_commits,
-            execution_parameters,
-            override_config,
-        } => {
-            simulate_history::cli(
-                logger,
-                *test_project_type,
-                *num_commits,
-                execution_parameters.jobs,
-                override_config.as_ref(),
-            )
-            .await
+        Commands::SimulateHistory(options) => {
+            simulate_history::cli(logger, &cli.common, options).await
         }
         Commands::RunServer { bind_socket } => {
             server::cli(logger, bind_socket).await;

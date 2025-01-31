@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+// SPDX-FileCopyrightText: 2025 Mathieu Fenniak <mathieu@fenniak.net>
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -8,7 +8,7 @@ use console::{Emoji, style};
 use dashmap::DashMap;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
-use log::Log;
+use log::{Log, warn};
 use tracing::Subscriber;
 use tracing::span::{Attributes, Id};
 use tracing_subscriber::Layer;
@@ -136,11 +136,12 @@ where
                         "{} {WRITE_DB}Writing coverage data to DB ...",
                         style("[6/6]").bold().dim(),
                     ));
-                } // other => {
-                  //     warn!("run-tests didn't expect to encounter ui_stage {other:?}");
-                  //     self.root.remove(&progress_bar);
-                  //     return;
-                  // }
+                }
+                other => {
+                    warn!("run-tests didn't expect to encounter ui_stage {other:?}");
+                    self.root.remove(&progress_bar);
+                    return;
+                }
             };
             span_data.message_bar = Some(progress_bar);
         }

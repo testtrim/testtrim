@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 Mathieu Fenniak <mathieu@fenniak.net>
+// SPDX-FileCopyrightText: 2025 Mathieu Fenniak <mathieu@fenniak.net>
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
