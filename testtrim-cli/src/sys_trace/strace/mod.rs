@@ -332,10 +332,13 @@ impl STraceSysTraceCommand {
                         // be a reinitialization which should be fine; the expected case is we're just finished an
                         // incomplete or non-blocking connect.
                         let socket_fd_captures = tgid_socket_fd_captures.entry(*tgid).or_default();
-                        socket_fd_captures.insert(FileDescriptor(*socket_fd), SocketCapture {
-                            socket_addr: socket_addr.clone(),
-                            state: SocketCaptureState::Complete(Vec::new()),
-                        });
+                        socket_fd_captures.insert(
+                            FileDescriptor(*socket_fd),
+                            SocketCapture {
+                                socket_addr: socket_addr.clone(),
+                                state: SocketCaptureState::Complete(Vec::new()),
+                            },
+                        );
 
                         // FIXME: in the near future we could probably remove add_connect and just use the SocketCapture
                         // data that is fed over to the trace when the socket is closed to extract all the connections.

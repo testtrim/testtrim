@@ -665,148 +665,190 @@ mod tests {
     fn start_all_retval_states() -> Result<()> {
         let strace = String::from(r"1316971 close(3)                                = 0");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "close",
-            arguments: vec![Argument::Numeric("3")],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "close",
+                arguments: vec![Argument::Numeric("3")],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"1316971 close(3)                        = -1 EBADF (Bad file descriptor)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "close",
-            arguments: vec![Argument::Numeric("3")],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Failure(-1, "EBADF (Bad file descriptor)"),
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "close",
+                arguments: vec![Argument::Numeric("3")],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Failure(-1, "EBADF (Bad file descriptor)"),
+                }
             }
-        });
+        );
 
         let strace = String::from(r"1435293 close(17 <unfinished ...>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1435293",
-            function: "close",
-            arguments: vec![Argument::Numeric("17")],
-            outcome: CallOutcome::Unfinished,
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1435293",
+                function: "close",
+                arguments: vec![Argument::Numeric("17")],
+                outcome: CallOutcome::Unfinished,
+            }
+        );
 
         let strace = String::from(r"34187 read(7,  <unfinished ...>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "34187",
-            function: "read",
-            arguments: vec![Argument::Numeric("7")],
-            outcome: CallOutcome::Unfinished,
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "34187",
+                function: "read",
+                arguments: vec![Argument::Numeric("7")],
+                outcome: CallOutcome::Unfinished,
+            }
+        );
 
         let strace = String::from(
             r"1316971 close(3)                        = ? ERESTARTSYS (To be restarted)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "close",
-            arguments: vec![Argument::Numeric("3")],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Restart("ERESTARTSYS (To be restarted)"),
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "close",
+                arguments: vec![Argument::Numeric("3")],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Restart("ERESTARTSYS (To be restarted)"),
+                }
             }
-        });
+        );
 
         // The cases where I've seen this behavior -- "resumed> <unfinished...>" AND "resumed>) = ?" have both occurred
         // right before the process exited.  I'm combining both of these into one "ResumedUnfinished" state because, at
         // least for now, it doesn't seem like I need to do anything differently with them.
         let strace = String::from(r"1316971 <... read resumed> <unfinished ...>) = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            arguments: vec![],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
         let strace = String::from(r"1316971 <... openat resumed>)           = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "openat",
-            arguments: vec![],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "openat",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
         let strace = String::from(r"1316971 read(3,  <unfinished ...>)              = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            arguments: vec![Argument::Numeric("3")],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                arguments: vec![Argument::Numeric("3")],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
         let strace =
             String::from(r"1316971 read(7, )                               = ? <unavailable>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
-            arguments: vec![],
-            outcome: CallOutcome::ResumedUnfinished,
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                // ResumedUnfinished doesn't bother providing args back because the outcome of the syscall is undefined
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished,
+            }
+        );
 
         // Another unrecognizable mess right before a process exit.  Again since ResumedUnfinished is just suppressed at
         // the sequencer layer, I'll output it like that... but maybe "ResumedUnfinished" is just becoming "terminated
         // during process exit"?
         let strace = String::from(r"1316971 ???( <unfinished ...>");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "???",
-            arguments: vec![],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "???",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
         let strace = String::from(r"1316971 ???()                                   = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "???",
-            arguments: vec![],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "???",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
         let strace = String::from(r"33453 <... ??? resumed>)                = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "33453",
-            function: "???",
-            arguments: vec![],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "33453",
+                function: "???",
+                arguments: vec![],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
         // basically anything ending with a ? seems to happen at the end of a process... even a completed call?
         let strace = String::from(
             r#"1316971 openat(AT_FDCWD, "/proc/sys/vm/overcommit_memory", O_RDONLY|O_CLOEXEC) = ?"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "openat",
-            arguments: vec![
-                Argument::Enum("AT_FDCWD"),
-                Argument::String(EncodedString::new("/proc/sys/vm/overcommit_memory")),
-                Argument::Enum("O_RDONLY|O_CLOEXEC"),
-            ],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "openat",
+                arguments: vec![
+                    Argument::Enum("AT_FDCWD"),
+                    Argument::String(EncodedString::new("/proc/sys/vm/overcommit_memory")),
+                    Argument::Enum("O_RDONLY|O_CLOEXEC"),
+                ],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
 
         let strace = String::from(r"1316971 exit_group(0)                           = ?");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "exit_group",
-            arguments: vec![Argument::Numeric("0"),],
-            outcome: CallOutcome::ResumedUnfinished
-        });
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "exit_group",
+                arguments: vec![Argument::Numeric("0"),],
+                outcome: CallOutcome::ResumedUnfinished
+            }
+        );
 
         Ok(())
     }
@@ -815,27 +857,33 @@ mod tests {
     fn resumed_all_retval_states() -> Result<()> {
         let strace = String::from(r"189532 <... chdir resumed>)             = 0");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "189532",
-            function: "chdir",
-            arguments: vec![],
-            outcome: CallOutcome::Resumed {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "189532",
+                function: "chdir",
+                arguments: vec![],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"189531 <... chdir resumed>)             = -1 ENOENT (No such file or directory)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "189531",
-            function: "chdir",
-            arguments: vec![],
-            outcome: CallOutcome::Resumed {
-                retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "189531",
+                function: "chdir",
+                arguments: vec![],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
+                }
             }
-        });
+        );
 
         Ok(())
     }
@@ -844,246 +892,285 @@ mod tests {
     fn various_arguments() -> Result<()> {
         let strace = String::from(r#"1316971 read(3, "", 4096)               = 0"#);
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            arguments: vec![
-                Argument::Numeric("3"),
-                Argument::String(EncodedString::new("")),
-                Argument::Numeric("4096"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                arguments: vec![
+                    Argument::Numeric("3"),
+                    Argument::String(EncodedString::new("")),
+                    Argument::Numeric("4096"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"1316971 wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WNOHANG, NULL) = 4187946",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "wait4",
-            arguments: vec![
-                Argument::Numeric("-1"),
-                Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]"),
-                Argument::Enum("WNOHANG"),
-                Argument::Null,
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(4_187_946)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "wait4",
+                arguments: vec![
+                    Argument::Numeric("-1"),
+                    Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]"),
+                    Argument::Enum("WNOHANG"),
+                    Argument::Null,
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(4_187_946)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"86718 <... wait4 resumed>[{WIFEXITED(s) && WEXITSTATUS(s) == 1}], __WALL, NULL) = 86722",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "86718",
-            function: "wait4",
-            arguments: vec![
-                Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 1}]"),
-                Argument::Enum("__WALL"),
-                Argument::Null,
-            ],
-            outcome: CallOutcome::Resumed {
-                retval: Retval::Success(86_722)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "86718",
+                function: "wait4",
+                arguments: vec![
+                    Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 1}]"),
+                    Argument::Enum("__WALL"),
+                    Argument::Null,
+                ],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Success(86_722)
+                }
             }
-        });
+        );
 
         let strace = String::from(r#"1316971 read(3, ""..., 4096)               = 0"#);
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            arguments: vec![
-                Argument::Numeric("3"),
-                Argument::PartialString(EncodedString::new("")),
-                Argument::Numeric("4096"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                arguments: vec![
+                    Argument::Numeric("3"),
+                    Argument::PartialString(EncodedString::new("")),
+                    Argument::Numeric("4096"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r#"1316971 sendto(3, "\x02\x00\x00\x00\v\x00\x00\x00\x07\x00\x00\x00passwd\x00\\", 20, MSG_NOSIGNAL, NULL, 0) = 20"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "sendto",
-            arguments: vec![
-                Argument::Numeric("3"),
-                Argument::String(EncodedString::new(
-                    "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
-                )),
-                Argument::Numeric("20"),
-                Argument::Enum("MSG_NOSIGNAL"),
-                Argument::Null,
-                Argument::Numeric("0"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(20)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "sendto",
+                arguments: vec![
+                    Argument::Numeric("3"),
+                    Argument::String(EncodedString::new(
+                        "\\x02\\x00\\x00\\x00\\v\\x00\\x00\\x00\\x07\\x00\\x00\\x00passwd\\x00\\\\"
+                    )),
+                    Argument::Numeric("20"),
+                    Argument::Enum("MSG_NOSIGNAL"),
+                    Argument::Null,
+                    Argument::Numeric("0"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(20)
+                }
             }
-        });
+        );
 
         let strace = String::from(r"1316971 tgkill(4143934, 4144060, SIGUSR1)       = 0");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "tgkill",
-            arguments: vec![
-                Argument::Numeric("4143934"),
-                Argument::Numeric("4144060"),
-                Argument::Enum("SIGUSR1"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "tgkill",
+                arguments: vec![
+                    Argument::Numeric("4143934"),
+                    Argument::Numeric("4144060"),
+                    Argument::Enum("SIGUSR1"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             "1316971 openat(AT_FDCWD, \"/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4\", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "openat",
-            arguments: vec![
-                Argument::Enum("AT_FDCWD"),
-                Argument::String(EncodedString::new(
-                    "/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"
-                ),),
-                Argument::Enum("O_RDONLY|O_CLOEXEC"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "openat",
+                arguments: vec![
+                    Argument::Enum("AT_FDCWD"),
+                    Argument::String(EncodedString::new(
+                        "/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"
+                    ),),
+                    Argument::Enum("O_RDONLY|O_CLOEXEC"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Failure(-1, "ENOENT (No such file or directory)")
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"1316971 read(17, 0x7fb0f00111d6, 122)   = -1 EAGAIN (Resource temporarily unavailable)",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            arguments: vec![
-                Argument::Numeric("17"),
-                Argument::Pointer("0x7fb0f00111d6"),
-                Argument::Numeric("122"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Failure(-1, "EAGAIN (Resource temporarily unavailable)")
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                arguments: vec![
+                    Argument::Numeric("17"),
+                    Argument::Pointer("0x7fb0f00111d6"),
+                    Argument::Numeric("122"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Failure(-1, "EAGAIN (Resource temporarily unavailable)")
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r#"1316971 connect(3, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = 0"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "connect",
-            arguments: vec![
-                Argument::Numeric("3"),
-                Argument::Structure(r#"{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}"#),
-                Argument::Numeric("110"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "connect",
+                arguments: vec![
+                    Argument::Numeric("3"),
+                    Argument::Structure(r#"{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}"#),
+                    Argument::Numeric("110"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"1316971 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f9f93f88a10) = 337653",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "clone",
-            arguments: vec![
-                Argument::Named("child_stack", Box::new(Argument::Null)),
-                Argument::Named(
-                    "flags",
-                    Box::new(Argument::Enum(
-                        "CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD"
-                    ))
-                ),
-                Argument::Named(
-                    "child_tidptr",
-                    Box::new(Argument::Pointer("0x7f9f93f88a10"))
-                ),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(337_653)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "clone",
+                arguments: vec![
+                    Argument::Named("child_stack", Box::new(Argument::Null)),
+                    Argument::Named(
+                        "flags",
+                        Box::new(Argument::Enum(
+                            "CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD"
+                        ))
+                    ),
+                    Argument::Named(
+                        "child_tidptr",
+                        Box::new(Argument::Pointer("0x7f9f93f88a10"))
+                    ),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(337_653)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"1316971 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0} => {parent_tid=[1343642]}, 88) = 1343642",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "clone3",
-            arguments: vec![
-                Argument::WrittenStructure(
-                    "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}",
-                    "{parent_tid=[1343642]}"
-                ),
-                Argument::Numeric("88"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(1_343_642)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "clone3",
+                arguments: vec![
+                    Argument::WrittenStructure(
+                        "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}",
+                        "{parent_tid=[1343642]}"
+                    ),
+                    Argument::Numeric("88"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(1_343_642)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r#"1316971 execve("/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", ["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"], 0x7ffdf2244ed8 /* 218 vars */) = 0"#,
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "execve",
-            arguments: vec![
-                Argument::String(EncodedString::new(
-                    "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
-                )),
-                Argument::Structure(
-                    r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#
-                ),
-                Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */"),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "execve",
+                arguments: vec![
+                    Argument::String(EncodedString::new(
+                        "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
+                    )),
+                    Argument::Structure(
+                        r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#
+                    ),
+                    Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         let strace = String::from(
             r"1316971 waitid(P_PIDFD, 184, {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}, WEXITED, {ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}) = 0",
         );
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "waitid",
-            arguments: vec![
-                Argument::Enum("P_PIDFD"),
-                Argument::Numeric("184"),
-                Argument::Structure(
-                    "{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}"
-                ),
-                Argument::Enum("WEXITED"),
-                Argument::Structure(
-                    "{ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}"
-                ),
-            ],
-            outcome: CallOutcome::Complete {
-                retval: Retval::Success(0)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "waitid",
+                arguments: vec![
+                    Argument::Enum("P_PIDFD"),
+                    Argument::Numeric("184"),
+                    Argument::Structure(
+                        "{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}"
+                    ),
+                    Argument::Enum("WEXITED"),
+                    Argument::Structure(
+                        "{ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}"
+                    ),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
             }
-        });
+        );
 
         Ok(())
     }
@@ -1193,10 +1280,13 @@ mod tests {
         assert_eq!(v, vec![0, 1, 255]);
         let strace = String::from(" dquote: \\\"  more text");
         let v = parse_encoded_string(&mut strace.as_str()).unwrap();
-        assert_eq!(v, vec![
-            32, 100, 113, 117, 111, 116, 101, 58, 32, 34, 32, 32, 109, 111, 114, 101, 32, 116, 101,
-            120, 116
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                32, 100, 113, 117, 111, 116, 101, 58, 32, 34, 32, 32, 109, 111, 114, 101, 32, 116,
+                101, 120, 116
+            ]
+        );
     }
 
     #[test]
@@ -1215,47 +1305,56 @@ mod tests {
         let strace = String::from(r#"1316971 <... read resumed>"abc"..., 1140) = 792"#);
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
 
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "read",
-            arguments: vec![
-                Argument::PartialString(EncodedString::new("abc")),
-                Argument::Numeric("1140")
-            ],
-            outcome: CallOutcome::Resumed {
-                retval: Retval::Success(792)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "read",
+                arguments: vec![
+                    Argument::PartialString(EncodedString::new("abc")),
+                    Argument::Numeric("1140")
+                ],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Success(792)
+                }
             }
-        });
+        );
 
         let strace =
             String::from("1316971 <... clone resumed>, child_tidptr=0x7f9f93f88a10) = 337654");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "clone",
-            arguments: vec![Argument::Named(
-                "child_tidptr",
-                Box::new(Argument::Pointer("0x7f9f93f88a10"))
-            ),],
-            outcome: CallOutcome::Resumed {
-                retval: Retval::Success(337_654)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "clone",
+                arguments: vec![Argument::Named(
+                    "child_tidptr",
+                    Box::new(Argument::Pointer("0x7f9f93f88a10"))
+                ),],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Success(337_654)
+                }
             }
-        });
+        );
 
         let strace = String::from("1316971 <... clone3 resumed> => {parent_tid=[0]}, 88) = 15620");
         let tokenized = tokenize_syscall(&mut strace.as_str())?;
 
-        assert_eq!(tokenized, SyscallSegment {
-            pid: "1316971",
-            function: "clone3",
-            arguments: vec![
-                Argument::WrittenStructureResumed("{parent_tid=[0]}"),
-                Argument::Numeric("88")
-            ],
-            outcome: CallOutcome::Resumed {
-                retval: Retval::Success(15_620)
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "1316971",
+                function: "clone3",
+                arguments: vec![
+                    Argument::WrittenStructureResumed("{parent_tid=[0]}"),
+                    Argument::Numeric("88")
+                ],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Success(15_620)
+                }
             }
-        });
+        );
 
         Ok(())
     }
@@ -1264,27 +1363,36 @@ mod tests {
     fn test_parse_proc_exit() {
         let strace = String::from("1316971 +++ exited with 0 +++");
         let exit = parse_proc_exit(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, ProcessExit {
-            pid: "1316971",
-            exit_code: "0"
-        });
+        assert_eq!(
+            exit,
+            ProcessExit {
+                pid: "1316971",
+                exit_code: "0"
+            }
+        );
     }
 
     #[test]
     fn test_parse_proc_killed() {
         let strace = String::from("1316971 +++ killed by SIGKILL +++");
         let exit = parse_proc_killed(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, ProcessExit {
-            pid: "1316971",
-            exit_code: "-1"
-        });
+        assert_eq!(
+            exit,
+            ProcessExit {
+                pid: "1316971",
+                exit_code: "-1"
+            }
+        );
 
         let strace = String::from("4182469 +++ killed by SIGABRT (core dumped) +++");
         let exit = parse_proc_killed(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, ProcessExit {
-            pid: "4182469",
-            exit_code: "-1"
-        });
+        assert_eq!(
+            exit,
+            ProcessExit {
+                pid: "4182469",
+                exit_code: "-1"
+            }
+        );
     }
 
     #[test]
@@ -1293,17 +1401,23 @@ mod tests {
             "337651 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=337653, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---",
         );
         let exit = parse_signal(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, SignalRecv {
-            pid: "337651",
-            signal: "SIGCHLD"
-        });
+        assert_eq!(
+            exit,
+            SignalRecv {
+                pid: "337651",
+                signal: "SIGCHLD"
+            }
+        );
 
         let strace = String::from("337651 --- stopped by SIGURG ---");
         let exit = parse_signal(&mut strace.as_str()).unwrap();
-        assert_eq!(exit, SignalRecv {
-            pid: "337651",
-            signal: "SIGURG"
-        });
+        assert_eq!(
+            exit,
+            SignalRecv {
+                pid: "337651",
+                signal: "SIGURG"
+            }
+        );
     }
 
     #[test]

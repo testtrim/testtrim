@@ -367,8 +367,13 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
     });
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
-        ])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -539,8 +544,13 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
     });
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
-        ])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -681,8 +691,13 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
     child_data.add_existing_test(test2.clone());
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
-        ])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -760,8 +775,13 @@ pub async fn remove_file_references_in_child(db: impl CoverageDatabase) {
     child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &child_data, "c2", Some("c1"), &[
-        ])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &child_data,
+            "c2",
+            Some("c1"),
+            &[],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -822,16 +842,22 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
     });
 
     let result = db
-        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &saved_data, "c1", None, &[
-            Tag {
-                key: String::from("platform"),
-                value: String::from("windows"),
-            },
-            Tag {
-                key: String::from("database"),
-                value: String::from("postgresql"),
-            },
-        ])
+        .save_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &saved_data,
+            "c1",
+            None,
+            &[
+                Tag {
+                    key: String::from("platform"),
+                    value: String::from("windows"),
+                },
+                Tag {
+                    key: String::from("database"),
+                    value: String::from("postgresql"),
+                },
+            ],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
 
@@ -843,16 +869,20 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
     assert!(result.is_none()); // should not load as we provided mismatching tags
 
     let result = db
-        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[
-            Tag {
-                key: String::from("platform"),
-                value: String::from("linux"),
-            },
-            Tag {
-                key: String::from("database"),
-                value: String::from("postgresql"),
-            },
-        ])
+        .read_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            "c1",
+            &[
+                Tag {
+                    key: String::from("platform"),
+                    value: String::from("linux"),
+                },
+                Tag {
+                    key: String::from("database"),
+                    value: String::from("postgresql"),
+                },
+            ],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();
@@ -861,16 +891,20 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
     // the order of the tags is reversed, but expected to be loaded successfully -- the tag order is irrelevant (should
     // probably be a HashSet for clarity?)
     let result = db
-        .read_coverage_data::<RustTestPlatform>("testtrim-tests", "c1", &[
-            Tag {
-                key: String::from("database"),
-                value: String::from("postgresql"),
-            },
-            Tag {
-                key: String::from("platform"),
-                value: String::from("windows"),
-            },
-        ])
+        .read_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            "c1",
+            &[
+                Tag {
+                    key: String::from("database"),
+                    value: String::from("postgresql"),
+                },
+                Tag {
+                    key: String::from("platform"),
+                    value: String::from("windows"),
+                },
+            ],
+        )
         .await;
     assert!(result.is_ok(), "result = {result:?}");
     let result = result.unwrap();

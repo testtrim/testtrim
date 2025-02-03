@@ -384,19 +384,22 @@ mod tests {
         };
         assert_eq!(t.pid(), "337651");
         assert_eq!(t.function(), "clone");
-        assert_eq!(*t.arguments(), vec![
-            &Argument::Named("child_stack", Box::new(Argument::Null)),
-            &Argument::Named(
-                "flags",
-                Box::new(Argument::Enum(
-                    "CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD"
-                ))
-            ),
-            &Argument::Named(
-                "child_tidptr",
-                Box::new(Argument::Pointer("0x7f9f93f88a10"))
-            ),
-        ]);
+        assert_eq!(
+            *t.arguments(),
+            vec![
+                &Argument::Named("child_stack", Box::new(Argument::Null)),
+                &Argument::Named(
+                    "flags",
+                    Box::new(Argument::Enum(
+                        "CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD"
+                    ))
+                ),
+                &Argument::Named(
+                    "child_tidptr",
+                    Box::new(Argument::Pointer("0x7f9f93f88a10"))
+                ),
+            ]
+        );
         assert_eq!(*t.retval(), Retval::Success(337_654));
 
         Ok(())
@@ -417,13 +420,16 @@ mod tests {
         };
         assert_eq!(t.pid(), "337652");
         assert_eq!(t.function(), "clone3");
-        assert_eq!(*t.arguments(), vec![
-            &Argument::WrittenStructure(
-                "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f67099ff990, parent_tid=0x7f67099ff990, exit_signal=0, stack=0x7f67091ff000, stack_size=0x7fff80, tls=0x7f67099ff6c0}",
-                "{parent_tid=[0]}"
-            ),
-            &Argument::Numeric("88"),
-        ]);
+        assert_eq!(
+            *t.arguments(),
+            vec![
+                &Argument::WrittenStructure(
+                    "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f67099ff990, parent_tid=0x7f67099ff990, exit_signal=0, stack=0x7f67091ff000, stack_size=0x7fff80, tls=0x7f67099ff6c0}",
+                    "{parent_tid=[0]}"
+                ),
+                &Argument::Numeric("88"),
+            ]
+        );
         assert_eq!(*t.retval(), Retval::Success(15_620));
 
         Ok(())
