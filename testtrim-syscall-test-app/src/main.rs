@@ -11,7 +11,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use dns_protocol::{Flags, Message, Question, ResourceRecord, ResourceType};
+use dns_protocol::{Flags, Message, Question, ResourceRecord, ResourceType, ResponseCode};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -275,71 +275,91 @@ fn access_network() -> Result<(), std::io::Error> {
 ///
 /// Network access must be successful for this test case to be accurate.
 fn access_network_multithread() -> Result<(), std::io::Error> {
-    // Test #1 & #2: UDP access and DNS resolution with shared threading:
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.connect("1.1.1.1:53")?;
-    let mut buf = vec![0; 1024];
-    let mut questions = [Question::new("example.com", ResourceType::A, 1)];
-    let mut answers = [ResourceRecord::default()];
-    let message = Message::new(
-        rand::random(),
-        Flags::default(),
-        &mut questions,
-        &mut answers,
-        &mut [],
-        &mut [],
-    );
-    assert!(message.space_needed() <= buf.len());
-    let msg_len = message.write(&mut buf).expect("message.write");
-    // Share `socket` into another thread, requiring syscall tracing to be able to follow the shared socket:
-    let (mut buf, socket) = thread::spawn(move || {
-        let bytes_sent = socket.send(&buf[..msg_len]).unwrap();
-        assert_eq!(bytes_sent, msg_len);
-        (buf, socket)
-    })
-    .join()
-    .unwrap();
-    // Throw it to one other thread for a recv.
-    let (buf, bytes_recvd) = thread::spawn(move || {
-        let bytes_recvd = socket.recv(&mut buf).unwrap();
-        (buf, bytes_recvd)
-    })
-    .join()
-    .unwrap();
-    let mut questions = [dns_protocol::Question::default(); 1];
-    let mut answers = [dns_protocol::ResourceRecord::default(); 10];
-    let mut authorities = [dns_protocol::ResourceRecord::default(); 10];
-    let mut additional = [dns_protocol::ResourceRecord::default(); 10];
-    let binding = buf[..bytes_recvd].to_vec();
-    let message = dns_protocol::Message::read(
-        &binding,
-        &mut questions,
-        &mut answers,
-        &mut authorities,
-        &mut additional,
-    )
-    .unwrap();
-
-    // Test #3: TCP access to example.com:80
-    for answer in message.answers() {
-        if let dns_protocol::ResourceType::A = answer.ty() {
-            let addr = answer.data().try_into().map(u32::from_be_bytes).unwrap();
-            let addr = Ipv4Addr::from_bits(addr);
-            let mut stream = TcpStream::connect(SocketAddrV4::new(addr, 80))?;
-
-            // Throw it to another thread for a write.
-            let _stream = thread::spawn(move || {
-                let msg = "GET / HTTP/1.1\nHost: example.com\n\n".as_bytes();
-                let bytes_sent = stream.write(msg).unwrap();
-                assert_eq!(bytes_sent, msg.len());
-                stream
-            })
-            .join()
-            .unwrap();
-
-            // One connection is plenty.
-            break;
+    let mut attempt_counter = 0;
+    loop {
+        attempt_counter += 1;
+        if attempt_counter > 5 {
+            panic!("aborting after multiple retries");
         }
+
+        // Test #1 & #2: UDP access and DNS resolution with shared threading:
+        let socket = UdpSocket::bind("0.0.0.0:0")?;
+        socket.connect("1.1.1.1:53")?;
+        let mut buf = vec![0; 1024];
+        let mut questions = [Question::new("example.com", ResourceType::A, 1)];
+        let mut answers = [ResourceRecord::default()];
+        let message = Message::new(
+            rand::random(),
+            Flags::default(),
+            &mut questions,
+            &mut answers,
+            &mut [],
+            &mut [],
+        );
+        assert!(message.space_needed() <= buf.len());
+        let msg_len = message.write(&mut buf).expect("message.write");
+        // Share `socket` into another thread, requiring syscall tracing to be able to follow the shared socket:
+        let (mut buf, socket) = thread::spawn(move || {
+            let bytes_sent = socket.send(&buf[..msg_len]).unwrap();
+            assert_eq!(bytes_sent, msg_len);
+            (buf, socket)
+        })
+        .join()
+        .unwrap();
+        // Throw it to one other thread for a recv.
+        let (buf, bytes_recvd) = thread::spawn(move || {
+            let bytes_recvd = socket.recv(&mut buf).unwrap();
+            (buf, bytes_recvd)
+        })
+        .join()
+        .unwrap();
+        let mut questions = [dns_protocol::Question::default(); 1];
+        let mut answers = [dns_protocol::ResourceRecord::default(); 10];
+        let mut authorities = [dns_protocol::ResourceRecord::default(); 10];
+        let mut additional = [dns_protocol::ResourceRecord::default(); 10];
+        let binding = buf[..bytes_recvd].to_vec();
+        let message = dns_protocol::Message::read(
+            &binding,
+            &mut questions,
+            &mut answers,
+            &mut authorities,
+            &mut additional,
+        )
+        .unwrap();
+
+        if message.flags().response_code() == ResponseCode::ServerFailure {
+            println!("ServerFailure on DNS request; retrying.");
+            continue;
+        }
+
+        // Test #3: TCP access to example.com:80
+        let mut success = false;
+        for answer in message.answers() {
+            if let dns_protocol::ResourceType::A = answer.ty() {
+                let addr = answer.data().try_into().map(u32::from_be_bytes).unwrap();
+                let addr = Ipv4Addr::from_bits(addr);
+                let mut stream = TcpStream::connect(SocketAddrV4::new(addr, 80))?;
+
+                // Throw it to another thread for a write.
+                let _stream = thread::spawn(move || {
+                    let msg = "GET / HTTP/1.1\nHost: example.com\n\n".as_bytes();
+                    let bytes_sent = stream.write(msg).unwrap();
+                    assert_eq!(bytes_sent, msg.len());
+                    stream
+                })
+                .join()
+                .unwrap();
+
+                // One connection is plenty.
+                success = true;
+                break;
+            }
+        }
+        if !success {
+            panic!("no answers for DNS? {:?}", message);
+        }
+
+        break;
     }
 
     Ok(())

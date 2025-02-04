@@ -246,6 +246,7 @@ impl STraceSysTraceCommand {
                 let (pid, function) = match function_trace {
                     FunctionTrace::Function { pid, function } => (*pid, function),
                     FunctionTrace::Exit { pid } => {
+                        trace!("strace exit pid {pid:?}");
                         receptionist.remove_process(*pid);
                         continue;
                     }
@@ -258,6 +259,7 @@ impl STraceSysTraceCommand {
                         let tgid = *pid_to_tgid
                             .entry(pid)
                             .or_insert_with(|| ThreadGroupId(pid.0));
+                        trace!("strace exit thread group {tgid:?} {pid:?}");
                         for (other_pid, other_tgid) in &pid_to_tgid {
                             if *other_tgid == tgid {
                                 receptionist.remove_process(other_pid.0);
