@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
-use log::{debug, trace, warn};
+use log::{debug, error, trace, warn};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::WaitPidFlag;
 use nix::sys::wait::waitpid;
@@ -289,9 +289,34 @@ impl STraceSysTraceCommand {
                             }
                             OpenPath::RelativeToOpenDirFD(path_ref, relative_fd) => {
                                 let relative_fd = FileDescriptor(*relative_fd);
+                                #[allow(clippy::single_match_else)]
                                 match tgid_open_fd.entry(*tgid).or_default().get(&relative_fd) {
                                     Some(open_path) => open_path.join(path_ref),
                                     None => {
+                                        // We're going to return an error indicating that the request to open relative
+                                        // to `relative_fd` couldn't be handled because we don't know about the FD.  But
+                                        // I'm not sure why this might happen, so, help diagnose a race condition in
+                                        // output ordering by outputting recent and upcoming log lines:
+                                        error!(
+                                            "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
+                                        );
+                                        error!("previous trace output leading up to this error:");
+                                        for msg in most_recent_trace_output {
+                                            error!("previous: {msg:?}");
+                                        }
+                                        error!(
+                                            "outputting next 10 lines from trace read, if present:"
+                                        );
+                                        for i in 0..10 {
+                                            let next_line = reader.next_line().await?;
+                                            if let Some(next_line) = next_line {
+                                                error!("line {i}: {next_line:?}");
+                                            } else {
+                                                error!("line {i}: EOF");
+                                                break;
+                                            }
+                                        }
+                                        error!("current known FDs is {tgid_open_fd:?}");
                                         return Err(anyhow!(
                                             "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
                                         ));
