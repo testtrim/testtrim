@@ -75,19 +75,10 @@ impl ProcSynchronizer {
                 }
 
                 if let Function::Clone { child_pid, .. } = function {
-                    // FIXME: may be a bug here, if the child process exits before the clone resumes in the parent
-                    // process.  We'd get a FunctionTrace::Exit and we'd remove the known pid, but then we'd re-add it
-                    // here... but when since we already processed the child exit we're not expecting any more syscalls
-                    // from it unless the pid is reused, which would be exceedingly unlikely.
-                    self.known_pids.insert(*child_pid);
-
-                    let suppressed = self.suppressed.remove(child_pid);
-                    let mut retval = vec![output];
-                    if let Some(suppressed) = suppressed {
-                        debug!("releasing {} suppressed syscalls", suppressed.len());
-                        retval.extend(suppressed);
-                    }
-                    Ok(retval)
+                    let child_pid = *child_pid;
+                    let mut unsuppressed_calls = vec![output];
+                    self.release_pid(&mut unsuppressed_calls, child_pid);
+                    Ok(unsuppressed_calls)
                 } else {
                     Ok(vec![output])
                 }
@@ -104,13 +95,56 @@ impl ProcSynchronizer {
             }
         }
     }
+
+    fn release_pid(
+        &mut self,
+        unsuppressed_calls: &mut Vec<FunctionExtractorOutput>,
+        child_pid: i32,
+    ) {
+        // FIXME: may be a bug here, if the child process exits before the clone resumes in the parent process.  We'd
+        // get a FunctionTrace::Exit and we'd remove the known pid, but then we'd re-add it here... but when since we
+        // already processed the child exit we're not expecting any more syscalls from it unless the pid is reused,
+        // which would be exceedingly unlikely.
+        self.known_pids.insert(child_pid);
+
+        let suppressed = self.suppressed.remove(&child_pid);
+        if let Some(suppressed) = suppressed {
+            let mut addt_children: Vec<i32> = vec![];
+            // If I'm releasing suppressed calls, if any of them are Clone calls, then we also need to release their
+            // suppressed calls and mark their pid as known.  But the order of the unsuppressed calls should start with
+            // all the "most parent" process, so first gather the pids that we'll release next...
+            for x in &suppressed {
+                if let Some(FunctionTrace::Function {
+                    function: Function::Clone { child_pid, .. },
+                    ..
+                }) = x.borrow_function_trace()
+                {
+                    addt_children.push(*child_pid);
+                }
+            }
+            // Then add the current pid's calls to the output...
+            debug!(
+                "releasing {} suppressed syscalls and then {} other suppressed clones within",
+                suppressed.len(),
+                addt_children.len()
+            );
+            unsuppressed_calls.extend(suppressed);
+            // Then release any child pids:
+            for child in addt_children {
+                self.release_pid(unsuppressed_calls, child);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
 
-    use crate::sys_trace::strace::funcs::{Function, FunctionTrace};
+    use crate::sys_trace::strace::{
+        funcs::{Function, FunctionTrace, StringArgument},
+        tokenizer::EncodedString,
+    };
 
     use super::ProcSynchronizer;
 
@@ -186,6 +220,87 @@ mod tests {
             &Some(FunctionTrace::Function {
                 pid: 15620,
                 function: Function::Close { fd: 3 }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_release() -> Result<()> {
+        let mut fe = ProcSynchronizer::new();
+
+        // This test case is extracted from real-world output when starting a Go program -- which spawns some threads in
+        // succession at process startup.  The case identified here requires that when "releasing" a pid's syscalls, we
+        // also check if any of them are complete clone calls because we might need to release their new pid's stored
+        // syscalls as well.
+
+        // Prime w/ 55498
+        let t = fe.extract(String::from("55498 clone(child_stack=0xc00004c000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS, tls=0xc000088098) = 55624"))?;
+        assert_eq!(t.len(), 1);
+
+        let t = fe.extract(String::from("55498 clone(child_stack=0xc0000a4000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS <unfinished ...>"))?;
+        assert_eq!(t.len(), 1); // incomplete
+        let syscall = &t[0];
+        assert_eq!(syscall.borrow_function_trace(), &None);
+
+        let t = fe.extract(String::from("55626 clone(child_stack=0xc0000a0000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS, tls=0xc0000a4098) = 55631"))?;
+        assert_eq!(t.len(), 0); // 55626's clone is complete, but will be suppressed because parent hasn't returned
+
+        let t = fe.extract(String::from(
+            "55631 read(9, \"\\x01\", 1)                = 1",
+        ))?;
+        assert_eq!(t.len(), 0); // 55631 is an up and running process, but clone syscall from it's parent's parent hasn't completed yet to allow the parental relationship to be established
+
+        let t = fe.extract(String::from(
+            "55498 <... clone resumed>, tls=0xc000088798) = 55626",
+        ))?;
+        assert_eq!(t.len(), 3); // should release 55626's syscall AND 55631's syscall...
+        let syscall = &t[0];
+        assert_eq!(
+            syscall.borrow_function_trace(),
+            &Some(FunctionTrace::Function {
+                pid: 55498,
+                function: Function::Clone {
+                    child_pid: 55626,
+                    thread: true
+                }
+            })
+        );
+        let syscall = &t[1];
+        assert_eq!(
+            syscall.borrow_function_trace(),
+            &Some(FunctionTrace::Function {
+                pid: 55626,
+                function: Function::Clone {
+                    child_pid: 55631,
+                    thread: true
+                }
+            })
+        );
+        let syscall = &t[2];
+        assert_eq!(
+            syscall.borrow_function_trace(),
+            &Some(FunctionTrace::Function {
+                pid: 55631,
+                function: Function::Read {
+                    fd: 9,
+                    data: StringArgument::Complete(&EncodedString::new("\\x01")),
+                }
+            })
+        );
+
+        let t = fe.extract(String::from("55631 clone(child_stack=0xc000198000, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS, tls=0xc000180098) = 55644"))?;
+        assert_eq!(t.len(), 1); // should be released immediately because 55631 was registered
+        let syscall = &t[0];
+        assert_eq!(
+            syscall.borrow_function_trace(),
+            &Some(FunctionTrace::Function {
+                pid: 55631,
+                function: Function::Clone {
+                    child_pid: 55644,
+                    thread: true
+                }
             })
         );
 
