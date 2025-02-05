@@ -12,6 +12,7 @@ repository = "https://codeberg.org/testtrim/testtrim"
 license = "GPL-3.0-or-later"
 categories = ["development-tools::testing", "command-line-utilities"]
 rust-version = "1.85" # pushed for async_closures stabilization
+readme = "../README.md"
 
 [dependencies]
 actix-web = { workspace = true }
