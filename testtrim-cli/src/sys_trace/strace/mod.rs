@@ -479,9 +479,24 @@ impl STraceSysTraceCommand {
                                 );
                             }
                             None => {
-                                error!(
+                                // FIXME: this is currently an error because there is good evidence that the strace
+                                // implementation is missing something in tracing process ids, and an error helps detect
+                                // it early.  In reality it is possible that a test could do this action -- sending a
+                                // signal to a process that isn't part of the test's process tree -- and that would feel
+                                // unusual but could be normal operating.  Once the tracing problem is fixed up this
+                                // should be changed away from an error condition -- possibly a warning about external
+                                // dependency untraced.
+                                //
+                                // To help diagnose this problem a bunch of diagnostic output is included in this error.
+                                error!("previous trace output leading up to this error:");
+                                for msg in most_recent_trace_output {
+                                    error!("previous: {msg:?}");
+                                }
+                                let tgid = *tgid; // drop mutable borrow of pid_to_tgid
+                                error!("current known TGIDs is {pid_to_tgid:?}");
+                                return Err(anyhow!(
                                     "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we did not have it tracked; could be an external process but why would testing be signaling it?"
-                                );
+                                ));
                             }
                         }
                     }
