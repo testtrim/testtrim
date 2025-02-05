@@ -83,6 +83,13 @@ pub enum Function<'a> {
     Execve {
         arg0: PathBuf,
     },
+    ThreadSignal {
+        /// Thread group ID that the signal is being sent to.
+        tgid: i32,
+        /// Specific thread within the thread group that the signal is being sent to.
+        pid: i32,
+        signal: &'a str,
+    },
 }
 
 lazy_static! {
@@ -205,10 +212,11 @@ impl FunctionExtractor {
             "connect" => Self::extract_connect(syscall.arguments())?, // may have None
             "recvfrom" => Some(Self::extract_recvfrom(syscall.arguments())?),
             "execve" => Some(Self::extract_execve(syscall.arguments())?),
+            "tgkill" => Some(Self::extract_tgkill(syscall)?),
 
             // some syscalls we receive because we trace "%process" (for completeness if anything comes along to
             // create new processes), but can be dropped because they aren't relevant to our current needs:
-            "wait4" | "kill" | "tgkill" | "waitid" | "pidfd_send_signal" => None,
+            "wait4" | "kill" | "waitid" | "pidfd_send_signal" => None,
 
             other => {
                 return Err(anyhow!("unexpected syscall: {other:?}"));
@@ -334,6 +342,18 @@ impl FunctionExtractor {
             socket_addr: s,
             socket_fd,
         }))
+    }
+
+    fn extract_tgkill<T: CompleteSyscall>(syscall: &T) -> Result<Function<'_>> {
+        ensure!(
+            syscall.arguments().len() == 3,
+            "expected 3 argument to read, but arguments were: {:?}",
+            syscall.arguments()
+        );
+        let tgid = Self::numeric(syscall.arguments(), 0)?;
+        let pid = Self::numeric(syscall.arguments(), 1)?;
+        let signal = Self::enum_text(syscall.arguments(), 2)?;
+        Ok(Function::ThreadSignal { tgid, pid, signal })
     }
 
     fn parse_socket_structure(data: &str) -> Result<Option<UnifiedSocketAddr>> {
@@ -834,6 +854,26 @@ mod tests {
     }
 
     #[test]
+    fn tgkill() -> Result<()> {
+        let mut fe = FunctionExtractor::new();
+
+        let t = fe.extract(String::from(r"15779 tgkill(15769, 15827, SIGURG)      = 0"))?;
+        assert_eq!(
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 15_779,
+                function: Function::ThreadSignal {
+                    tgid: 15769,
+                    pid: 15827,
+                    signal: "SIGURG",
+                }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn ignored_syscalls() -> Result<()> {
         let mut fe = FunctionExtractor::new();
 
@@ -844,11 +884,6 @@ mod tests {
 
         let t = fe.extract(String::from(
             r"1316971 kill(4086639, SIGTERM)                  = 0",
-        ))?;
-        assert_eq!(*t.borrow_function_trace(), None);
-
-        let t = fe.extract(String::from(
-            r"1316971 tgkill(4143934, 4144060, SIGUSR1)       = 0",
         ))?;
         assert_eq!(*t.borrow_function_trace(), None);
 

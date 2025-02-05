@@ -317,6 +317,8 @@ impl STraceSysTraceCommand {
                                             }
                                         }
                                         error!("current known FDs is {tgid_open_fd:?}");
+                                        let tgid = *tgid; // drop mutable borrow of pid_to_tgid
+                                        error!("current known TGIDs is {pid_to_tgid:?}");
                                         return Err(anyhow!(
                                             "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
                                         ));
@@ -452,6 +454,37 @@ impl STraceSysTraceCommand {
                     }
                     // Nothing to do with execve.
                     Function::Execve { .. } => {}
+                    Function::ThreadSignal {
+                        tgid,
+                        pid,
+                        signal: _,
+                    } => {
+                        // We're not *actually* interested in ThreadSignal (eg. tgkill) because we have no interest in
+                        // signals yet.  But it does offer us a diagnostic -- the syscall succeeded in sending a signal
+                        // to tgid/pid, and therefore we know that pid is a process in tgid, and we can use that
+                        // knowledge to assert we haven't made any mistake in our thread tracking.
+
+                        let actual_pid = ProcessId(*pid);
+                        let my_tgid = pid_to_tgid.get(&actual_pid);
+                        match my_tgid {
+                            Some(ThreadGroupId(x)) if x == tgid => {
+                                // Expected case
+                                trace!(
+                                    "Verified that pid {actual_pid:?} is part of thread group {tgid:?}"
+                                );
+                            }
+                            Some(ThreadGroupId(x)) => {
+                                error!(
+                                    "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we had it tracked as {x:?}"
+                                );
+                            }
+                            None => {
+                                error!(
+                                    "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we did not have it tracked; could be an external process but why would testing be signaling it?"
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }

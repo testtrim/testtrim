@@ -35,7 +35,7 @@ enum Commands {
     AccessNetwork,
 
     /// Access network resources while free-threading and sharing the network sockets; intended to exercise DNS
-    /// resolution cases documented in https://codeberg.org/testtrim/testtrim/issues/234, but in short, where the
+    /// resolution cases documented in <https://codeberg.org/testtrim/testtrim/issues/234>, but in short, where the
     /// address of a socket is identifiable only in tracing on one thread, and the network traffic is identified on
     /// another thread, requiring understanding of shared thread file-descriptors and context.
     AccessNetworkMultithreaded,
