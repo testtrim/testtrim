@@ -185,7 +185,7 @@ impl STraceSysTraceCommand {
         let mut tgid_open_fd: HashMap<ThreadGroupId, HashMap<FileDescriptor, PathBuf>> =
             HashMap::new();
 
-        let mut most_recent_trace_output = Vec::with_capacity(100);
+        let mut most_recent_trace_output = Vec::with_capacity(1000);
 
         let mut line_count = 0;
         loop {
@@ -216,7 +216,7 @@ impl STraceSysTraceCommand {
             line_count += 1;
 
             most_recent_trace_output.push(line.clone());
-            while most_recent_trace_output.len() > 99 {
+            while most_recent_trace_output.len() > 999 {
                 most_recent_trace_output.remove(0);
             }
 
@@ -488,6 +488,9 @@ impl STraceSysTraceCommand {
                                 // dependency untraced.
                                 //
                                 // To help diagnose this problem a bunch of diagnostic output is included in this error.
+                                error!(
+                                    "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we did not have it tracked; could be an external process but why would testing be signaling it?"
+                                );
                                 error!("previous trace output leading up to this error:");
                                 for msg in most_recent_trace_output {
                                     error!("previous: {msg:?}");
