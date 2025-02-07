@@ -4,7 +4,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use funcs::{Function, FunctionTrace, OpenPath, StringArgument};
-use log::{debug, error, trace, warn};
+use log::{debug, error, trace};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::WaitPidFlag;
 use nix::sys::wait::waitpid;
@@ -23,7 +23,6 @@ use tokio::{
     fs::File,
     io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt as _, BufReader, unix::AsyncFd},
     process::Command,
-    time::timeout,
 };
 
 use crate::{errors::SubcommandErrors, sys_trace::trace::SocketCaptureState};
@@ -185,40 +184,9 @@ impl STraceSysTraceCommand {
         let mut tgid_open_fd: HashMap<ThreadGroupId, HashMap<FileDescriptor, PathBuf>> =
             HashMap::new();
 
-        let mut most_recent_trace_output = Vec::with_capacity(1000);
-
         let mut line_count = 0;
-        loop {
-            // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, the simple path of
-            // `while let Some(line) = reader.next_line().await?` has been replaced with a timeout-monitoring future,
-            // and a buffer of recent trace output, as this is one of the likely places where we'll catch something
-            // weird that could cause #328.  This should be removed after #328 is diagnosed and solved.  30s timeout is
-            // arbitrary.
-            let timeout_read =
-                timeout(std::time::Duration::from_secs(30), reader.next_line()).await;
-            let line = match timeout_read {
-                Ok(Ok(Some(line))) => line,
-                Ok(Ok(None)) => {
-                    break;
-                }
-                Ok(Err(e)) => {
-                    return Err(e);
-                }
-                Err(_) => {
-                    // timeout; let's log the most recent messages
-                    for msg in most_recent_trace_output {
-                        warn!("recent trace output: {msg:?}");
-                    }
-                    return Err(anyhow!("LineReader.next_line timed out after 30 seconds"));
-                }
-            };
-
+        while let Some(line) = reader.next_line().await? {
             line_count += 1;
-
-            most_recent_trace_output.push(line.clone());
-            while most_recent_trace_output.len() > 999 {
-                most_recent_trace_output.remove(0);
-            }
 
             for function_extractor_output in extractor
                 .extract(line)
@@ -300,22 +268,6 @@ impl STraceSysTraceCommand {
                                         error!(
                                             "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
                                         );
-                                        error!("previous trace output leading up to this error:");
-                                        for msg in most_recent_trace_output {
-                                            error!("previous: {msg:?}");
-                                        }
-                                        error!(
-                                            "outputting next 10 lines from trace read, if present:"
-                                        );
-                                        for i in 0..10 {
-                                            let next_line = reader.next_line().await?;
-                                            if let Some(next_line) = next_line {
-                                                error!("line {i}: {next_line:?}");
-                                            } else {
-                                                error!("line {i}: EOF");
-                                                break;
-                                            }
-                                        }
                                         error!("current known FDs is {tgid_open_fd:?}");
                                         let tgid = *tgid; // drop mutable borrow of pid_to_tgid
                                         error!("current known TGIDs is {pid_to_tgid:?}");
@@ -453,70 +405,14 @@ impl STraceSysTraceCommand {
                         // capturing, so it will be common and normal for (pid, fd) to not be present.
                     }
                     // Nothing to do with execve.
-                    Function::Execve { .. } => {}
-                    Function::ThreadSignal {
-                        tgid,
-                        pid,
-                        signal: _,
-                    } => {
-                        // We're not *actually* interested in ThreadSignal (eg. tgkill) because we have no interest in
-                        // signals yet.  But it does offer us a diagnostic -- the syscall succeeded in sending a signal
-                        // to tgid/pid, and therefore we know that pid is a process in tgid, and we can use that
-                        // knowledge to assert we haven't made any mistake in our thread tracking.
-
-                        let actual_pid = ProcessId(*pid);
-                        let my_tgid = pid_to_tgid.get(&actual_pid);
-                        match my_tgid {
-                            Some(ThreadGroupId(x)) if x == tgid => {
-                                // Expected case
-                                trace!(
-                                    "Verified that pid {actual_pid:?} is part of thread group {tgid:?}"
-                                );
-                            }
-                            Some(ThreadGroupId(x)) => {
-                                error!(
-                                    "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we had it tracked as {x:?}"
-                                );
-                            }
-                            None => {
-                                // FIXME: this is currently an error because there is good evidence that the strace
-                                // implementation is missing something in tracing process ids, and an error helps detect
-                                // it early.  In reality it is possible that a test could do this action -- sending a
-                                // signal to a process that isn't part of the test's process tree -- and that would feel
-                                // unusual but could be normal operating.  Once the tracing problem is fixed up this
-                                // should be changed away from an error condition -- possibly a warning about external
-                                // dependency untraced.
-                                //
-                                // To help diagnose this problem a bunch of diagnostic output is included in this error.
-                                error!(
-                                    "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we did not have it tracked; could be an external process but why would testing be signaling it?"
-                                );
-                                error!("previous trace output leading up to this error:");
-                                for msg in most_recent_trace_output {
-                                    error!("previous: {msg:?}");
-                                }
-                                let tgid = *tgid; // drop mutable borrow of pid_to_tgid
-                                error!("current known TGIDs is {pid_to_tgid:?}");
-                                return Err(anyhow!(
-                                    "process {actual_pid:?} was supposed to be part of thread group {tgid}, but we did not have it tracked; could be an external process but why would testing be signaling it?"
-                                ));
-                            }
-                        }
-                    }
+                    Function::Execve { .. } |
+                    // ThreadSignal was once useful as a diagnostic, but currently is unhandled.
+                    Function::ThreadSignal { .. } => {}
                 }
             }
         }
 
-        // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, the simple path of
-        // `receptionist.shutdown().await`` has been replaced with a timeout-monitoring future. This should be removed
-        // after #328 is diagnosed and solved.  30s timeout is arbitrary.  This isn't likely to be a cause of #328.
-        if timeout(std::time::Duration::from_secs(30), receptionist.shutdown())
-            .await
-            .is_err()
-        {
-            return Err(anyhow!("receptionist shutdown timed out after 30 seconds"));
-        }
-        // receptionist.shutdown().await;
+        receptionist.shutdown().await;
 
         trace.try_into()
     }
@@ -675,11 +571,8 @@ impl STraceSysTraceCommand {
                 debug!("trace_command_remotely found child exit code: {exit_code:?}");
 
                 // Finish collecting any output data
-                //
-                // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, added timeouts
-                // here.  Not likely to be relevant, and 30s is arbitrary.  Should probably be removed.
-                let stdout = timeout(std::time::Duration::from_secs(30), stdout_join).await???;
-                let stderr = timeout(std::time::Duration::from_secs(30), stderr_join).await???;
+                let stdout = stdout_join.await??;
+                let stderr = stderr_join.await??;
 
                 debug!("completed subprocess!  exit_code = {exit_code:?}");
                 let output = Output {
@@ -688,27 +581,7 @@ impl STraceSysTraceCommand {
                     stderr,
                 };
 
-                // FIXME: as part of diagnostics for https://codeberg.org/testtrim/testtrim/issues/328, the simple path
-                // of `trace_reader.await??` has been replaced with a timeout-monitoring future. This should be removed
-                // after #328 is diagnosed and solved.  30s timeout is arbitrary.
-                let join_result = timeout(std::time::Duration::from_secs(30), trace_reader).await;
-                let trace = match join_result {
-                    Ok(Ok(Ok(trace))) => trace,
-                    Ok(Ok(Err(e))) => {
-                        return Err(anyhow!(
-                            "error occurred in read_strace_output_from_trace_client: {e:?}"
-                        ));
-                    }
-                    Ok(Err(e)) => {
-                        return Err(anyhow!(
-                            "error occurred in join from read_strace_output_from_trace_client: {e:?}"
-                        ));
-                    }
-                    Err(_) => {
-                        return Err(anyhow!("timeout in trace_reader join completion"));
-                    }
-                };
-                // let trace = trace_reader.await??;
+                let trace = trace_reader.await??;
 
                 Ok((output, trace))
             }
