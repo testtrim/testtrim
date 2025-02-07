@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow};
 use winnow::ascii::{dec_int, digit1, hex_digit1, multispace1};
-use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated};
-use winnow::token::{literal, none_of, one_of, rest, take_until};
+use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated, trace};
+use winnow::token::{literal, one_of, rest, take_until};
 use winnow::token::{take_till, take_while};
 use winnow::{ModalResult, Parser};
 
@@ -42,6 +42,7 @@ impl<'a> EncodedString<'a> {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, PartialEq)]
 pub enum Argument<'a> {
     /// Argument in the form of double-quote delimited string, eg. "contents".  The value is the interior of the string
@@ -57,11 +58,15 @@ pub enum Argument<'a> {
     Pointer(&'a str),
     /// A pointer (0x...) with some comment following it; eg. "0x7ffdf2244ed8 /* 218 vars */"
     PointerWithComment(&'a str, &'a str),
-    /// Structure: {...} or [...]
+    /// Structure: {...} or [...].  May be prefixed with ~ when it is a bitset which is "so full that printing out the
+    /// unset elements is more valuable".
     Structure(&'a str),
-    /// This represents a struct that was passed into a syscall and then modified by the syscall; strace represents it
-    /// as {...} => {..} where the first part is the input and the second is the changes made.
-    WrittenStructure(&'a str, &'a str),
+    /// This represents a value that was passed into a syscall and then modified by the syscall; strace represents it as
+    /// {...} => {...} where the first part is the input and the second is the changes made.
+    WrittenArgument(Box<Argument<'a>>, Box<Argument<'a>>),
+    /// Same logical meaning as `WrittenArgument` but with a different storage, used for a non-owned Argument which
+    /// combines an `Argument` and a `WrittenArgumentResumed` in Sequencer.
+    WrittenArgumentReference(&'a Argument<'a>, &'a Argument<'a>),
     /// In the event that a `WrittenStructure` and a `CallOutcome::Resumed` occur at the same time, only the "=> {..}"
     /// part of the argument will be present in the resumed strace line.
     ///
@@ -69,20 +74,38 @@ pub enum Argument<'a> {
     /// syscall case -- to compensate for this, the `Sequencer` must merge any Structure arguments followed by a
     /// `WrittenStructureResumed` argument.  At this time I don't know if multiple of these are possible at once which
     /// would be more confusing; but I've only seen a case for a signle.
-    WrittenStructureResumed(&'a str),
+    WrittenArgumentResumed(Box<Argument<'a>>),
     /// Enum: `MSG_NOSIGNAL|MSG_NOSIGNAL`
     Enum(&'a str),
     //. Just "NULL"
     Null,
     /// Named argument; eg. `child_tidptr=0x7f9f93f88a10`, arg name will be tuple 0, value 1.
     Named(&'a str, Box<Argument<'a>>),
+    /// Function argument, eg. `inet_addr(\"127.0.0.1\")`, where `inet_addr` would be the name of the function that the
+    /// argument is decorated with.  The two fields are the function name and the entire argument range; arguments are
+    /// not exposed one-by-one currently.
+    FunctionArgument(&'a str, &'a str),
+    /// Argument in the form of `&sin6_addr` in the strace output.
+    VariableReference(&'a str),
+    /// The `wait4` syscall returns the status of the waited process in a format that describes which flags are set,
+    /// that looks like `[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]`.  This indicates that the process exited and had a
+    /// status code of 0.  I don't know if this format of strace output is used anywhere else... so naming it pretty
+    /// specifically...
+    WaitFlags(&'a str),
+    /// Some syscalls are output with arguments that are made easier to read, presumably when they must be made
+    /// multiples of a constant.  Example is `rlimit_cur=8192*1024`.  Matches the entire text since we don't currently
+    /// need to split it apart.
+    NumericWithConstant(&'a str),
+    /// Represents the output of `sched_getaffinity`, which contains a cpu set in the form `[0 1 2 3 4 5]`.
+    CpuSet(&'a str),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Retval<'a> {
     Success(i32),
-    Failure(i32, &'a str), // retval and error code
-    Restart(&'a str),      // "? ERESTARTSYS"
+    Failure(i32, &'a str),   // retval and error code
+    Restart(&'a str),        // "? ERESTARTSYS"
+    SuccessPointer(&'a str), // = 0x55ad8bba6000
 }
 
 #[derive(Debug, PartialEq)]
@@ -266,7 +289,7 @@ fn parse_resumed_call<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'
     let function_name = parse_function_name(input)?;
     let _ = literal(" resumed>").parse_next(input)?;
     let _ = opt(literal(", ")).parse_next(input)?; // sometimes "resumed>, ", somtimes straight into args -- can't quite see why it would be one or the other right now
-    let resumed = opt((parse_written_structure_resumed, opt(literal(", ")))).parse_next(input)?;
+    let resumed = opt((parse_written_argument_resumed, opt(literal(", ")))).parse_next(input)?;
     let mut arguments: Vec<Argument> =
         separated(0.., parse_argument, literal(", ")).parse_next(input)?;
     if let Some((resumed_arg, _)) = resumed {
@@ -349,31 +372,69 @@ pub fn parse_pid<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     digit1(input)
 }
 
+pub fn hex_address<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+    (literal("0x"), hex_digit1).take().parse_next(input)
+}
+
+pub fn enum_flags<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+    (
+        one_of(|c: char| c.is_ascii_uppercase() || c == '_'),
+        take_while(1.., |c: char| {
+            c.is_ascii_uppercase() || c == '_' || c == '|' || c.is_numeric()
+        }),
+    )
+        .take()
+        .parse_next(input)
+}
+
 fn parse_function_name<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
-    take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)
+    trace("parse_function_name", |input: &mut _| {
+        take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)
+    })
+    .parse_next(input)
 }
 
 fn parse_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    alt((
-        parse_named_argument,
-        parse_null_argument,
-        parse_enum_argument,
-        parse_pointer_with_comment_argument,
-        parse_pointer_argument,
-        parse_numeric_argument,
-        parse_partial_string_argument,
-        parse_string_argument,
-        parse_written_structure_argument,
-        parse_structure_argument,
-    ))
+    trace("parse_argument", |input: &mut _| {
+        alt((parse_written_argument, parse_argument_without_write)).parse_next(input)
+    })
+    .parse_next(input)
+}
+
+fn parse_argument_without_write<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    trace("parse_argument_without_write", |input: &mut _| {
+        alt((
+            parse_named_argument,
+            parse_null_argument,
+            parse_enum_argument,
+            parse_pointer_with_comment_argument,
+            parse_pointer_argument,
+            parse_numeric_with_constant_argument,
+            parse_numeric_argument,
+            parse_partial_string_argument,
+            parse_string_argument,
+            parse_cpuset_argument,
+            parse_structure_argument,
+            parse_function_argument,
+            parse_variable_reference_argument,
+            parse_wait_flags_argument,
+        ))
+        .parse_next(input)
+    })
     .parse_next(input)
 }
 
 fn parse_named_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let name = take_while(1.., |c: char| c.is_ascii_lowercase() || c == '_').parse_next(input)?;
-    let _ = literal("=").parse_next(input)?;
-    let arg = parse_argument(input)?;
-    Ok(Argument::Named(name, Box::new(arg)))
+    trace("parse_named_argument", |input: &mut _| {
+        let name = take_while(1.., |c: char| {
+            c.is_ascii_lowercase() || c.is_numeric() || c == '_'
+        })
+        .parse_next(input)?;
+        let _ = literal("=").parse_next(input)?;
+        let arg = parse_argument_without_write(input)?;
+        Ok(Argument::Named(name, Box::new(arg)))
+    })
+    .parse_next(input)
 }
 
 fn parse_null_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
@@ -382,14 +443,7 @@ fn parse_null_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
 }
 
 fn parse_enum_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let arg = (
-        one_of(|c: char| c.is_ascii_uppercase() || c == '_'),
-        take_while(1.., |c: char| {
-            c.is_ascii_uppercase() || c == '_' || c == '|' || c.is_numeric()
-        }),
-    )
-        .take()
-        .parse_next(input)?;
+    let arg = enum_flags(input)?;
     Ok(Argument::Enum(arg))
 }
 
@@ -413,7 +467,7 @@ fn parse_partial_string_argument<'i>(input: &mut &'i str) -> ModalResult<Argumen
 }
 
 fn parse_pointer_with_comment_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let pointer = (literal("0x"), hex_digit1).take().parse_next(input)?;
+    let pointer = hex_address(input)?;
     let _ = consume_whitespace(input)?;
     let comment = (literal("/*"), take_until(1.., "*/"), literal("*/"))
         .take()
@@ -422,59 +476,127 @@ fn parse_pointer_with_comment_argument<'i>(input: &mut &'i str) -> ModalResult<A
 }
 
 fn parse_pointer_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let something = (literal("0x"), hex_digit1).take().parse_next(input)?;
+    let something = hex_address(input)?;
     Ok(Argument::Pointer(something))
 }
 
-fn parse_written_structure_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let orig_struct = parse_structure_argument(input)?;
-    let Argument::Structure(orig_struct) = orig_struct else {
-        unreachable!()
-    };
-    let Argument::WrittenStructureResumed(upd_struct) = parse_written_structure_resumed(input)?
+fn parse_written_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    let orig_argument = parse_argument_without_write(input)?;
+    let Argument::WrittenArgumentResumed(upd_argument) = parse_written_argument_resumed(input)?
     else {
         unreachable!()
     };
-    Ok(Argument::WrittenStructure(orig_struct, upd_struct))
+    Ok(Argument::WrittenArgument(
+        Box::new(orig_argument),
+        upd_argument,
+    ))
 }
 
-fn parse_written_structure_resumed<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+fn parse_written_argument_resumed<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     let _ = literal(" => ").parse_next(input)?;
-    let upd_struct = parse_structure_argument(input)?;
-    let Argument::Structure(upd_struct) = upd_struct else {
-        unreachable!()
-    };
-    Ok(Argument::WrittenStructureResumed(upd_struct))
+    let upd_argument = parse_argument_without_write(input)?;
+    Ok(Argument::WrittenArgumentResumed(Box::new(upd_argument)))
 }
 
 fn parse_structure_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let structure = alt((nested_brackets, nested_braces)).parse_next(input)?;
+    let structure = (opt(literal("~")), alt((nested_brackets, nested_braces)))
+        .take()
+        .parse_next(input)?;
     Ok(Argument::Structure(structure))
 }
 
 fn nested_brackets<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
-    delimited(
-        literal("["),
-        repeat::<_, _, Vec<_>, _, _>(
-            0..,
-            alt((none_of(|c| c == '[' || c == ']').take(), nested_brackets)),
-        ),
-        literal("]"),
-    )
-    .take()
+    trace("nested_brackets", |input: &mut _| {
+        delimited(
+            literal("["),
+            separated::<_, _, Vec<_>, _, _, _, _>(0.., parse_argument, literal(", ")),
+            literal("]"),
+        )
+        .take()
+        .parse_next(input)
+    })
     .parse_next(input)
 }
 
 fn nested_braces<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
-    delimited(
-        literal("{"),
-        repeat::<_, _, Vec<_>, _, _>(
-            0..,
-            alt((none_of(|c| c == '{' || c == '}').take(), nested_braces)),
-        ),
-        literal("}"),
-    )
-    .take()
+    trace("nested_braces", |input: &mut _| {
+        delimited(
+            literal("{"),
+            (
+                separated::<_, _, Vec<_>, _, _, _, _>(
+                    0..,
+                    parse_argument_without_write,
+                    literal(", "),
+                ),
+                opt(literal(", ...")),
+            ),
+            literal("}"),
+        )
+        .take()
+        .parse_next(input)
+    })
+    .parse_next(input)
+}
+
+fn parse_function_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    trace("parse_function_argument", |input: &mut _| {
+        let name = parse_function_name(input)?;
+        let args = delimited(
+            literal("("),
+            separated::<_, _, Vec<_>, _, _, _, _>(0.., parse_argument, literal(", ")),
+            literal(")"),
+        )
+        .take()
+        .parse_next(input)?;
+        Ok(Argument::FunctionArgument(name, args))
+    })
+    .parse_next(input)
+}
+
+fn parse_variable_reference_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    trace("parse_variable_reference_argument", |input: &mut _| {
+        let arg = (literal("&"), parse_function_name)
+            .take()
+            .parse_next(input)?;
+        Ok(Argument::VariableReference(arg))
+    })
+    .parse_next(input)
+}
+
+fn parse_wait_flags_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    trace("parse_wait_flags_argument", |input: &mut _| {
+        let arg = (
+            literal("[{WIFEXITED(s) && WEXITSTATUS(s) == "),
+            digit1,
+            literal("}]"),
+        )
+            .take()
+            .parse_next(input)?;
+        Ok(Argument::WaitFlags(arg))
+    })
+    .parse_next(input)
+}
+
+fn parse_numeric_with_constant_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    trace("parse_numeric_with_constant_argument", |input: &mut _| {
+        let arg = (digit1, literal("*"), digit1).take().parse_next(input)?;
+        Ok(Argument::NumericWithConstant(arg))
+    })
+    .parse_next(input)
+}
+
+fn parse_cpuset_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
+    trace("parse_cpuset_argument", |input: &mut _| {
+        let arg = delimited(
+            literal("["),
+            // must be 2.. in order to ensure that this parse path is unique from nested_braces
+            separated::<_, _, Vec<_>, _, _, _, _>(2.., parse_numeric_argument, literal(" ")),
+            literal("]"),
+        )
+        .take()
+        .parse_next(input)?;
+        Ok(Argument::CpuSet(arg))
+    })
     .parse_next(input)
 }
 
@@ -504,6 +626,7 @@ fn parse_end_with_qmark<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>>
 
 fn parse_retval<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
     alt((
+        parse_success_pointer,
         parse_error_retval,
         parse_success_retval,
         parse_restart_retval,
@@ -527,6 +650,16 @@ fn parse_restart_retval<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
     let _ = literal("? ").parse_next(input)?;
     let rem = rest(input)?;
     Ok(Retval::Restart(rem))
+}
+
+fn parse_success_pointer<'i>(input: &mut &'i str) -> ModalResult<Retval<'i>> {
+    let pointer = (
+        hex_address,
+        opt((literal(" (flags "), enum_flags, literal(")"))),
+    )
+        .take()
+        .parse_next(input)?;
+    Ok(Retval::SuccessPointer(pointer))
 }
 
 fn parse_unfinished_outcome<'i>(input: &mut &'i str) -> ModalResult<CallOutcome<'i>> {
@@ -733,6 +866,35 @@ mod tests {
             }
         );
 
+        let strace = String::from("299986 brk(NULL)                        = 0x55ad8bba6000");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "299986",
+                function: "brk",
+                arguments: vec![Argument::Null],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::SuccessPointer("0x55ad8bba6000"),
+                }
+            }
+        );
+
+        let strace =
+            String::from("374970 fcntl(11, F_GETFD)               = 0x1 (flags FD_CLOEXEC)");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "374970",
+                function: "fcntl",
+                arguments: vec![Argument::Numeric("11"), Argument::Enum("F_GETFD")],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::SuccessPointer("0x1 (flags FD_CLOEXEC)"),
+                }
+            }
+        );
+
         // The cases where I've seen this behavior -- "resumed> <unfinished...>" AND "resumed>) = ?" have both occurred
         // right before the process exited.  I'm combining both of these into one "ResumedUnfinished" state because, at
         // least for now, it doesn't seem like I need to do anything differently with them.
@@ -919,7 +1081,7 @@ mod tests {
                 function: "wait4",
                 arguments: vec![
                     Argument::Numeric("-1"),
-                    Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]"),
+                    Argument::WaitFlags("[{WIFEXITED(s) && WEXITSTATUS(s) == 0}]"),
                     Argument::Enum("WNOHANG"),
                     Argument::Null,
                 ],
@@ -939,7 +1101,7 @@ mod tests {
                 pid: "86718",
                 function: "wait4",
                 arguments: vec![
-                    Argument::Structure("[{WIFEXITED(s) && WEXITSTATUS(s) == 1}]"),
+                    Argument::WaitFlags("[{WIFEXITED(s) && WEXITSTATUS(s) == 1}]"),
                     Argument::Enum("__WALL"),
                     Argument::Null,
                 ],
@@ -1110,9 +1272,11 @@ mod tests {
                 pid: "1316971",
                 function: "clone3",
                 arguments: vec![
-                    Argument::WrittenStructure(
-                        "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}",
-                        "{parent_tid=[1343642]}"
+                    Argument::WrittenArgument(
+                        Box::new(Argument::Structure(
+                            "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}"
+                        )),
+                        Box::new(Argument::Structure("{parent_tid=[1343642]}"))
                     ),
                     Argument::Numeric("88"),
                 ],
@@ -1168,6 +1332,86 @@ mod tests {
                 ],
                 outcome: CallOutcome::Complete {
                     retval: Retval::Success(0)
+                }
+            }
+        );
+
+        let strace = String::from(r"354914 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0");
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "354914",
+                function: "rt_sigprocmask",
+                arguments: vec![
+                    Argument::Enum("SIG_BLOCK"),
+                    Argument::Structure("~[]"),
+                    Argument::Structure("[]"),
+                    Argument::Numeric("8"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
+            }
+        );
+
+        let strace = String::from(
+            "395436 writev(26, [{iov_base=\"POST /api/v0/rust/coverage-data/testtrim-tests/c1 HTTP/1.1\\r\\ncontent-type: application/json\\r\\ncontent-encoding: zstd\\r\\naccept: */*\\r\\nuser-agent: testtrim (0.12.4)\\r\\naccept-encoding: gzip, zstd\\r\\nhost: 127.0.0.1:44861\\r\\ncontent-length: 124\\r\\n\\r\\n\", iov_len=235}, {iov_base=\"(\\xb5/\\xfd\\x00X\\x9d\\x03\\x00\\xc2\\xc7\\x16\\x16\\xa05m\\xb8\\xcd\\xef\\x84\\xc0\\xcb*\\xf2\\x11J\\x99\\xe4\\x17\\x80\\t\\x16\\x06\\xd5\\xf7I\\x82\\xac-\\x9d|\\x9c\\xcax\\xc7\\xc8$\\x0f\\xd4R\\xef\\x96\\xc6)\\xbd\\xc0\\x14\\xb5\\xc6;\\xa5'|\\xc3|\\xf8\\xde\\xfa\\xfa\\x85\\xf2\\xbew\\xb8\\x10M\\x11\\x02\\x80\\xa1,2/\\x02\\xa2\\x91CI\\xbesO\\x13W\\xbf\\xa2P\\xab\\xa4_[\\x9a\\x82\\x04\\x07\\x00t\\xe0\\x15u\\xaf\\x971\\xe2Q\\xcc\\xd4\\x8a\\xa6:o\\x1c\\x1c\\x9bQ\", iov_len=124}], 2 <unfinished ...>",
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "395436",
+                function: "writev",
+                arguments: vec![
+                    Argument::Numeric("26"),
+                    Argument::Structure(
+                        "[{iov_base=\"POST /api/v0/rust/coverage-data/testtrim-tests/c1 HTTP/1.1\\r\\ncontent-type: application/json\\r\\ncontent-encoding: zstd\\r\\naccept: */*\\r\\nuser-agent: testtrim (0.12.4)\\r\\naccept-encoding: gzip, zstd\\r\\nhost: 127.0.0.1:44861\\r\\ncontent-length: 124\\r\\n\\r\\n\", iov_len=235}, {iov_base=\"(\\xb5/\\xfd\\x00X\\x9d\\x03\\x00\\xc2\\xc7\\x16\\x16\\xa05m\\xb8\\xcd\\xef\\x84\\xc0\\xcb*\\xf2\\x11J\\x99\\xe4\\x17\\x80\\t\\x16\\x06\\xd5\\xf7I\\x82\\xac-\\x9d|\\x9c\\xcax\\xc7\\xc8$\\x0f\\xd4R\\xef\\x96\\xc6)\\xbd\\xc0\\x14\\xb5\\xc6;\\xa5'|\\xc3|\\xf8\\xde\\xfa\\xfa\\x85\\xf2\\xbew\\xb8\\x10M\\x11\\x02\\x80\\xa1,2/\\x02\\xa2\\x91CI\\xbesO\\x13W\\xbf\\xa2P\\xab\\xa4_[\\x9a\\x82\\x04\\x07\\x00t\\xe0\\x15u\\xaf\\x971\\xe2Q\\xcc\\xd4\\x8a\\xa6:o\\x1c\\x1c\\x9bQ\", iov_len=124}]"
+                    ),
+                    Argument::Numeric("2"),
+                ],
+                outcome: CallOutcome::Unfinished
+            }
+        );
+
+        let strace = String::from(
+            "500779 prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0",
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "500779",
+                function: "prlimit64",
+                arguments: vec![
+                    Argument::Numeric("0"),
+                    Argument::Enum("RLIMIT_STACK"),
+                    Argument::Null,
+                    Argument::Structure("{rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(0)
+                }
+            }
+        );
+
+        let strace = String::from(
+            "521386 sched_getaffinity(521386, 32, [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21]) = 8",
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "521386",
+                function: "sched_getaffinity",
+                arguments: vec![
+                    Argument::Numeric("521386"),
+                    Argument::Numeric("32"),
+                    Argument::CpuSet("[0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21]"),
+                ],
+                outcome: CallOutcome::Complete {
+                    retval: Retval::Success(8)
                 }
             }
         );
@@ -1234,28 +1478,44 @@ mod tests {
 
     #[test]
     fn test_nested_brackets() {
-        let strace = String::from("[input]");
-        let v = nested_brackets(&mut strace.as_str()).unwrap();
-        assert_eq!(v, "[input]");
-        let strace = String::from("[inp[ [abc] u]t]");
-        let v = nested_brackets(&mut strace.as_str()).unwrap();
-        assert_eq!(v, "[inp[ [abc] u]t]");
-        let strace = String::from("[inp]ut");
-        let v = nested_brackets(&mut strace.as_str()).unwrap();
-        assert_eq!(v, "[inp]");
+        let strace = String::from(r#"["input"]"#);
+        let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 1");
+        assert_eq!(v, r#"["input"]"#);
+
+        let strace = String::from("[1, [2, 3], 4]");
+        let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 2");
+        assert_eq!(v, "[1, [2, 3], 4]");
+
+        let strace = String::from("[123]ut");
+        let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 3");
+        assert_eq!(v, "[123]");
+
+        let strace =
+            String::from(r#"["abc 123 ] this is a string but it contains a few ] in it"]"#);
+        let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 4");
+        assert_eq!(
+            v,
+            r#"["abc 123 ] this is a string but it contains a few ] in it"]"#
+        );
     }
 
     #[test]
     fn test_nested_braces() {
-        let strace = String::from("{input}");
-        let v = nested_braces(&mut strace.as_str()).unwrap();
-        assert_eq!(v, "{input}");
-        let strace = String::from("{inp{ {abc} u}t}");
-        let v = nested_braces(&mut strace.as_str()).unwrap();
-        assert_eq!(v, "{inp{ {abc} u}t}");
-        let strace = String::from("{inp}ut");
-        let v = nested_braces(&mut strace.as_str()).unwrap();
-        assert_eq!(v, "{inp}");
+        let strace = String::from("{input=1}");
+        let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 1");
+        assert_eq!(v, "{input=1}");
+
+        let strace = String::from("{inp=1, abc={def=2}, ghk=3}");
+        let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 2");
+        assert_eq!(v, "{inp=1, abc={def=2}, ghk=3}");
+
+        let strace = String::from("{inp=123}ut");
+        let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 3");
+        assert_eq!(v, "{inp=123}");
+
+        let strace = String::from(r#"{field="string with a } in it can be confusing"}"#);
+        let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 4");
+        assert_eq!(v, r#"{field="string with a } in it can be confusing"}"#);
     }
 
     #[test]
@@ -1347,7 +1607,9 @@ mod tests {
                 pid: "1316971",
                 function: "clone3",
                 arguments: vec![
-                    Argument::WrittenStructureResumed("{parent_tid=[0]}"),
+                    Argument::WrittenArgumentResumed(Box::new(Argument::Structure(
+                        "{parent_tid=[0]}"
+                    ))),
                     Argument::Numeric("88")
                 ],
                 outcome: CallOutcome::Resumed {

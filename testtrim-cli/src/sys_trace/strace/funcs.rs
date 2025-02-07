@@ -445,7 +445,18 @@ impl FunctionExtractor {
     fn structure_text<'a>(args: &[&Argument<'a>], index: usize) -> Result<&'a str> {
         match &args[index] {
             Argument::Structure(v) => Ok(v),
-            Argument::WrittenStructure(orig, _upd) => Ok(orig),
+            v @ Argument::WrittenArgument(orig, _upd) => match **orig {
+                Argument::Structure(strct) => Ok(strct),
+                _ => Err(anyhow!(
+                    "argument {index} was not structure or written-structure; it was {v:?}",
+                )),
+            },
+            v @ Argument::WrittenArgumentReference(orig, _upd) => match **orig {
+                Argument::Structure(strct) => Ok(strct),
+                _ => Err(anyhow!(
+                    "argument {index} was not structure or written-structure; it was {v:?}",
+                )),
+            },
             v => Err(anyhow!(
                 "argument {index} was not structure or written-structure; it was {v:?}",
             )),

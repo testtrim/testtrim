@@ -140,10 +140,9 @@ impl TwolineSyscall {
         TwolineSyscall::new(
             unfinished,
             resumed,
-            // written_structure is populated as Some(x) when the last argument in the "unfinished" syscall is a
-            // structure, and the first argument in the "resumed" syscall is a write to that structure (eg. "=> {..}").
-            // In this case we create our own owned Argument, referencing the two original structures, which we'll put
-            // into `arguments` later in place of the two partial arguments.
+            // written_structure is populated as Some(x) when the first argument in the "resumed" syscall is a write
+            // argument (eg. "=> {..}"). In this case we create our own owned Argument, referencing the two original
+            // structures, which we'll put into `arguments` later in place of the two partial arguments.
             |unfinished, resumed| match (unfinished.borrow_output(), resumed.borrow_output()) {
                 (
                     TokenizerOutput::Syscall(SyscallSegment {
@@ -161,10 +160,9 @@ impl TwolineSyscall {
                         return None;
                     }
                     match (first_arguments.last(), second_arguments.first()) {
-                        (
-                            Some(Argument::Structure(original)),
-                            Some(Argument::WrittenStructureResumed(update)),
-                        ) => Some(Argument::WrittenStructure(original, update)),
+                        (Some(original), Some(Argument::WrittenArgumentResumed(update))) => {
+                            Some(Argument::WrittenArgumentReference(original, update))
+                        }
                         _ => None,
                     }
                 }
@@ -423,9 +421,11 @@ mod tests {
         assert_eq!(
             *t.arguments(),
             vec![
-                &Argument::WrittenStructure(
-                    "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f67099ff990, parent_tid=0x7f67099ff990, exit_signal=0, stack=0x7f67091ff000, stack_size=0x7fff80, tls=0x7f67099ff6c0}",
-                    "{parent_tid=[0]}"
+                &Argument::WrittenArgumentReference(
+                    &Argument::Structure(
+                        "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f67099ff990, parent_tid=0x7f67099ff990, exit_signal=0, stack=0x7f67091ff000, stack_size=0x7fff80, tls=0x7f67099ff6c0}"
+                    ),
+                    &Argument::Structure("{parent_tid=[0]}")
                 ),
                 &Argument::Numeric("88"),
             ]
