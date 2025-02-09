@@ -6,18 +6,19 @@
 // macro output.
 #![allow(clippy::ref_option)]
 
-use std::{os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
+use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
 
 use anyhow::{Result, anyhow, ensure};
-use lazy_static::lazy_static;
 use ouroboros::self_referencing;
-use regex::Regex;
 
 use crate::sys_trace::trace::UnifiedSocketAddr;
 
 use super::{
     sequencer::{CompleteSyscall, Sequencer, SequencerOutput},
-    tokenizer::{Argument, CallOutcome, EncodedString, Retval, SyscallSegment, TokenizerOutput},
+    tokenizer::{
+        Argument, ArgumentStructure, CallOutcome, EncodedString, Retval, SyscallSegment,
+        TokenizerOutput,
+    },
 };
 
 #[derive(Debug, PartialEq)]
@@ -90,52 +91,6 @@ pub enum Function<'a> {
         pid: i32,
         signal: &'a str,
     },
-}
-
-lazy_static! {
-    static ref socket_struct_regex: Regex = Regex::new(
-        r#"(?x)
-        (
-            \{
-                sa_family=AF_UNIX,
-                \s+
-                sun_path="(?<unix_path>(?:[^"\\]|\\.)*)"
-            \}
-            |
-            \{
-                sa_family=AF_INET6,
-                \s+
-                sin6_port=htons\((?<sin6_port>\d+)\),
-                \s+
-                sin6_flowinfo=htonl\((?<sin6_flowinfo>\d+)\),
-                \s+
-                inet_pton\(
-                    AF_INET6,
-                    \s+
-                    "(?<sin6_addr>[^"]+)",
-                    \s+
-                    &sin6_addr
-                \),
-                \s+
-                sin6_scope_id=(?<sin6_scope_id>\d+)
-            \}
-            |
-            \{
-                sa_family=AF_INET,
-                \s+
-                sin_port=htons\((?<sin_port>\d+)\),
-                \s+
-                sin_addr=inet_addr\("(?<sin_addr>[^"]+)"\)
-            \}
-            |
-            \{
-                (?<af_unspec>sa_family=AF_UNSPEC)
-                .*
-            \}
-        )
-        $"#
-    )
-    .unwrap();
 }
 
 #[self_referencing]
@@ -284,7 +239,30 @@ impl FunctionExtractor {
             "expected 2 arguments to clone3, but arguments were: {:?}",
             arguments
         );
-        let flags = Self::structure_text(arguments, 0)?;
+        let clone = match &arguments[0] {
+            Argument::WrittenArgument(orig, _) => match &**orig {
+                Argument::Structure(structure) => structure,
+                other => {
+                    return Err(anyhow!(
+                        "expected clone3 arg to be Structure, but was {other:?}"
+                    ));
+                }
+            },
+            Argument::WrittenArgumentReference(orig, _) => match orig {
+                Argument::Structure(structure) => structure,
+                other => {
+                    return Err(anyhow!(
+                        "expected clone3 arg to be Structure, but was {other:?}"
+                    ));
+                }
+            },
+            v => {
+                return Err(anyhow!(
+                    "argument 0 was not structure on syscall clone; it was {v:?}",
+                ));
+            }
+        };
+        let flags = clone.index(0)?.named("flags")?.enum_v()?;
         Ok(Function::Clone {
             child_pid: retval,
             thread: flags.contains("CLONE_THREAD"),
@@ -330,7 +308,7 @@ impl FunctionExtractor {
             arguments
         );
         let socket_addr = match &arguments[1] {
-            Argument::Structure(v) => Self::parse_socket_structure(v)?,
+            Argument::Structure(v) => Self::interpret_socket_structure(v)?,
             v => {
                 return Err(anyhow!(
                     "argument 1 was not structure on syscall connect; it was {v:?}",
@@ -356,49 +334,88 @@ impl FunctionExtractor {
         Ok(Function::ThreadSignal { tgid, pid, signal })
     }
 
-    fn parse_socket_structure(data: &str) -> Result<Option<UnifiedSocketAddr>> {
-        let Some(cap) = socket_struct_regex.captures(data) else {
-            return Err(anyhow!("unable to parse socket structure: {data}"));
-        };
+    fn interpret_socket_structure(
+        structure: &ArgumentStructure<'_>,
+    ) -> Result<Option<UnifiedSocketAddr>> {
+        let sa_family = structure.index(0)?.named("sa_family")?.enum_v()?;
+        match sa_family {
+            "AF_UNIX" => Self::interpret_socket_structure_unix(structure),
+            "AF_INET6" => Self::interpret_socket_structure_inet6(structure),
+            "AF_INET" => Self::interpret_socket_structure_inet(structure),
+            "AF_UNSPEC" => Ok(None),
+            other => Err(anyhow!("unsupported sa_family {other:?}")),
+        }
+    }
 
-        #[allow(clippy::manual_map)] // more extensible with current pattern
-        Ok(if let Some(unix_path) = cap.name("unix_path") {
-            Some(UnifiedSocketAddr::Unix(PathBuf::from(unix_path.as_str())))
-        } else if let Some(sin6_addr) = cap.name("sin6_addr") {
-            let port = u16::from_str(&cap["sin6_port"]).unwrap();
-            if port == 0 {
-                // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different remote
-                // endpoints.  As they don't really communicate externally, it makes sense to filter them out.
-                None
-            } else {
-                Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
-                    std::net::SocketAddrV6::new(
-                        std::net::Ipv6Addr::from_str(sin6_addr.as_str()).unwrap(),
-                        port,
-                        u32::from_str(&cap["sin6_flowinfo"]).unwrap(),
-                        u32::from_str(&cap["sin6_scope_id"]).unwrap(),
-                    ),
-                )))
-            }
-        } else if let Some(sin_addr) = cap.name("sin_addr") {
-            let port = u16::from_str(&cap["sin_port"]).unwrap();
-            if port == 0 {
-                // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different remote
-                // endpoints.  As they don't really communicate externally, it makes sense to filter them out.
-                None
-            } else {
-                Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
-                    std::net::SocketAddrV4::new(
-                        std::net::Ipv4Addr::from_str(sin_addr.as_str()).unwrap(),
-                        port,
-                    ),
-                )))
-            }
-        } else if cap.name("af_unspec").is_some() {
-            None
-        } else {
-            unreachable!()
-        })
+    fn interpret_socket_structure_unix(
+        structure: &ArgumentStructure<'_>,
+    ) -> Result<Option<UnifiedSocketAddr>> {
+        let unix_path = structure.index(1)?.named("sun_path")?.path()?;
+        Ok(Some(UnifiedSocketAddr::Unix(unix_path)))
+    }
+
+    fn interpret_socket_structure_inet6(
+        structure: &ArgumentStructure<'_>,
+    ) -> Result<Option<UnifiedSocketAddr>> {
+        let port = structure
+            .index(1)?
+            .named("sin6_port")?
+            .func("htons")?
+            .index(0)?
+            .numeric()?;
+        if port == 0 {
+            // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different remote
+            // endpoints.  As they don't really communicate externally, it makes sense to filter them out.
+            return Ok(None);
+        }
+        let port = u16::try_from(port)?;
+
+        let sin6_flowinfo = structure
+            .index(2)?
+            .named("sin6_flowinfo")?
+            .func("htonl")?
+            .index(0)?
+            .numeric()?;
+        let sin6_addr = structure.index(3)?.func("inet_pton")?.index(1)?.string()?;
+        let sin6_scope_id = structure.index(4)?.named("sin6_scope_id")?.numeric()?;
+
+        Ok(Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V6(
+            std::net::SocketAddrV6::new(
+                // Should be safe to use the encoded string here since there's no expected escapes in this str
+                std::net::Ipv6Addr::from_str(sin6_addr.encoded).unwrap(),
+                port,
+                sin6_flowinfo.try_into()?,
+                sin6_scope_id.try_into()?,
+            ),
+        ))))
+    }
+
+    fn interpret_socket_structure_inet(
+        structure: &ArgumentStructure<'_>,
+    ) -> Result<Option<UnifiedSocketAddr>> {
+        let port = structure
+            .index(1)?
+            .named("sin_port")?
+            .func("htons")?
+            .index(0)?
+            .numeric()?;
+        if port == 0 {
+            // port = 0 are internal syscalls to prepare the local endpoint and test feasibility of different remote
+            // endpoints.  As they don't really communicate externally, it makes sense to filter them out.
+            return Ok(None);
+        }
+        let port = u16::try_from(port)?;
+
+        let sin_addr = structure
+            .index(2)?
+            .named("sin_addr")?
+            .func("inet_addr")?
+            .index(0)?
+            .string()?;
+        Ok(Some(UnifiedSocketAddr::Inet(std::net::SocketAddr::V4(
+            // Should be safe to use the encoded string here since there's no expected escapes in this str
+            std::net::SocketAddrV4::new(std::net::Ipv4Addr::from_str(sin_addr.encoded)?, port),
+        ))))
     }
 
     fn extract_recvfrom<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Function<'a>> {
@@ -442,32 +459,9 @@ impl FunctionExtractor {
         }
     }
 
-    fn structure_text<'a>(args: &[&Argument<'a>], index: usize) -> Result<&'a str> {
-        match &args[index] {
-            Argument::Structure(v) => Ok(v),
-            v @ Argument::WrittenArgument(orig, _upd) => match **orig {
-                Argument::Structure(strct) => Ok(strct),
-                _ => Err(anyhow!(
-                    "argument {index} was not structure or written-structure; it was {v:?}",
-                )),
-            },
-            v @ Argument::WrittenArgumentReference(orig, _upd) => match **orig {
-                Argument::Structure(strct) => Ok(strct),
-                _ => Err(anyhow!(
-                    "argument {index} was not structure or written-structure; it was {v:?}",
-                )),
-            },
-            v => Err(anyhow!(
-                "argument {index} was not structure or written-structure; it was {v:?}",
-            )),
-        }
-    }
-
     fn path(args: &[&Argument<'_>], index: usize) -> Result<PathBuf> {
         match &args[index] {
-            Argument::String(v) => Ok(PathBuf::from(<std::ffi::OsStr as OsStrExt>::from_bytes(
-                v.decoded(),
-            ))),
+            Argument::String(v) => Ok(PathBuf::from(OsStr::from_bytes(v.decoded()))),
             v => Err(anyhow!("argument {index} was not string; it was {v:?}",)),
         }
     }

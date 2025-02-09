@@ -342,7 +342,7 @@ mod tests {
 
     use crate::sys_trace::strace::{
         sequencer::CompleteSyscall as _,
-        tokenizer::{Argument, Retval},
+        tokenizer::{Argument, ArgumentStructure, Retval},
     };
 
     use super::{Sequencer, SequencerOutput};
@@ -422,10 +422,29 @@ mod tests {
             *t.arguments(),
             vec![
                 &Argument::WrittenArgumentReference(
-                    &Argument::Structure(
-                        "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f67099ff990, parent_tid=0x7f67099ff990, exit_signal=0, stack=0x7f67091ff000, stack_size=0x7fff80, tls=0x7f67099ff6c0}"
-                    ),
-                    &Argument::Structure("{parent_tid=[0]}")
+                    &Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Named(
+                            "flags",
+                            Box::new(Argument::Enum(
+                                "CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID"
+                            ))
+                        ),
+                        Argument::Named("child_tid", Box::new(Argument::Pointer("0x7f67099ff990"))),
+                        Argument::Named(
+                            "parent_tid",
+                            Box::new(Argument::Pointer("0x7f67099ff990"))
+                        ),
+                        Argument::Named("exit_signal", Box::new(Argument::Numeric("0"))),
+                        Argument::Named("stack", Box::new(Argument::Pointer("0x7f67091ff000"))),
+                        Argument::Named("stack_size", Box::new(Argument::Pointer("0x7fff80"))),
+                        Argument::Named("tls", Box::new(Argument::Pointer("0x7f67099ff6c0"))),
+                    ])),
+                    &Argument::Structure(ArgumentStructure::new(vec![Argument::Named(
+                        "parent_tid",
+                        Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                            Argument::Numeric("0")
+                        ])))
+                    )])),
                 ),
                 &Argument::Numeric("88"),
             ]

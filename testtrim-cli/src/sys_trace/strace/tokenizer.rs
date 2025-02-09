@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt as _;
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow};
@@ -58,9 +62,11 @@ pub enum Argument<'a> {
     Pointer(&'a str),
     /// A pointer (0x...) with some comment following it; eg. "0x7ffdf2244ed8 /* 218 vars */"
     PointerWithComment(&'a str, &'a str),
-    /// Structure: {...} or [...].  May be prefixed with ~ when it is a bitset which is "so full that printing out the
-    /// unset elements is more valuable".
-    Structure(&'a str),
+    /// Structure: {...} or [...].
+    Structure(ArgumentStructure<'a>),
+    /// Structure: [...], which was prefixed with ~ when it is a bitset which is "so full that printing out the unset
+    /// elements is more valuable".
+    InverseStructure(ArgumentStructure<'a>),
     /// This represents a value that was passed into a syscall and then modified by the syscall; strace represents it as
     /// {...} => {...} where the first part is the input and the second is the changes made.
     WrittenArgument(Box<Argument<'a>>, Box<Argument<'a>>),
@@ -84,7 +90,7 @@ pub enum Argument<'a> {
     /// Function argument, eg. `inet_addr(\"127.0.0.1\")`, where `inet_addr` would be the name of the function that the
     /// argument is decorated with.  The two fields are the function name and the entire argument range; arguments are
     /// not exposed one-by-one currently.
-    FunctionArgument(&'a str, &'a str),
+    FunctionArgument(&'a str, ArgumentStructure<'a>),
     /// Argument in the form of `&sin6_addr` in the strace output.
     VariableReference(&'a str),
     /// The `wait4` syscall returns the status of the waited process in a format that describes which flags are set,
@@ -98,6 +104,88 @@ pub enum Argument<'a> {
     NumericWithConstant(&'a str),
     /// Represents the output of `sched_getaffinity`, which contains a cpu set in the form `[0 1 2 3 4 5]`.
     CpuSet(&'a str),
+}
+
+impl<'a> Argument<'a> {
+    pub fn named(&'a self, expected_name: &str) -> Result<&'a Argument<'a>> {
+        match self {
+            Argument::Named(actual_name, value) if *actual_name == expected_name => Ok(value),
+            Argument::Named(actual_name, _) => Err(anyhow!(
+                "expected to access named value {expected_name}, but had name {actual_name}"
+            )),
+            other => Err(anyhow!(
+                "expected to access named value {expected_name}, but was {other:?}"
+            )),
+        }
+    }
+
+    pub fn enum_v(&'a self) -> Result<&'a str> {
+        if let Argument::Enum(v) = self {
+            Ok(v)
+        } else {
+            Err(anyhow!(
+                "expected value to be Argument::Enum, but was {self:?}"
+            ))
+        }
+    }
+
+    pub fn path(&'a self) -> Result<PathBuf> {
+        if let Argument::String(v) = self {
+            Ok(PathBuf::from(OsStr::from_bytes(v.decoded())))
+        } else {
+            Err(anyhow!(
+                "expected value to be Argument::String, but was {self:?}"
+            ))
+        }
+    }
+
+    pub fn func(&'a self, expected_name: &str) -> Result<&'a ArgumentStructure<'a>> {
+        match self {
+            Argument::FunctionArgument(actual_name, value) if *actual_name == expected_name => {
+                Ok(value)
+            }
+            Argument::FunctionArgument(actual_name, _) => Err(anyhow!(
+                "expected to access named value {expected_name}, but had name {actual_name}"
+            )),
+            other => Err(anyhow!(
+                "expected to access named value {expected_name}, but was {other:?}"
+            )),
+        }
+    }
+
+    pub fn numeric(&self) -> Result<i32> {
+        match self {
+            Argument::Numeric(v) => Ok(i32::from_str(v)?),
+            v => Err(anyhow!("argument was not numeric; it was {v:?}")),
+        }
+    }
+
+    pub fn string(&'a self) -> Result<&'a EncodedString<'a>> {
+        match self {
+            Argument::String(v) => Ok(v),
+            v => Err(anyhow!("argument was not numeric; it was {v:?}")),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ArgumentStructure<'a> {
+    args: Vec<Argument<'a>>,
+}
+
+impl<'a> ArgumentStructure<'a> {
+    pub fn new(args: Vec<Argument<'a>>) -> Self {
+        ArgumentStructure { args }
+    }
+
+    pub fn index(&'a self, index: usize) -> Result<&'a Argument<'a>> {
+        match self.args.get(index) {
+            Some(arg) => Ok(arg),
+            None => Err(anyhow!(
+                "expected to access struct index {index}, but could not; struct was {self:?}"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -499,28 +587,30 @@ fn parse_written_argument_resumed<'i>(input: &mut &'i str) -> ModalResult<Argume
 }
 
 fn parse_structure_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
-    let structure = (opt(literal("~")), alt((nested_brackets, nested_braces)))
-        .take()
-        .parse_next(input)?;
-    Ok(Argument::Structure(structure))
+    let inverse = opt(literal("~")).parse_next(input)?;
+    let structure = alt((nested_brackets, nested_braces)).parse_next(input)?;
+    Ok(if inverse.is_some() {
+        Argument::InverseStructure(ArgumentStructure::new(structure))
+    } else {
+        Argument::Structure(ArgumentStructure::new(structure))
+    })
 }
 
-fn nested_brackets<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+fn nested_brackets<'i>(input: &mut &'i str) -> ModalResult<Vec<Argument<'i>>> {
     trace("nested_brackets", |input: &mut _| {
         delimited(
             literal("["),
             separated::<_, _, Vec<_>, _, _, _, _>(0.., parse_argument, literal(", ")),
             literal("]"),
         )
-        .take()
         .parse_next(input)
     })
     .parse_next(input)
 }
 
-fn nested_braces<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+fn nested_braces<'i>(input: &mut &'i str) -> ModalResult<Vec<Argument<'i>>> {
     trace("nested_braces", |input: &mut _| {
-        delimited(
+        let (args, _opt) = delimited(
             literal("{"),
             (
                 separated::<_, _, Vec<_>, _, _, _, _>(
@@ -532,8 +622,8 @@ fn nested_braces<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
             ),
             literal("}"),
         )
-        .take()
-        .parse_next(input)
+        .parse_next(input)?;
+        Ok(args)
     })
     .parse_next(input)
 }
@@ -546,9 +636,11 @@ fn parse_function_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>>
             separated::<_, _, Vec<_>, _, _, _, _>(0.., parse_argument, literal(", ")),
             literal(")"),
         )
-        .take()
         .parse_next(input)?;
-        Ok(Argument::FunctionArgument(name, args))
+        Ok(Argument::FunctionArgument(
+            name,
+            ArgumentStructure::new(args),
+        ))
     })
     .parse_next(input)
 }
@@ -785,9 +877,9 @@ mod tests {
     use anyhow::Result;
 
     use crate::sys_trace::strace::tokenizer::{
-        Argument, CallOutcome, EncodedString, ProcessExit, Retval, SignalRecv, SyscallSegment,
-        TokenizerOutput, extract_encoded_string, nested_braces, parse_encoded_string,
-        parse_proc_killed, parse_signal, tokenize, tokenize_syscall,
+        Argument, ArgumentStructure, CallOutcome, EncodedString, ProcessExit, Retval, SignalRecv,
+        SyscallSegment, TokenizerOutput, extract_encoded_string, nested_braces,
+        parse_encoded_string, parse_proc_killed, parse_signal, tokenize, tokenize_syscall,
     };
 
     use super::{
@@ -1185,7 +1277,7 @@ mod tests {
                     Argument::Enum("AT_FDCWD"),
                     Argument::String(EncodedString::new(
                         "/nix/store/ixq7chmml361204anwph16ll2njcf19d-curl-8.11.0/lib/glibc-hwcaps/x86-64-v4/libcurl.so.4"
-                    ),),
+                    )),
                     Argument::Enum("O_RDONLY|O_CLOEXEC"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -1225,7 +1317,13 @@ mod tests {
                 function: "connect",
                 arguments: vec![
                     Argument::Numeric("3"),
-                    Argument::Structure(r#"{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}"#),
+                    Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Named("sa_family", Box::new(Argument::Enum("AF_UNIX"))),
+                        Argument::Named(
+                            "sun_path",
+                            Box::new(Argument::String(EncodedString::new("/var/run/nscd/socket")))
+                        )
+                    ])),
                     Argument::Numeric("110"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -1273,10 +1371,34 @@ mod tests {
                 function: "clone3",
                 arguments: vec![
                     Argument::WrittenArgument(
-                        Box::new(Argument::Structure(
-                            "{flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7f4223fff990, parent_tid=0x7f4223fff990, exit_signal=0, stack=0x7f42237ff000, stack_size=0x7fff80, tls=0x7f4223fff6c0}"
-                        )),
-                        Box::new(Argument::Structure("{parent_tid=[1343642]}"))
+                        Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                            Argument::Named(
+                                "flags",
+                                Box::new(Argument::Enum(
+                                    "CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID"
+                                ))
+                            ),
+                            Argument::Named(
+                                "child_tid",
+                                Box::new(Argument::Pointer("0x7f4223fff990"))
+                            ),
+                            Argument::Named(
+                                "parent_tid",
+                                Box::new(Argument::Pointer("0x7f4223fff990"))
+                            ),
+                            Argument::Named("exit_signal", Box::new(Argument::Numeric("0"))),
+                            Argument::Named("stack", Box::new(Argument::Pointer("0x7f42237ff000"))),
+                            Argument::Named("stack_size", Box::new(Argument::Pointer("0x7fff80"))),
+                            Argument::Named("tls", Box::new(Argument::Pointer("0x7f4223fff6c0"))),
+                        ]))),
+                        Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                            Argument::Named(
+                                "parent_tid",
+                                Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                                    Argument::Numeric("1343642")
+                                ])))
+                            )
+                        ]))),
                     ),
                     Argument::Numeric("88"),
                 ],
@@ -1299,9 +1421,13 @@ mod tests {
                     Argument::String(EncodedString::new(
                         "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
                     )),
-                    Argument::Structure(
-                        r#"["/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7", "--exact", "basic_ops::tests::test_add"]"#
-                    ),
+                    Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::String(EncodedString::new(
+                            "/tmp/testtrim-test.ZPFzcuIZaMIL/rust-coverage-specimen/target/debug/deps/rust_coverage_specimen-5763007524fa57f7"
+                        )),
+                        Argument::String(EncodedString::new("--exact")),
+                        Argument::String(EncodedString::new("basic_ops::tests::test_add")),
+                    ])),
                     Argument::PointerWithComment("0x7ffdf2244ed8", "/* 218 vars */"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -1322,13 +1448,32 @@ mod tests {
                 arguments: vec![
                     Argument::Enum("P_PIDFD"),
                     Argument::Numeric("184"),
-                    Argument::Structure(
-                        "{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=85784, si_uid=1000, si_status=0, si_utime=0, si_stime=0}"
-                    ),
+                    Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Named("si_signo", Box::new(Argument::Enum("SIGCHLD"))),
+                        Argument::Named("si_code", Box::new(Argument::Enum("CLD_EXITED"))),
+                        Argument::Named("si_pid", Box::new(Argument::Numeric("85784"))),
+                        Argument::Named("si_uid", Box::new(Argument::Numeric("1000"))),
+                        Argument::Named("si_status", Box::new(Argument::Numeric("0"))),
+                        Argument::Named("si_utime", Box::new(Argument::Numeric("0"))),
+                        Argument::Named("si_stime", Box::new(Argument::Numeric("0"))),
+                    ])),
                     Argument::Enum("WEXITED"),
-                    Argument::Structure(
-                        "{ru_utime={tv_sec=0, tv_usec=1968}, ru_stime={tv_sec=0, tv_usec=1963}, ...}"
-                    ),
+                    Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Named(
+                            "ru_utime",
+                            Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                                Argument::Named("tv_sec", Box::new(Argument::Numeric("0"))),
+                                Argument::Named("tv_usec", Box::new(Argument::Numeric("1968")))
+                            ])))
+                        ),
+                        Argument::Named(
+                            "ru_stime",
+                            Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                                Argument::Named("tv_sec", Box::new(Argument::Numeric("0"))),
+                                Argument::Named("tv_usec", Box::new(Argument::Numeric("1963")))
+                            ])))
+                        ),
+                    ])),
                 ],
                 outcome: CallOutcome::Complete {
                     retval: Retval::Success(0)
@@ -1345,8 +1490,8 @@ mod tests {
                 function: "rt_sigprocmask",
                 arguments: vec![
                     Argument::Enum("SIG_BLOCK"),
-                    Argument::Structure("~[]"),
-                    Argument::Structure("[]"),
+                    Argument::InverseStructure(ArgumentStructure::new(vec![])),
+                    Argument::Structure(ArgumentStructure::new(vec![])),
                     Argument::Numeric("8"),
                 ],
                 outcome: CallOutcome::Complete {
@@ -1366,9 +1511,26 @@ mod tests {
                 function: "writev",
                 arguments: vec![
                     Argument::Numeric("26"),
-                    Argument::Structure(
-                        "[{iov_base=\"POST /api/v0/rust/coverage-data/testtrim-tests/c1 HTTP/1.1\\r\\ncontent-type: application/json\\r\\ncontent-encoding: zstd\\r\\naccept: */*\\r\\nuser-agent: testtrim (0.12.4)\\r\\naccept-encoding: gzip, zstd\\r\\nhost: 127.0.0.1:44861\\r\\ncontent-length: 124\\r\\n\\r\\n\", iov_len=235}, {iov_base=\"(\\xb5/\\xfd\\x00X\\x9d\\x03\\x00\\xc2\\xc7\\x16\\x16\\xa05m\\xb8\\xcd\\xef\\x84\\xc0\\xcb*\\xf2\\x11J\\x99\\xe4\\x17\\x80\\t\\x16\\x06\\xd5\\xf7I\\x82\\xac-\\x9d|\\x9c\\xcax\\xc7\\xc8$\\x0f\\xd4R\\xef\\x96\\xc6)\\xbd\\xc0\\x14\\xb5\\xc6;\\xa5'|\\xc3|\\xf8\\xde\\xfa\\xfa\\x85\\xf2\\xbew\\xb8\\x10M\\x11\\x02\\x80\\xa1,2/\\x02\\xa2\\x91CI\\xbesO\\x13W\\xbf\\xa2P\\xab\\xa4_[\\x9a\\x82\\x04\\x07\\x00t\\xe0\\x15u\\xaf\\x971\\xe2Q\\xcc\\xd4\\x8a\\xa6:o\\x1c\\x1c\\x9bQ\", iov_len=124}]"
-                    ),
+                    Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Structure(ArgumentStructure::new(vec![
+                            Argument::Named(
+                                "iov_base",
+                                Box::new(Argument::String(EncodedString::new(
+                                    "POST /api/v0/rust/coverage-data/testtrim-tests/c1 HTTP/1.1\\r\\ncontent-type: application/json\\r\\ncontent-encoding: zstd\\r\\naccept: */*\\r\\nuser-agent: testtrim (0.12.4)\\r\\naccept-encoding: gzip, zstd\\r\\nhost: 127.0.0.1:44861\\r\\ncontent-length: 124\\r\\n\\r\\n"
+                                )))
+                            ),
+                            Argument::Named("iov_len", Box::new(Argument::Numeric("235"))),
+                        ])),
+                        Argument::Structure(ArgumentStructure::new(vec![
+                            Argument::Named(
+                                "iov_base",
+                                Box::new(Argument::String(EncodedString::new(
+                                    "(\\xb5/\\xfd\\x00X\\x9d\\x03\\x00\\xc2\\xc7\\x16\\x16\\xa05m\\xb8\\xcd\\xef\\x84\\xc0\\xcb*\\xf2\\x11J\\x99\\xe4\\x17\\x80\\t\\x16\\x06\\xd5\\xf7I\\x82\\xac-\\x9d|\\x9c\\xcax\\xc7\\xc8$\\x0f\\xd4R\\xef\\x96\\xc6)\\xbd\\xc0\\x14\\xb5\\xc6;\\xa5'|\\xc3|\\xf8\\xde\\xfa\\xfa\\x85\\xf2\\xbew\\xb8\\x10M\\x11\\x02\\x80\\xa1,2/\\x02\\xa2\\x91CI\\xbesO\\x13W\\xbf\\xa2P\\xab\\xa4_[\\x9a\\x82\\x04\\x07\\x00t\\xe0\\x15u\\xaf\\x971\\xe2Q\\xcc\\xd4\\x8a\\xa6:o\\x1c\\x1c\\x9bQ"
+                                )))
+                            ),
+                            Argument::Named("iov_len", Box::new(Argument::Numeric("124"))),
+                        ])),
+                    ])),
                     Argument::Numeric("2"),
                 ],
                 outcome: CallOutcome::Unfinished
@@ -1388,7 +1550,13 @@ mod tests {
                     Argument::Numeric("0"),
                     Argument::Enum("RLIMIT_STACK"),
                     Argument::Null,
-                    Argument::Structure("{rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}"),
+                    Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Named(
+                            "rlim_cur",
+                            Box::new(Argument::NumericWithConstant("8192*1024"))
+                        ),
+                        Argument::Named("rlim_max", Box::new(Argument::Enum("RLIM64_INFINITY"))),
+                    ])),
                 ],
                 outcome: CallOutcome::Complete {
                     retval: Retval::Success(0)
@@ -1480,22 +1648,34 @@ mod tests {
     fn test_nested_brackets() {
         let strace = String::from(r#"["input"]"#);
         let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 1");
-        assert_eq!(v, r#"["input"]"#);
+        assert_eq!(v, vec![Argument::String(EncodedString::new("input"))]);
 
         let strace = String::from("[1, [2, 3], 4]");
         let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 2");
-        assert_eq!(v, "[1, [2, 3], 4]");
+        assert_eq!(
+            v,
+            vec![
+                Argument::Numeric("1"),
+                Argument::Structure(ArgumentStructure::new(vec![
+                    Argument::Numeric("2"),
+                    Argument::Numeric("3")
+                ])),
+                Argument::Numeric("4"),
+            ]
+        );
 
         let strace = String::from("[123]ut");
         let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 3");
-        assert_eq!(v, "[123]");
+        assert_eq!(v, vec![Argument::Numeric("123"),]);
 
         let strace =
             String::from(r#"["abc 123 ] this is a string but it contains a few ] in it"]"#);
         let v = nested_brackets(&mut strace.as_str()).expect("nested_brackets case 4");
         assert_eq!(
             v,
-            r#"["abc 123 ] this is a string but it contains a few ] in it"]"#
+            vec![Argument::String(EncodedString::new(
+                "abc 123 ] this is a string but it contains a few ] in it"
+            ))]
         );
     }
 
@@ -1503,19 +1683,45 @@ mod tests {
     fn test_nested_braces() {
         let strace = String::from("{input=1}");
         let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 1");
-        assert_eq!(v, "{input=1}");
+        assert_eq!(
+            v,
+            vec![Argument::Named("input", Box::new(Argument::Numeric("1")))]
+        );
 
         let strace = String::from("{inp=1, abc={def=2}, ghk=3}");
         let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 2");
-        assert_eq!(v, "{inp=1, abc={def=2}, ghk=3}");
+        assert_eq!(
+            v,
+            vec![
+                Argument::Named("inp", Box::new(Argument::Numeric("1"))),
+                Argument::Named(
+                    "abc",
+                    Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                        Argument::Named("def", Box::new(Argument::Numeric("2")))
+                    ])))
+                ),
+                Argument::Named("ghk", Box::new(Argument::Numeric("3"))),
+            ]
+        );
 
         let strace = String::from("{inp=123}ut");
         let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 3");
-        assert_eq!(v, "{inp=123}");
+        assert_eq!(
+            v,
+            vec![Argument::Named("inp", Box::new(Argument::Numeric("123")))]
+        );
 
         let strace = String::from(r#"{field="string with a } in it can be confusing"}"#);
         let v = nested_braces(&mut strace.as_str()).expect("nested_braces case 4");
-        assert_eq!(v, r#"{field="string with a } in it can be confusing"}"#);
+        assert_eq!(
+            v,
+            vec![Argument::Named(
+                "field",
+                Box::new(Argument::String(EncodedString::new(
+                    "string with a } in it can be confusing"
+                )))
+            )]
+        );
     }
 
     #[test]
@@ -1608,7 +1814,12 @@ mod tests {
                 function: "clone3",
                 arguments: vec![
                     Argument::WrittenArgumentResumed(Box::new(Argument::Structure(
-                        "{parent_tid=[0]}"
+                        ArgumentStructure::new(vec![Argument::Named(
+                            "parent_tid",
+                            Box::new(Argument::Structure(ArgumentStructure::new(vec![
+                                Argument::Numeric("0")
+                            ])))
+                        )])
                     ))),
                     Argument::Numeric("88")
                 ],

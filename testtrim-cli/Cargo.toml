@@ -69,5 +69,3 @@ winnow = { workspace = true }
 [dev-dependencies]
 actix-test = { workspace = true }
 named-lock = { workspace = true }
-# This would be ideal if -Zbindeps was stabilized:
-# testtrim-ebpf-program = { path = "../testtrim-ebpf-program", artifact = "bin" }
