@@ -5,10 +5,9 @@
 name: release
 
 on:
-  # run only via workflow dispatch API
   workflow_dispatch:
   schedule:
-    - cron: "30 2 * * 3"
+    - cron: "30 14 * * 3"
 
 # don't allow multiple simultaneous runs, that will be confusing
 concurrency: release
