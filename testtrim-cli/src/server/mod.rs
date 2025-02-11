@@ -5,9 +5,11 @@
 use std::{net::ToSocketAddrs, time::Duration};
 
 use actix_web::{
-    App, HttpRequest, HttpServer, Scope,
+    App, HttpRequest, HttpResponse, HttpServer, Responder, Scope,
     dev::{ServiceFactory, ServiceRequest},
-    get, middleware, web,
+    get,
+    http::Method,
+    middleware, web,
 };
 use anyhow::Result;
 use coverage_data::InstallCoverageDataHandlers as _;
@@ -75,6 +77,7 @@ async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
             .service(index)
             .service(
                 web::scope("/api/v0")
+                    .route("", web::method(Method::OPTIONS).to(options_api_v0))
                     .service(
                         web::scope(RustTestPlatform::platform_identifier())
                             .platform::<RustTestPlatform>()
@@ -95,6 +98,10 @@ async fn run_server(socket_addrs: impl ToSocketAddrs) -> std::io::Result<()> {
     .bind(socket_addrs)?
     .run()
     .await
+}
+
+async fn options_api_v0() -> impl Responder {
+    HttpResponse::Ok().json(vec!["read_first_available_coverage_data"])
 }
 
 async fn intermittent_cleanup() {
@@ -175,5 +182,18 @@ mod tests {
         let req = test::TestRequest::post().uri("/").to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_client_error());
+    }
+
+    #[actix_web::test]
+    async fn test_api_v0_options() {
+        let app = test::init_service(
+            App::new().route("/", web::method(Method::OPTIONS).to(options_api_v0)),
+        )
+        .await;
+        let req = test::TestRequest::default()
+            .method(Method::OPTIONS)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
     }
 }

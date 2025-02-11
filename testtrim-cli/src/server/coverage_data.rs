@@ -59,6 +59,10 @@ impl InstallCoverageDataHandlers for Scope {
             .app_data(JsonConfig::default().limit(size_64_mb))
             .route("/{project}", web::get().to(get_any_coverage_data::<TP>))
             .route(
+                "/{project}/first",
+                web::get().to(get_first_coverage_data::<TP>),
+            )
+            .route(
                 "/{project}/{commit_identifier}",
                 web::get().to(get_coverage_data::<TP>),
             )
@@ -104,6 +108,42 @@ async fn get_any_coverage_data<TP: TestPlatform>(
             .has_any_coverage_data::<TP>(&project_name)
             .await?,
     )?))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetFirstCoverageDataRequest {
+    pub commit_identifiers: Vec<String>,
+}
+
+async fn get_first_coverage_data<TP: TestPlatform>(
+    path: web::Path<String>,
+    tags: web::Query<HashMap<String, String>>,
+    req: web::Json<GetFirstCoverageDataRequest>,
+    coverage_db: web::Data<CoverageDatabaseDispatch>,
+) -> Result<impl Responder, GetCoverageDataError> {
+    let project_name = path.into_inner();
+    let tags = tags.into_inner();
+    debug!("get_first_coverage_data received: {project_name:?} {tags:?} {req:?}");
+
+    // hashmap -> vec; can't be done in Query<T> because it's considered ordered when query parameters aren't, even
+    // though we don't care about order (arguably we're using the wrong data struct inside)
+    let tags = tags
+        .into_iter()
+        .map(|(key, value)| Tag { key, value })
+        .collect::<Vec<Tag>>();
+
+    Ok(HttpResponse::Ok().json(
+        coverage_db
+            .read_first_available_coverage_data::<TP>(
+                &project_name,
+                &req.commit_identifiers
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<&str>>(),
+                &tags,
+            )
+            .await?,
+    ))
 }
 
 async fn get_coverage_data<TP: TestPlatform>(
@@ -464,6 +504,93 @@ mod tests {
             resp_body.is_some(),
             "commit identifier matches saved; expecting not null"
         );
+
+        Ok(())
+    }
+
+    #[actix_web::test]
+    async fn test_get_first_coverage() -> Result<()> {
+        let test_project = String::from("testtrim-tests-2");
+        let coverage_db = create_test_db()?;
+
+        let mut saved_data =
+            CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
+        saved_data.add_executed_test(rust_test_identifier.clone());
+        saved_data.add_existing_test(rust_test_identifier.clone());
+        saved_data.add_file_to_test(FileCoverage {
+            test_identifier: rust_test_identifier.clone(),
+            file_name: PathBuf::from("file1.rs"),
+        });
+        saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
+            test_identifier: rust_test_identifier.clone(),
+            coverage_identifier: rust_coverage_identifier.clone(),
+        });
+        coverage_db
+            .save_coverage_data::<RustTestPlatform>(
+                &test_project,
+                &saved_data,
+                "test-123-correct-identifier",
+                None,
+                &Vec::new(),
+            )
+            .await?;
+
+        let factory = web::Data::new(coverage_db);
+        let app = test::init_service(App::new().app_data(factory).route(
+            "/coverage-data/{project}/first",
+            web::get().to(get_first_coverage_data::<RustTestPlatform>),
+        ))
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/coverage-data/testtrim-tests-2/first")
+            .set_json(GetFirstCoverageDataRequest {
+                commit_identifiers: vec![],
+            })
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(
+            resp.status().is_success(),
+            "status not success: {}",
+            resp.status()
+        );
+
+        let resp_body: Option<(
+            String,
+            FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
+        )> = test::read_body_json(resp).await;
+        assert!(
+            resp_body.is_none(),
+            "commit identifier doesn't match saved; expecting null"
+        );
+
+        let req = test::TestRequest::get()
+            .uri("/coverage-data/testtrim-tests-2/first")
+            .set_json(GetFirstCoverageDataRequest {
+                commit_identifiers: vec![
+                    String::from("test-123-bad-identifier-1"),
+                    String::from("test-123-bad-identifier-2"),
+                    String::from("test-123-correct-identifier"),
+                ],
+            })
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(
+            resp.status().is_success(),
+            "status not success: {}",
+            resp.status()
+        );
+
+        let resp_body: Option<(
+            String,
+            FullCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
+        )> = test::read_body_json(resp).await;
+        assert!(
+            resp_body.is_some(),
+            "commit identifier matches saved; expecting not null"
+        );
+        let (commit_id, _coverage_data) = resp_body.unwrap();
+        assert_eq!(commit_id, "test-123-correct-identifier");
 
         Ok(())
     }

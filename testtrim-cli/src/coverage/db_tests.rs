@@ -978,3 +978,31 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .contains(&PathBuf::from("file1.rs"))
     );
 }
+
+/// Test that `read_first_available_coverage_data` processes requests in order.
+pub async fn load_first_case(db: impl CoverageDatabase) {
+    let empty_coverage = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
+
+    let result = db
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &empty_coverage, "c1", None, &[])
+        .await;
+    assert!(result.is_ok(), "result = {result:?}");
+
+    let result = db
+        .save_coverage_data::<RustTestPlatform>("testtrim-tests", &empty_coverage, "c2", None, &[])
+        .await;
+    assert!(result.is_ok(), "result = {result:?}");
+
+    let result = db
+        .read_first_available_coverage_data::<RustTestPlatform>(
+            "testtrim-tests",
+            &["c3", "c2", "c1"],
+            &[],
+        )
+        .await;
+    assert!(result.is_ok(), "result = {result:?}");
+    let result = result.unwrap();
+    assert!(result.is_some());
+    let (commit, _loaded_data) = result.unwrap();
+    assert_eq!(commit, "c2");
+}

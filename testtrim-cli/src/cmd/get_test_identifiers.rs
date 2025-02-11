@@ -362,33 +362,28 @@ where
         return Ok(None);
     }
 
+    let max_commits_to_check = 25;
+    let mut commits_to_check: Vec<Commit> = vec![];
+
     let mut commit = head;
-    let commit_identifier = scm.get_commit_identifier(&commit);
-    let mut coverage_data = match ancestor_search_mode {
+    match ancestor_search_mode {
         AncestorSearchMode::AllCommits => {
-            let coverage_data = coverage_db
-                .read_coverage_data::<TP>(project_name, &commit_identifier, tags)
-                .await?;
-            trace!(
-                "commit (HEAD) id {} had coverage data? {:}",
-                commit_identifier,
-                coverage_data.is_some()
-            );
-            coverage_data
+            commits_to_check.push(commit.clone());
         }
-        AncestorSearchMode::SkipHeadCommit => None,
+        AncestorSearchMode::SkipHeadCommit => {}
     };
 
-    while coverage_data.is_none() {
+    while commits_to_check.len() < max_commits_to_check {
         let mut parents = scm.get_commit_parents(&commit)?;
         trace!("checking parents; {} parents found", parents.len());
 
         if parents.is_empty() {
             warn!(
-                "Commit {} had no parents; unable to identify a base set of test cases that has already been run.  All test cases will be run.",
-                scm.get_commit_identifier(&commit)
+                "Commit {} had no parents; will only check coverage data for {} commits identified as possible.",
+                scm.get_commit_identifier(&commit),
+                commits_to_check.len(),
             );
-            return Ok(None);
+            break;
         } else if parents.len() > 1 {
             // If the commit had multiple parents, try to find their common ancestor and continue looking for coverage
             // data at that point.
@@ -396,29 +391,44 @@ where
                 commit = common_ancestor;
             } else {
                 warn!(
-                    "unable to identify common ancestor for parent commits of {}",
-                    scm.get_commit_identifier(&commit)
+                    "unable to identify common ancestor for parent commits of {}; will only check coverage data for {} commits identified as possible.",
+                    scm.get_commit_identifier(&commit),
+                    commits_to_check.len(),
                 );
-                return Ok(None);
+                break;
             }
         } else {
             commit = parents.remove(0);
         }
-        let commit_identifier = scm.get_commit_identifier(&commit);
-        coverage_data = coverage_db
-            .read_coverage_data::<TP>(project_name, &commit_identifier, tags)
-            .await?;
-        trace!(
-            "commit id {} had coverage data? {:}",
-            commit_identifier,
-            coverage_data.is_some()
-        );
+        commits_to_check.push(commit.clone());
     }
 
-    Ok(Some(AncestorCommit {
-        ancestor_commit: commit,
-        coverage_data: coverage_data.unwrap(),
-    }))
+    let commit_identifiers = commits_to_check
+        .iter()
+        .map(|s| scm.get_commit_identifier(s))
+        .collect::<Vec<String>>();
+    let coverage_data = coverage_db
+        .read_first_available_coverage_data::<TP>(
+            project_name,
+            &commit_identifiers
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<&str>>(),
+            tags,
+        )
+        .await?;
+    if let Some((commit_identifier, coverage_data)) = coverage_data {
+        let commit = commits_to_check
+            .into_iter()
+            .find(|s| scm.get_commit_identifier(s) == commit_identifier)
+            .expect("commit w/ ID must be present");
+        Ok(Some(AncestorCommit {
+            ancestor_commit: commit,
+            coverage_data,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Compute which test cases need to be run based upon what changes are being made, and stored coverage data from

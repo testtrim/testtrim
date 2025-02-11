@@ -1301,4 +1301,12 @@ mod tests {
         let db = create_test_db();
         db_tests::independent_tags(db).await;
     }
+
+    #[tokio::test]
+    async fn load_first_case() {
+        let _db_mutex = DB_MUTEX.lock();
+        cleanup().await;
+        let db = create_test_db();
+        db_tests::load_first_case(db).await;
+    }
 }

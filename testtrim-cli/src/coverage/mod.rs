@@ -43,6 +43,7 @@ pub trait CoverageDatabase {
         TP: TestPlatform,
         TP::TI: TestIdentifier + Serialize + DeserializeOwned,
         TP::CI: CoverageIdentifier + Serialize + DeserializeOwned;
+
     async fn read_coverage_data<TP>(
         &self,
         project_name: &str,
@@ -53,14 +54,39 @@ pub trait CoverageDatabase {
         TP: TestPlatform,
         TP::TI: TestIdentifier + Serialize + DeserializeOwned,
         TP::CI: CoverageIdentifier + Serialize + DeserializeOwned;
+
+    async fn read_first_available_coverage_data<'a, TP>(
+        &self,
+        project_name: &str,
+        commit_identifiers: &[&'a str],
+        tags: &[Tag],
+    ) -> Result<Option<(&'a str, FullCoverageData<TP::TI, TP::CI>)>, CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
+        for commit_identifier in commit_identifiers {
+            let coverage_data = self
+                .read_coverage_data::<TP>(project_name, commit_identifier, tags)
+                .await?;
+            if let Some(coverage_data) = coverage_data {
+                return Ok(Some((commit_identifier, coverage_data)));
+            }
+        }
+        Ok(None)
+    }
+
     async fn has_any_coverage_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<bool, CoverageDatabaseDetailedError>;
+
     async fn clear_project_data<TP: TestPlatform>(
         &self,
         project_name: &str,
     ) -> Result<(), CoverageDatabaseDetailedError>;
+
     async fn intermittent_clean(
         &self,
         older_than: &Duration,

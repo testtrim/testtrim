@@ -1134,4 +1134,10 @@ mod tests {
         let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
         db_tests::independent_tags(db).await;
     }
+
+    #[tokio::test]
+    async fn load_first_case() {
+        let db = DieselCoverageDatabase::new_sqlite(String::from(":memory:"));
+        db_tests::load_first_case(db).await;
+    }
 }

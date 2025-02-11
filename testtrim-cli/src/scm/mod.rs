@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub mod git;
 
-pub trait ScmCommit {}
+pub trait ScmCommit: Clone {}
 
 // FIXME: it might make sense to split apart some of these functions into smaller traits?  That would allow tests which
 // need to create mock implementations a simpler path to doing so...

@@ -4,7 +4,7 @@
 
 use async_compression::tokio::bufread::ZstdEncoder;
 use log::{debug, warn};
-use reqwest::Client;
+use reqwest::{Client, Method};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     sync::OnceLock,
@@ -16,7 +16,7 @@ use url::Url;
 use crate::{
     coverage::ResultWithContext as _,
     platform::{TestIdentifier, TestPlatform},
-    server::coverage_data::PostCoverageDataRequest,
+    server::coverage_data::{GetFirstCoverageDataRequest, PostCoverageDataRequest},
 };
 
 use super::{
@@ -29,6 +29,7 @@ use super::{
 pub struct TesttrimApiCoverageDatabase {
     api_url: Url,
     client: OnceLock<Client>,
+    features: tokio::sync::OnceCell<Vec<String>>,
 }
 
 impl From<reqwest::Error> for CoverageDatabaseError {
@@ -60,12 +61,11 @@ impl TesttrimApiCoverageDatabase {
             })?
             .push("api")
             .push("v0");
-        // .push(platform_identifier)
-        // .push("coverage-data");
 
         Ok(TesttrimApiCoverageDatabase {
             api_url: url,
             client: OnceLock::new(),
+            features: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -79,6 +79,45 @@ impl TesttrimApiCoverageDatabase {
                 .build()
                 .unwrap()
         })
+    }
+
+    async fn features(&self) -> Result<&Vec<String>, CoverageDatabaseDetailedError> {
+        self.features
+            .get_or_try_init(async || {
+                let url = &self.api_url;
+                debug!("HTTP request OPTIONS {url}");
+                let client = self.client();
+                let request = client
+                    .request(Method::OPTIONS, url.clone())
+                    .build()
+                    .context("building request for coverage data OPTIONS")?;
+                let response = client
+                    .execute(request)
+                    .await
+                    .context("sending request for coverage data OPTIONS")?;
+
+                debug!("HTTP response: {response:?}");
+                if response.status() == 404 {
+                    // Features not supported by upstream server.
+                    debug!("remote server didn't support OPTIONS and gave 404 -- assuming no features are supported");
+                    return Ok(Vec::new());
+                } else if response.status() != 200 {
+                    return Err(CoverageDatabaseError::DatabaseError(format!(
+                        "remote server returned unexpected status {}",
+                        response.status()
+                    )))
+                    .context("reading response for coverage data OPTIONS");
+                }
+
+                let body = response
+                    .json::<Vec<String>>()
+                    .await
+                    .context("parsing response body for coverage data OPTIONS")?;
+
+                debug!("HTTP response deserialized: {body:?}");
+                Ok(body)
+            })
+            .await
     }
 
     async fn internal_save_coverage_data<TP>(
@@ -272,6 +311,98 @@ impl CoverageDatabase for TesttrimApiCoverageDatabase {
         Ok(body)
     }
 
+    async fn read_first_available_coverage_data<'a, TP>(
+        &self,
+        project_name: &str,
+        commit_identifiers: &[&'a str],
+        tags: &[Tag],
+    ) -> Result<Option<(&'a str, FullCoverageData<TP::TI, TP::CI>)>, CoverageDatabaseDetailedError>
+    where
+        TP: TestPlatform,
+        TP::TI: TestIdentifier + Serialize + DeserializeOwned,
+        TP::CI: CoverageIdentifier + Serialize + DeserializeOwned,
+    {
+        let features = self.features().await?;
+
+        if features.contains(&String::from("read_first_available_coverage_data")) {
+            let mut url = self.api_url.clone();
+            url.path_segments_mut()
+                .map_err(|()| {
+                    CoverageDatabaseError::ParsingError(String::from(
+                        "testtrim API URL is bad; cannot append segments",
+                    ))
+                })
+                .context("parse configured API URL")?
+                .push(TP::platform_identifier())
+                .push("coverage-data")
+                .push(project_name)
+                .push("first");
+            {
+                let mut mutator = url.query_pairs_mut();
+                mutator.clear();
+                for tag in tags {
+                    mutator.append_pair(&tag.key, &tag.value);
+                }
+            }
+            debug!("HTTP request GET {url}");
+            let client = self.client();
+            let request = client
+                .get(url)
+                .json(&GetFirstCoverageDataRequest {
+                    commit_identifiers: commit_identifiers
+                        .iter()
+                        .map(|&s| String::from(s))
+                        .collect::<Vec<String>>(),
+                })
+                .build()
+                .context("building request for coverage data GET")?;
+            let response = client
+                .execute(request)
+                .await
+                .context("sending request for coverage data GET")?;
+
+            debug!("HTTP response: {response:?}");
+            if response.status() != 200 {
+                return Err(CoverageDatabaseError::DatabaseError(format!(
+                    "remote server returned unexpected status {}",
+                    response.status()
+                )))
+                .context("reading response for coverage data GET");
+            }
+
+            let body = response
+                .json::<Option<(String, FullCoverageData<TP::TI, TP::CI>)>>()
+                .await
+                .context("parsing response body for coverage data GET")?;
+            debug!("HTTP response deserialized: {body:?}");
+
+            if let Some((commit_id, coverage_data)) = body {
+                // retval is expected to be `&str` from commit_identifiers -- so find it.  Kinda weird, maybe I should
+                // change the retval to `String`.
+                for r in commit_identifiers {
+                    if *r == commit_id {
+                        return Ok(Some((*r, coverage_data)));
+                    }
+                }
+                return Err(CoverageDatabaseError::DatabaseError(format!(
+                    "commit ID {commit_id} returned by remote was not one provided by client"
+                ))
+                .into());
+            }
+            Ok(None)
+        } else {
+            for commit_identifier in commit_identifiers {
+                let coverage_data = self
+                    .read_coverage_data::<TP>(project_name, commit_identifier, tags)
+                    .await?;
+                if let Some(coverage_data) = coverage_data {
+                    return Ok(Some((commit_identifier, coverage_data)));
+                }
+            }
+            Ok(None)
+        }
+    }
+
     async fn has_any_coverage_data<TP: TestPlatform>(
         &self,
         project_name: &str,
@@ -378,12 +509,13 @@ mod tests {
         App, Error, HttpResponse, Responder,
         body::{BoxBody, MessageBody},
         dev::{ServiceRequest, ServiceResponse},
-        http::StatusCode,
+        http::{Method, StatusCode},
         middleware::{self, Next, from_fn},
         web,
     };
     use anyhow::Result;
     use lazy_static::lazy_static;
+    use log::debug;
     use std::str::FromStr;
     use std::{collections::HashMap, sync::Mutex};
 
@@ -410,6 +542,7 @@ mod tests {
     }
 
     struct TestInterceptState {
+        last_req_url: Mutex<Option<String>>,
         last_req_headers: Mutex<Option<HashMap<String, String>>>,
         last_resp_headers: Mutex<Option<HashMap<String, String>>>,
         next_request_fail: Mutex<Option<StatusCode>>,
@@ -444,6 +577,11 @@ mod tests {
             let mut last_req_headers = data.last_req_headers.lock().unwrap();
             *last_req_headers = Some(header_map);
         }
+        {
+            let mut last_req_url = data.last_req_url.lock().unwrap();
+            *last_req_url = Some(req.uri().to_string());
+            debug!("saved last_req_url as {last_req_url:?}");
+        }
         let resp = next.call(req).await;
         if let Ok(ref resp) = resp {
             let mut header_map = HashMap::new();
@@ -457,6 +595,12 @@ mod tests {
             *last_resp_headers = Some(header_map);
         }
         resp.map(|resp| resp.map_body(|_head, body| BoxBody::new(body)))
+    }
+
+    async fn get_last_request_url(data: web::Data<TestInterceptState>) -> impl Responder {
+        let lock = data.last_req_url.lock().unwrap();
+        let value = lock.clone();
+        HttpResponse::Ok().json(value)
     }
 
     async fn get_last_request_headers(data: web::Data<TestInterceptState>) -> impl Responder {
@@ -483,11 +627,17 @@ mod tests {
         HttpResponse::Ok().json("woot!")
     }
 
-    fn create_test_server() -> TestServer {
+    fn create_test_server(features: Vec<String>) -> TestServer {
         let coverage_db = crate::coverage::create_test_db().unwrap();
         let factory = web::Data::new(coverage_db);
+        let has_features = !features.is_empty();
+        let features = web::Data::new(features);
+
+        let options_api_v0 =
+            async |features: web::Data<Vec<String>>| HttpResponse::Ok().json(features);
 
         let test_state = web::Data::new(TestInterceptState {
+            last_req_url: Mutex::new(None),
             last_req_headers: Mutex::new(None),
             last_resp_headers: Mutex::new(None),
             next_request_fail: Mutex::new(None),
@@ -495,15 +645,22 @@ mod tests {
         actix_test::start(move || {
             App::new()
                 .app_data(test_state.clone())
+                .app_data(features.clone())
                 .service(
-                    web::scope(&format!(
-                        "/api/v0/{}",
-                        RustTestPlatform::platform_identifier()
-                    ))
-                    .wrap(middleware::Compress::default())
-                    .wrap(from_fn(testing_intercept_middleware))
-                    .platform_with_db_factory::<RustTestPlatform>(factory.clone()),
+                    web::scope("/api/v0")
+                        .configure(|scope| {
+                            if has_features {
+                                scope.route("", web::method(Method::OPTIONS).to(options_api_v0));
+                            }
+                        })
+                        .service(
+                            web::scope(RustTestPlatform::platform_identifier())
+                                .wrap(middleware::Compress::default())
+                                .wrap(from_fn(testing_intercept_middleware))
+                                .platform_with_db_factory::<RustTestPlatform>(factory.clone()),
+                        ),
                 )
+                .route("/last-request-url", web::get().to(get_last_request_url))
                 .route(
                     "/last-request-headers",
                     web::get().to(get_last_request_headers),
@@ -520,7 +677,18 @@ mod tests {
     }
 
     fn create_test_db() -> (TestServer, TesttrimApiCoverageDatabase) {
-        let srv = create_test_server();
+        let srv = create_test_server(vec![]);
+        let url = srv.url("/");
+        (
+            srv,
+            TesttrimApiCoverageDatabase::new(&url).expect("init must succeed"),
+        )
+    }
+
+    fn create_test_db_w_features(
+        features: Vec<String>,
+    ) -> (TestServer, TesttrimApiCoverageDatabase) {
+        let srv = create_test_server(features);
         let url = srv.url("/");
         (
             srv,
@@ -762,5 +930,109 @@ mod tests {
         // FIXME: create a network-level error as well for retry
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn features_not_available() -> Result<()> {
+        simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())
+            .expect("must config logging");
+
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (_srv, db) = create_test_db();
+
+        assert!(!db.features.initialized());
+
+        // Make a request that uses features...
+        let result = db
+            .read_first_available_coverage_data::<RustTestPlatform>("testtrim-tests", &[], &[])
+            .await;
+        assert!(result.is_ok(), "result = {result:?}");
+
+        // Should be initialized but empty if the upstream server didn't support features.
+        assert!(db.features.initialized());
+        assert_eq!(db.features.get().unwrap(), &Vec::<String>::new());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_features() -> Result<()> {
+        simplelog::SimpleLogger::init(simplelog::LevelFilter::Trace, simplelog::Config::default())
+            .expect("must config logging");
+
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (_srv, db) = create_test_db_w_features(vec![String::from("fake-feature")]);
+
+        assert!(!db.features.initialized());
+
+        // Make a GET...
+        let result = db
+            .read_first_available_coverage_data::<RustTestPlatform>("testtrim-tests", &[], &[])
+            .await;
+        assert!(result.is_ok(), "result = {result:?}");
+
+        assert!(db.features.initialized());
+        assert_eq!(
+            db.features.get().unwrap(),
+            &vec![String::from("fake-feature")]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_first_available_coverage_data() -> Result<()> {
+        simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
+            .expect("must config logging");
+
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (srv, db) =
+            create_test_db_w_features(vec![String::from("read_first_available_coverage_data")]);
+
+        // Make a GET...
+        let result = db
+            .read_first_available_coverage_data::<RustTestPlatform>(
+                "testtrim-tests",
+                &["abc", "def"],
+                &[],
+            )
+            .await;
+        assert!(result.is_ok(), "result = {result:?}");
+
+        // Check which HTTP endpoint was used:
+        let request_url = reqwest::get(srv.url("/last-request-url"))
+            .await
+            .context("GET /last-request-url")?
+            .json::<Option<String>>()
+            .await
+            .context("parsing response body for GET /last-request-url")?;
+        assert!(request_url.is_some(), "must have saved/returned http url");
+        let request_url = request_url.unwrap();
+        assert_eq!(
+            request_url,
+            "/api/v0/rust/coverage-data/testtrim-tests/first?"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_first_case_obsolete() {
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (_srv, db) = create_test_db();
+        db_tests::load_first_case(db).await;
+    }
+
+    #[tokio::test]
+    async fn load_first_case() {
+        let _test_mutex = TEST_MUTEX.lock();
+        cleanup().await;
+        let (_srv, db) =
+            create_test_db_w_features(vec![String::from("read_first_available_coverage_data")]);
+        db_tests::load_first_case(db).await;
     }
 }
