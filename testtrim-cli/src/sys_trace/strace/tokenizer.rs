@@ -166,6 +166,25 @@ impl<'a> Argument<'a> {
             v => Err(anyhow!("argument was not numeric; it was {v:?}")),
         }
     }
+
+    pub fn structure(&'a self) -> Result<&'a ArgumentStructure<'a>> {
+        match self {
+            Argument::WrittenArgument(orig, _) => match &**orig {
+                Argument::Structure(structure) => Ok(structure),
+                other => Err(anyhow!(
+                    "expected argument to be Structure, but was {other:?}"
+                )),
+            },
+            Argument::WrittenArgumentReference(orig, _) => match orig {
+                Argument::Structure(structure) => Ok(structure),
+                other => Err(anyhow!(
+                    "eexpected argument to be Structure, but was {other:?}"
+                )),
+            },
+            Argument::Structure(v) => Ok(v),
+            v => Err(anyhow!("argument was not structure; it was {v:?}")),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -183,6 +202,21 @@ impl<'a> ArgumentStructure<'a> {
             Some(arg) => Ok(arg),
             None => Err(anyhow!(
                 "expected to access struct index {index}, but could not; struct was {self:?}"
+            )),
+        }
+    }
+}
+
+pub trait ArgumentCollection<'a> {
+    fn index(&'a self, index: usize) -> Result<&'a Argument<'a>>;
+}
+
+impl<'a> ArgumentCollection<'a> for &'a [&'a Argument<'a>] {
+    fn index(&'a self, index: usize) -> Result<&'a Argument<'a>> {
+        match self.get(index) {
+            Some(arg) => Ok(arg),
+            None => Err(anyhow!(
+                "expected to access argument at index {index}, but could not; arguments were {self:?}"
             )),
         }
     }

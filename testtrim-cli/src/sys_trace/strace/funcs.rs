@@ -16,8 +16,8 @@ use crate::sys_trace::trace::UnifiedSocketAddr;
 use super::{
     sequencer::{CompleteSyscall, Sequencer, SequencerOutput},
     tokenizer::{
-        Argument, ArgumentStructure, CallOutcome, EncodedString, Retval, SyscallSegment,
-        TokenizerOutput,
+        Argument, ArgumentCollection, ArgumentStructure, CallOutcome, EncodedString, Retval,
+        SyscallSegment, TokenizerOutput,
     },
 };
 
@@ -239,30 +239,12 @@ impl FunctionExtractor {
             "expected 2 arguments to clone3, but arguments were: {:?}",
             arguments
         );
-        let clone = match &arguments[0] {
-            Argument::WrittenArgument(orig, _) => match &**orig {
-                Argument::Structure(structure) => structure,
-                other => {
-                    return Err(anyhow!(
-                        "expected clone3 arg to be Structure, but was {other:?}"
-                    ));
-                }
-            },
-            Argument::WrittenArgumentReference(orig, _) => match orig {
-                Argument::Structure(structure) => structure,
-                other => {
-                    return Err(anyhow!(
-                        "expected clone3 arg to be Structure, but was {other:?}"
-                    ));
-                }
-            },
-            v => {
-                return Err(anyhow!(
-                    "argument 0 was not structure on syscall clone; it was {v:?}",
-                ));
-            }
-        };
-        let flags = clone.index(0)?.named("flags")?.enum_v()?;
+        let flags = arguments
+            .index(0)?
+            .structure()?
+            .index(0)?
+            .named("flags")?
+            .enum_v()?;
         Ok(Function::Clone {
             child_pid: retval,
             thread: flags.contains("CLONE_THREAD"),
