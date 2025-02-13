@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    borrow::Cow, collections::HashSet, marker::PhantomData, path::PathBuf, process::ExitCode,
+    borrow::Cow,
+    collections::HashSet,
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    process::ExitCode,
     sync::Arc,
 };
 
@@ -46,7 +50,7 @@ pub async fn cli(
 ) -> ExitCode {
     let test_project_type =
         if run_opts.target_parameters.test_project_type == TestProjectType::AutoDetect {
-            autodetect_test_project_type()
+            autodetect_test_project_type(&common_opts.project_dir)
         } else {
             run_opts.target_parameters.test_project_type
         };
@@ -93,8 +97,9 @@ where
     );
 
     let exit_code = match run_tests::<_, _, _, _, _, _, TP>(
+        &common_opts.project_dir,
         run_opts.target_parameters.test_selection_mode,
-        &GitScm {},
+        &GitScm::new(common_opts.project_dir.clone()),
         run_opts.source_mode,
         run_opts.execution_parameters.jobs,
         &tags,
@@ -175,7 +180,9 @@ pub struct RunTestsOutput<Commit: ScmCommit, TI: TestIdentifier, CTI: ConcreteTe
     test_identifier_type: PhantomData<TI>,
 }
 
+#[allow(clippy::too_many_arguments)] // At least for the moment...
 pub async fn run_tests<Commit, MyScm, TI, CI, TD, CTI, TP>(
+    project_dir: &Path,
     mode: GetTestIdentifierMode,
     scm: &MyScm,
     source_mode: SourceMode,
@@ -224,6 +231,7 @@ where
     );
 
     let test_cases = get_target_test_cases::<Commit, MyScm, _, _, _, _, TP>(
+        project_dir,
         mode,
         scm,
         ancestor_search_mode,
@@ -233,7 +241,7 @@ where
     )
     .await?;
 
-    let mut coverage_data = TP::run_tests(test_cases.target_test_cases.keys(), jobs)
+    let mut coverage_data = TP::run_tests(project_dir, test_cases.target_test_cases.keys(), jobs)
         .instrument(info_span!(
             "run_tests",
             ui_stage = Into::<u64>::into(UiStage::RunTests),
@@ -251,7 +259,7 @@ where
             Some(ref files_changed) => Cow::Borrowed(files_changed),
             None => Cow::Owned(scm.get_all_repo_files()?),
         };
-        TP::analyze_changed_files(&files_changed, &mut coverage_data)?;
+        TP::analyze_changed_files(project_dir, &files_changed, &mut coverage_data)?;
 
         let commit_identifier = scm.get_commit_identifier(&scm.get_head_commit()?);
 
@@ -263,7 +271,7 @@ where
         async move {
             coverage_db
                 .save_coverage_data::<TP>(
-                    &TP::project_name()?,
+                    &TP::project_name(project_dir)?,
                     &coverage_data,
                     &commit_identifier,
                     ancestor_commit_identifier.as_deref(),

@@ -16,12 +16,22 @@ pub struct GitScmCommit {
 
 impl ScmCommit for GitScmCommit {}
 
-pub struct GitScm;
+pub struct GitScm {
+    project_dir: PathBuf,
+}
 
 impl GitScm {
+    #[must_use]
+    pub fn new(project_dir: PathBuf) -> Self {
+        Self { project_dir }
+    }
+
     // FIXME: reimplement in a way that doesn't use a git subcommand; shouldn't really be necessary
     fn get_revision_sha(&self, commit: &str) -> Result<String> {
-        let output = Command::new("git").args(["rev-parse", commit]).output()?;
+        let output = Command::new("git")
+            .args(["rev-parse", commit])
+            .current_dir(&self.project_dir)
+            .output()?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
@@ -42,6 +52,7 @@ impl Scm<GitScmCommit> for GitScm {
     fn get_changed_files(&self, commit: &GitScmCommit) -> Result<HashSet<PathBuf>> {
         let output = Command::new("git")
             .args(["diff", "--name-only", &commit.sha])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git diff ...".to_string(),
@@ -65,6 +76,7 @@ impl Scm<GitScmCommit> for GitScm {
     fn get_all_repo_files(&self) -> Result<HashSet<PathBuf>> {
         let output = Command::new("git")
             .args(["ls-files"])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git ls-files".to_string(),
@@ -98,6 +110,7 @@ impl Scm<GitScmCommit> for GitScm {
     fn get_commit_parents(&self, commit: &GitScmCommit) -> Result<Vec<GitScmCommit>> {
         let output = Command::new("git")
             .args(["rev-list", "--parents", "-n", "1", &commit.sha])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git rev-list ...".to_string(),
@@ -142,12 +155,14 @@ impl Scm<GitScmCommit> for GitScm {
             args.push(c.sha.as_str());
         }
 
-        let output = Command::new("git").args(&args).output().map_err(|e| {
-            SubcommandErrors::UnableToStart {
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(&self.project_dir)
+            .output()
+            .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git merge-base ...".to_string(),
                 error: e,
-            }
-        })?;
+            })?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
@@ -169,6 +184,7 @@ impl Scm<GitScmCommit> for GitScm {
     fn is_working_dir_clean(&self) -> Result<bool> {
         let output = Command::new("git")
             .args(["status", "--porcelain"])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git status --porcelain".to_string(),
@@ -194,6 +210,7 @@ impl Scm<GitScmCommit> for GitScm {
                 "show",
                 &format!("{}:{}", &commit.sha, path.to_str().unwrap()),
             ])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git show ...".to_string(),
@@ -215,6 +232,7 @@ impl Scm<GitScmCommit> for GitScm {
     fn checkout(&self, commit: &GitScmCommit) -> Result<()> {
         let output = Command::new("git")
             .args(["checkout", &commit.sha])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git checkout ...".to_string(),
@@ -236,6 +254,7 @@ impl Scm<GitScmCommit> for GitScm {
     fn clean_lightly(&self) -> Result<()> {
         let output = Command::new("git")
             .args(["clean", "-f", "-d"])
+            .current_dir(&self.project_dir)
             .output()
             .map_err(|e| SubcommandErrors::UnableToStart {
                 command: "git clean -f -d".to_string(),

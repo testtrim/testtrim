@@ -9,7 +9,6 @@ use log::{trace, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::env::current_dir;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -161,8 +160,8 @@ pub struct DotnetTestPlatform;
 
 impl DotnetTestPlatform {
     #[must_use]
-    pub fn autodetect() -> bool {
-        let slns = Self::find_sln_file()
+    pub fn autodetect(project_dir: &Path) -> bool {
+        let slns = Self::find_sln_file(project_dir)
             .expect("autodetect test project type failed when checking for *.sln files");
         if slns.is_empty() {
             false
@@ -172,7 +171,9 @@ impl DotnetTestPlatform {
         }
     }
 
-    async fn get_all_test_cases() -> Result<HashSet<DotnetConcreteTestIdentifier>> {
+    async fn get_all_test_cases(
+        project_dir: &Path,
+    ) -> Result<HashSet<DotnetConcreteTestIdentifier>> {
         let mut result: HashSet<DotnetConcreteTestIdentifier> = HashSet::new();
 
         let args = [
@@ -184,6 +185,7 @@ impl DotnetTestPlatform {
         ];
         let output = Command::new("dotnet")
             .args(args)
+            .current_dir(project_dir)
             .output()
             .instrument(info_span!("dotnet test",
                 ui_stage = Into::<u64>::into(UiStage::Compiling),
@@ -234,6 +236,7 @@ impl DotnetTestPlatform {
     }
 
     async fn run_test(
+        project_dir: &Path,
         test_case: &DotnetConcreteTestIdentifier,
         _tmp_path: &Path,
         _binaries: &DashSet<PathBuf>,
@@ -273,6 +276,7 @@ impl DotnetTestPlatform {
                 // still only works for libraries with pdb files, though.
                 // "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeAssembliesWithoutSources=None",
             ])
+            .current_dir(project_dir)
             .output()
             .instrument(info_span!("execute-test", perftrace = "run-test"))
             .await
@@ -308,6 +312,7 @@ impl DotnetTestPlatform {
                 if line.starts_with(' ') {
                     let path = PathBuf::from(line.trim_start());
                     Self::parse_profiling_data(
+                        project_dir,
                         test_case,
                         &path,
                         /* &dep_map, */ &mut coverage_data,
@@ -324,12 +329,12 @@ impl DotnetTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_profiling_data(
+        project_dir: &Path,
         test_case: &DotnetConcreteTestIdentifier,
         profile_file: &PathBuf,
         // dep_map: &SolutionDependencyMap, // TODO: external dependency tracking
         coverage_data: &mut CommitCoverageData<DotnetTestIdentifier, DotnetCoverageIdentifier>,
     ) -> Result<()> {
-        let project_dir = current_dir().context("error getting current_dir()")?;
         let reader = File::open(profile_file).context(format!("error opening {profile_file:?}"))?;
 
         let coverage: Coverage = quick_xml::de::from_reader(BufReader::new(reader))?;
@@ -371,7 +376,7 @@ impl DotnetTestPlatform {
                     // how it works, but it is how it works in Linux.  As-is, we can check if it's part of our repo by
                     // strip_prefix:
                     if let Ok(relative_path) =
-                        Path::new(&current_source_file).strip_prefix(&project_dir)
+                        Path::new(&current_source_file).strip_prefix(project_dir)
                     {
                         trace!("test hit file relative path: {relative_path:?}");
                         coverage_data.add_file_to_test(FileCoverage {
@@ -432,9 +437,9 @@ impl DotnetTestPlatform {
     //     }
     // }
 
-    fn find_sln_file() -> Result<Vec<PathBuf>> {
+    fn find_sln_file(project_dir: &Path) -> Result<Vec<PathBuf>> {
         let mut retval = vec![];
-        for entry in fs::read_dir(".")? {
+        for entry in fs::read_dir(project_dir)? {
             let path = entry?.path();
             if path.extension().is_some_and(|ext| ext == "sln") && path.is_file() {
                 retval.push(path);
@@ -663,9 +668,9 @@ impl TestPlatform for DotnetTestPlatform {
         }]
     }
 
-    fn project_name() -> Result<String> {
+    fn project_name(project_dir: &Path) -> Result<String> {
         Ok(String::from(
-            current_dir()?
+            project_dir
                 .file_name()
                 .ok_or_else(|| anyhow!("unable to find name of current directory"))?
                 .to_string_lossy(),
@@ -673,8 +678,8 @@ impl TestPlatform for DotnetTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    async fn discover_tests() -> Result<DotnetTestDiscovery> {
-        let all_test_cases = Self::get_all_test_cases().await?;
+    async fn discover_tests(project_dir: &Path) -> Result<DotnetTestDiscovery> {
+        let all_test_cases = Self::get_all_test_cases(project_dir).await?;
         trace!("all_test_cases: {:?}", all_test_cases);
         Ok(DotnetTestDiscovery { all_test_cases })
     }
@@ -704,6 +709,7 @@ impl TestPlatform for DotnetTestPlatform {
     }
 
     async fn run_tests<'a, I>(
+        project_dir: &Path,
         test_cases: I,
         _jobs: u16, // FIXME: parallel tests are causing errors
     ) -> Result<CommitCoverageData<DotnetTestIdentifier, DotnetCoverageIdentifier>, RunTestsErrors>
@@ -736,7 +742,7 @@ impl TestPlatform for DotnetTestPlatform {
             let b = binaries.clone();
             // let dep_map = dep_map.clone(); // TODO: external dependency tracking
             futures.push(async move {
-                Self::run_test(&tc, &tmp_path, &b)
+                Self::run_test(project_dir, &tc, &tmp_path, &b)
                     .instrument(info_span!("dotnet test",
                         ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
                         test_case = %tc.test_identifier(),
@@ -771,6 +777,7 @@ impl TestPlatform for DotnetTestPlatform {
     }
 
     fn analyze_changed_files(
+        _project_dir: &Path,
         _d_files: &HashSet<PathBuf>,
         _ge_data: &mut CommitCoverageData<DotnetTestIdentifier, DotnetCoverageIdentifier>,
     ) -> Result<()> {

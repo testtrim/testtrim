@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::{collections::HashSet, path::PathBuf};
@@ -48,7 +49,7 @@ pub async fn cli<Logger: Log + 'static>(
     target_parameters: &TestTargetingParameters,
 ) -> ExitCode {
     let test_project_type = if target_parameters.test_project_type == TestProjectType::AutoDetect {
-        autodetect_test_project_type()
+        autodetect_test_project_type(&common_opts.project_dir)
     } else {
         target_parameters.test_project_type
     };
@@ -107,8 +108,9 @@ where
     );
 
     let test_cases = get_target_test_cases::<_, _, _, _, _, _, TP>(
+        &common_opts.project_dir,
         target_parameters.test_selection_mode,
-        &GitScm {},
+        &GitScm::new(common_opts.project_dir.clone()),
         AncestorSearchMode::AllCommits,
         &tags,
         &create_db_infallible(),
@@ -187,6 +189,7 @@ pub enum AncestorSearchMode {
 }
 
 pub async fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
+    project_dir: &Path,
     mode: GetTestIdentifierMode,
     scm: &MyScm,
     ancestor_search_mode: AncestorSearchMode,
@@ -203,7 +206,7 @@ where
     CTI: ConcreteTestIdentifier<TI>,
     TP: TestPlatform<TI = TI, CI = CI, TD = TD, CTI = CTI>,
 {
-    let test_discovery = TP::discover_tests().await?;
+    let test_discovery = TP::discover_tests(project_dir).await?;
     let all_test_cases = test_discovery.all_test_cases();
 
     if mode == GetTestIdentifierMode::All {
@@ -222,7 +225,7 @@ where
 
     let (ancestor_commit, coverage_data) = if let Some(ancestor_retval) =
         find_ancestor_commit_with_coverage_data::<Commit, MyScm, TP>(
-            &TP::project_name()?,
+            &TP::project_name(project_dir)?,
             scm,
             scm.get_head_commit()?,
             ancestor_search_mode,

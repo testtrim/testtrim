@@ -18,7 +18,7 @@ use std::io::BufReader;
 use std::path::{Component, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::{env, fmt, fs, io};
+use std::{fmt, fs, io};
 use std::{hash::Hash, path::Path};
 use tokio::process::Command;
 use tracing::{Instrument, info_span, instrument};
@@ -169,8 +169,8 @@ pub struct RustTestPlatform;
 
 impl RustTestPlatform {
     #[must_use]
-    pub fn autodetect() -> bool {
-        if fs::exists("Cargo.toml")
+    pub fn autodetect(project_dir: &Path) -> bool {
+        if fs::exists(project_dir.join("Cargo.toml"))
             .expect("autodetect test project type failed when checking Cargo.toml existence")
         {
             trace!("Detected Cargo.toml; auto-detect result: Rust test project");
@@ -279,9 +279,8 @@ impl RustTestPlatform {
         Ok(changed_external_dependencies)
     }
 
-    async fn find_test_binaries() -> Result<HashSet<RustTestBinary>> {
+    async fn find_test_binaries(project_dir: &Path) -> Result<HashSet<RustTestBinary>> {
         let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
-        let repo_root = env::current_dir()?;
 
         let args = [
             "test",
@@ -301,6 +300,7 @@ impl RustTestPlatform {
                 tmp_dir.path().join("default_%m_%p.profraw"),
             )
             .env("RUSTFLAGS", "-C instrument-coverage")
+            .current_dir(project_dir)
             .output()
             .instrument(info_span!("cargo test",
                 ui_stage = Into::<u64>::into(UiStage::Compiling),
@@ -342,7 +342,7 @@ impl RustTestPlatform {
                         // that into a relative path from the root of the repo, eg. "src/lib.rs", which will be stable
                         // from coverage run to run.
                         let abs_src_path = json_value["target"]["src_path"].as_str().unwrap();
-                        let rel_src_path = Path::new(abs_src_path).strip_prefix(&repo_root)?;
+                        let rel_src_path = Path::new(abs_src_path).strip_prefix(project_dir)?;
 
                         test_binaries.insert(RustTestBinary {
                             rel_src_path: rel_src_path.to_path_buf(),
@@ -370,6 +370,7 @@ impl RustTestPlatform {
     }
 
     async fn get_all_test_cases(
+        project_dir: &Path,
         test_binaries: &HashSet<RustTestBinary>,
     ) -> Result<HashSet<RustConcreteTestIdentifier>> {
         let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
@@ -382,6 +383,7 @@ impl RustTestPlatform {
                     "LLVM_PROFILE_FILE",
                     Path::join(tmp_dir.path(), "get_all_test_cases_%m_%p.profraw"),
                 )
+                .current_dir(project_dir)
                 .output()
                 .instrument(info_span!("list tests",
                     subcommand = true,
@@ -510,15 +512,14 @@ impl RustTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_trace_data(
+        project_dir: &Path,
         test_case: &RustConcreteTestIdentifier,
         trace: &Trace,
         current_dir: &Path,
         coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
     ) -> Result<()> {
-        let repo_root = env::current_dir()?;
-
         for path in trace.get_open_paths() {
-            if path.is_relative() || path.starts_with(&repo_root) {
+            if path.is_relative() || path.starts_with(project_dir) {
                 debug!(
                     "found test {} accessed local file {path:?}",
                     test_case.test_identifier
@@ -527,7 +528,7 @@ impl RustTestPlatform {
                 let target_path = normalize_path(
                     path,
                     &current_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
-                    &repo_root,
+                    project_dir,
                     |warning| {
                         warn!(
                             "syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}"
@@ -557,6 +558,7 @@ impl RustTestPlatform {
     }
 
     async fn run_test(
+        project_dir: &Path,
         test_case: &RustConcreteTestIdentifier,
         tmp_path: &Path,
         binaries: &DashSet<PathBuf>,
@@ -649,7 +651,7 @@ impl RustTestPlatform {
             &coverage_library_lock,
             &mut coverage_data,
         )?;
-        Self::parse_trace_data(test_case, &trace, test_wd, &mut coverage_data)?;
+        Self::parse_trace_data(project_dir, test_case, &trace, test_wd, &mut coverage_data)?;
 
         Ok(coverage_data)
     }
@@ -691,13 +693,14 @@ impl TestPlatform for RustTestPlatform {
         }]
     }
 
-    fn project_name() -> Result<String> {
+    fn project_name(project_dir: &Path) -> Result<String> {
         // It could make more sense to make this method infallible and return an "unknown" tag or something.  But I'm
         // thinking to start restrictive and see if it ever becomes an issue.
 
         // We avoid using `Manifest`'s advanced workspace features since we're just trying to read the project name; so
         // read the Cargo.toml file ourselves and use `from_str` to parse it with the least fuss.
-        let toml_contents = fs::read_to_string("Cargo.toml").context("reading Cargo.toml")?;
+        let toml_contents =
+            fs::read_to_string(project_dir.join("Cargo.toml")).context("reading Cargo.toml")?;
         let manifest = Manifest::from_str(&toml_contents).context("parsing Cargo.toml")?;
 
         if let Some(package) = manifest.package {
@@ -714,11 +717,11 @@ impl TestPlatform for RustTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    async fn discover_tests() -> Result<RustTestDiscovery> {
-        let test_binaries = RustTestPlatform::find_test_binaries().await?;
+    async fn discover_tests(project_dir: &Path) -> Result<RustTestDiscovery> {
+        let test_binaries = RustTestPlatform::find_test_binaries(project_dir).await?;
         trace!("test_binaries: {:?}", test_binaries);
 
-        let all_test_cases = RustTestPlatform::get_all_test_cases(&test_binaries)
+        let all_test_cases = RustTestPlatform::get_all_test_cases(project_dir, &test_binaries)
             .instrument(info_span!(
                 "get_all_test_cases",
                 ui_stage = Into::<u64>::into(UiStage::ListingTests)
@@ -767,6 +770,7 @@ impl TestPlatform for RustTestPlatform {
 
     #[instrument(skip_all)]
     async fn run_tests<'a, I>(
+        project_dir: &Path,
         test_cases: I,
         jobs: u16,
     ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestsErrors>
@@ -787,7 +791,7 @@ impl TestPlatform for RustTestPlatform {
             let cl = coverage_library.clone();
             let tc = test_case.clone();
             futures.push(async move {
-                RustTestPlatform::run_test(&tc, &tmp_path, &b, &cl)
+                RustTestPlatform::run_test(project_dir, &tc, &tmp_path, &b, &cl)
                     .instrument(info_span!("cargo test",
                         ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
                         test_case = %tc.test_identifier(),
@@ -826,11 +830,10 @@ impl TestPlatform for RustTestPlatform {
     }
 
     fn analyze_changed_files(
+        project_dir: &Path,
         changed_files: &HashSet<PathBuf>,
         coverage_data: &mut CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>,
     ) -> Result<()> {
-        let repo_root = env::current_dir()?;
-
         for file in changed_files {
             if file.extension().is_some_and(|ext| ext == "rs") {
                 let mut found_references = false;
@@ -844,7 +847,7 @@ impl TestPlatform for RustTestPlatform {
                 for target_path in Self::find_compile_time_includes(file)? {
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
-                    let target_path = normalize_path(&target_path, file, &repo_root, |warning| {
+                    let target_path = normalize_path(&target_path, file, project_dir, |warning| {
                         warn!(
                             "file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}"
                         );
@@ -900,7 +903,13 @@ fn parse_cargo_package(path: &OsStr) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, ffi::OsStr, path::PathBuf, str::FromStr};
+    use std::{
+        collections::HashSet,
+        ffi::OsStr,
+        fs,
+        path::{Path, PathBuf},
+        str::FromStr,
+    };
 
     use anyhow::Result;
     use cargo_lock::Lockfile;
@@ -969,7 +978,11 @@ mod tests {
 
         let mut coverage_data = CommitCoverageData::new();
 
-        let res = RustTestPlatform::analyze_changed_files(&files, &mut coverage_data);
+        let res = RustTestPlatform::analyze_changed_files(
+            &fs::canonicalize(Path::new(".")).unwrap(),
+            &files,
+            &mut coverage_data,
+        );
         assert!(res.is_ok());
         assert_eq!(
             coverage_data.file_references_files_map().len(),

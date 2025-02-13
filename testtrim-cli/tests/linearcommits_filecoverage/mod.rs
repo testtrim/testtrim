@@ -5,6 +5,8 @@
 use anyhow::{Result, anyhow};
 use log::info;
 use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, AncestorSearchMode, get_target_test_cases};
@@ -46,6 +48,7 @@ async fn setup_test<TP: TestPlatform>(
     git_clone(test_project)?;
     drop(_tmp_dir_cwd);
 
+    // FIXME: remove the CWD here so that we can test the new project_dir capabilities
     let _tmp_dir_cwd = ChangeWorkingDirectory::new(&tmp_dir.path().join(test_project)); // FIXME: hack assumes folder name
 
     let coverage_db = create_test_db()?;
@@ -62,13 +65,15 @@ async fn execute_test<TP: TestPlatform>(
     commit_test_data: &CommitTestData<'_>,
     coverage_db: &impl CoverageDatabase,
 ) -> Result<()> {
-    let scm = GitScm {};
+    let project_dir = fs::canonicalize(PathBuf::from("."))?;
+    let scm = GitScm::new(project_dir.clone());
     let tags = &get_test_identifiers::tags::<TP>(&Vec::new(), PlatformTaggingMode::Automatic);
 
     info!("checking out {}", commit_test_data.test_commit);
     git_checkout(commit_test_data.test_commit)?;
 
     let all_test_cases = get_target_test_cases::<_, _, _, _, _, _, TP>(
+        &project_dir,
         GetTestIdentifierMode::All,
         &scm,
         AncestorSearchMode::AllCommits,
@@ -96,6 +101,7 @@ async fn execute_test<TP: TestPlatform>(
     }
 
     let relevant_test_cases = get_target_test_cases::<_, _, _, _, _, _, TP>(
+        &project_dir,
         GetTestIdentifierMode::Relevant,
         &scm,
         AncestorSearchMode::AllCommits,
@@ -126,6 +132,7 @@ async fn execute_test<TP: TestPlatform>(
         commit_test_data.test_commit
     );
     match run_tests::<_, _, _, _, _, _, TP>(
+        &project_dir,
         GetTestIdentifierMode::Relevant,
         &scm,
         SourceMode::Automatic,

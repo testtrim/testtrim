@@ -6,7 +6,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use log::set_max_level;
 use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
-use std::{fmt::Debug, net::SocketAddr, process::ExitCode};
+use std::{
+    fmt::Debug,
+    fs::{self},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use crate::{
     coverage::Tag,
@@ -34,6 +40,10 @@ pub struct CommonOptions {
     /// Disable progress bars and spinners, even if the terminal supports them.
     #[arg(short, long, global = true)]
     pub no_progress: bool,
+
+    /// Project directory to operate within.  Defaults to the current working directory.
+    #[arg(short, long, global = true, default_value = ".")]
+    pub project_dir: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -191,8 +201,23 @@ pub enum SourceMode {
     WorkingTree,
 }
 
+#[allow(clippy::print_stderr)]
+pub fn process_common(common: &mut CommonOptions) -> Option<ExitCode> {
+    let project_dir = &common.project_dir;
+    match fs::canonicalize(project_dir) {
+        Ok(project_dir) => {
+            common.project_dir = project_dir;
+            None
+        }
+        Err(e) => {
+            eprintln!("Unable to canonicalize project dir: {e}");
+            Some(ExitCode::FAILURE)
+        }
+    }
+}
+
 pub async fn run_cli() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     let logger = TermLogger::new(
         cli.common.verbose.log_level_filter(),
         Config::default(),
@@ -204,11 +229,25 @@ pub async fn run_cli() -> ExitCode {
     match &cli.command {
         Commands::Noop => ExitCode::SUCCESS,
         Commands::GetTestIdentifiers(options) => {
-            get_test_identifiers::cli(logger, &cli.common, &options.target_parameters).await
+            if let Some(exit_code) = process_common(&mut cli.common) {
+                exit_code
+            } else {
+                get_test_identifiers::cli(logger, &cli.common, &options.target_parameters).await
+            }
         }
-        Commands::RunTests(options) => run_tests::cli(logger, &cli.common, options).await,
+        Commands::RunTests(options) => {
+            if let Some(exit_code) = process_common(&mut cli.common) {
+                exit_code
+            } else {
+                run_tests::cli(logger, &cli.common, options).await
+            }
+        }
         Commands::SimulateHistory(options) => {
-            simulate_history::cli(logger, &cli.common, options).await
+            if let Some(exit_code) = process_common(&mut cli.common) {
+                exit_code
+            } else {
+                simulate_history::cli(logger, &cli.common, options).await
+            }
         }
         Commands::RunServer { bind_socket } => {
             server::cli(logger, bind_socket).await;
@@ -218,12 +257,12 @@ pub async fn run_cli() -> ExitCode {
 }
 
 #[must_use]
-pub fn autodetect_test_project_type() -> TestProjectType {
-    if RustTestPlatform::autodetect() {
+pub fn autodetect_test_project_type(project_dir: &Path) -> TestProjectType {
+    if RustTestPlatform::autodetect(project_dir) {
         TestProjectType::Rust
-    } else if GolangTestPlatform::autodetect() {
+    } else if GolangTestPlatform::autodetect(project_dir) {
         TestProjectType::Golang
-    } else if DotnetTestPlatform::autodetect() {
+    } else if DotnetTestPlatform::autodetect(project_dir) {
         TestProjectType::Dotnet
     } else {
         panic!("Autodetect test project type failed.");

@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Display},
     hash::Hash,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use crate::{
@@ -89,9 +89,9 @@ pub trait TestPlatform {
     /// eg. "rust", "dotnet"; must be safe to be used as a single URL path component
     fn platform_identifier() -> &'static str;
 
-    fn project_name() -> Result<String>;
+    fn project_name(project_dir: &Path) -> Result<String>;
 
-    async fn discover_tests() -> Result<Self::TD>;
+    async fn discover_tests(project_dir: &Path) -> Result<Self::TD>;
 
     /// `platform_tags` give each test platform the opportunity to tag coverage data stored in the coverage database.
     /// If the test platform changes in such a way that older coverage data cannot be used effectively anymore, the tags
@@ -99,6 +99,7 @@ pub trait TestPlatform {
     fn platform_tags() -> Vec<Tag>;
 
     async fn run_tests<'a, I>(
+        project_dir: &Path,
         test_cases: I,
         jobs: u16,
     ) -> Result<CommitCoverageData<Self::TI, Self::CI>, RunTestsErrors>
@@ -115,6 +116,7 @@ pub trait TestPlatform {
     ) -> Result<PlatformSpecificRelevantTestCaseData<Self::TI, Self::CI>>;
 
     fn analyze_changed_files(
+        project_dir: &Path,
         changed_files: &HashSet<PathBuf>,
         coverage_data: &mut CommitCoverageData<Self::TI, Self::CI>,
     ) -> Result<()>;

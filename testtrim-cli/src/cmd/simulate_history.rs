@@ -4,6 +4,7 @@
 
 use std::{
     io,
+    path::Path,
     process::ExitCode,
     sync::Arc,
     time::{Duration, Instant},
@@ -45,7 +46,7 @@ pub async fn cli(
     run_opts: &SimulateHistoryOptions,
 ) -> ExitCode {
     let test_project_type = if run_opts.test_project_type == TestProjectType::AutoDetect {
-        autodetect_test_project_type()
+        autodetect_test_project_type(&common_opts.project_dir)
     } else {
         run_opts.test_project_type
     };
@@ -86,7 +87,8 @@ where
         .with(terminal_output);
 
     match simulate_history::<_, _, _, _, _, _, TP>(
-        &GitScm {},
+        &common_opts.project_dir,
+        &GitScm::new(common_opts.project_dir.clone()),
         run_opts.num_commits,
         run_opts.execution_parameters.jobs,
         &create_db_infallible(),
@@ -172,6 +174,7 @@ pub struct SimulateHistoryOutput<Commit: ScmCommit> {
 }
 
 async fn simulate_history<Commit, MyScm, TI, CI, TD, CTI, TP>(
+    project_dir: &Path,
     scm: &MyScm,
     num_commits: u16,
     jobs: u16,
@@ -190,7 +193,7 @@ where
 {
     // Remove all contents from the testtrim database, to ensure a clean simulation.
     coverage_db
-        .clear_project_data::<TP>(&TP::project_name()?)
+        .clear_project_data::<TP>(&TP::project_name(project_dir)?)
         .instrument(info_span!(
             "clear_project_data",
             ui_stage = Into::<u64>::into(UiStage::ClearProjectData),
@@ -231,6 +234,7 @@ where
             info!("testing commit: {:?}", commit_identifier);
             commits_simulated.push(
                 simulate_commit::<_, _, _, _, _, _, TP>(
+                    project_dir,
                     scm,
                     commit,
                     jobs,
@@ -284,6 +288,7 @@ where
 }
 
 async fn simulate_commit<Commit, MyScm, TI, CI, TD, CTI, TP>(
+    project_dir: &Path,
     scm: &MyScm,
     commit: Commit,
     jobs: u16,
@@ -320,6 +325,7 @@ where
     trace!("beginning run test subcommand");
     let run_tests_result = async {
         run_tests::<_, _, _, _, _, _, TP>(
+            project_dir,
             GetTestIdentifierMode::Relevant,
             scm,
             SourceMode::CleanCommit,

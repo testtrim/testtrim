@@ -10,7 +10,6 @@ use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::env::{self, current_dir};
 use std::fs::{File, read_to_string};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
@@ -296,8 +295,8 @@ pub struct GolangTestPlatform;
 
 impl GolangTestPlatform {
     #[must_use]
-    pub fn autodetect() -> bool {
-        if fs::exists("go.mod")
+    pub fn autodetect(project_dir: &Path) -> bool {
+        if fs::exists(project_dir.join("go.mod"))
             .expect("autodetect test project type failed when checking go.mod existence")
         {
             trace!("Detected go.mod; auto-detect result: Golang test project");
@@ -374,6 +373,7 @@ impl GolangTestPlatform {
     // initialization would always show as being touched by every test.  A future investigation should be done to
     // identify the best behavior in this case.
     async fn get_baseline_ext(
+        project_dir: &Path,
         test_binary_path: &Path,
         tmp_path: &Path,
     ) -> Result<HashMap<GoCoverageStatementIdentity, i32>> {
@@ -384,13 +384,12 @@ impl GolangTestPlatform {
             &profile_file,
         );
         debug!("running: {cmd:?}");
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| SubcommandErrors::UnableToStart {
+        let output = cmd.current_dir(project_dir).output().await.map_err(|e| {
+            SubcommandErrors::UnableToStart {
                 command: format!("{test_binary_path:?} ...run-noop-test...").to_string(),
                 error: e,
-            })?;
+            }
+        })?;
         if !output.status.success() {
             return Err(anyhow!(
                 "failed to run go test for baseline; exit code: {:?}",
@@ -423,6 +422,7 @@ impl GolangTestPlatform {
     }
 
     async fn run_test(
+        project_dir: &Path,
         test_case: &GolangConcreteTestIdentifier,
         tmp_path: &Path,
         module_info: &ModuleInfo,
@@ -456,12 +456,13 @@ impl GolangTestPlatform {
             test_case, profile_file
         );
         let (output, trace) = async {
-            let cmd = Self::get_run_test_command(
+            let mut cmd = Self::get_run_test_command(
                 &test_case.binary_path,
                 // make sure we're matching the one and only test:
                 &format!("^{}$", regex::escape(&test_case.test_identifier.test_name)),
                 &profile_file,
             );
+            cmd.current_dir(project_dir);
             sys_trace_command.trace_command(cmd, &strace_file).await
         }
         .instrument(info_span!(
@@ -497,7 +498,7 @@ impl GolangTestPlatform {
             module_info,
             package_baseline,
         )?;
-        Self::parse_trace_data(test_case, &trace, &mut coverage_data)?;
+        Self::parse_trace_data(project_dir, test_case, &trace, &mut coverage_data)?;
 
         Ok(coverage_data)
     }
@@ -615,14 +616,13 @@ impl GolangTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_trace_data(
+        project_dir: &Path,
         test_case: &GolangConcreteTestIdentifier,
         trace: &Trace,
         coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
     ) -> Result<()> {
-        let repo_root = env::current_dir()?;
-
         for path in trace.get_open_paths() {
-            if path.is_relative() || path.starts_with(&repo_root) {
+            if path.is_relative() || path.starts_with(project_dir) {
                 debug!(
                     "found test {} accessed local file {path:?}",
                     test_case.test_identifier
@@ -630,8 +630,8 @@ impl GolangTestPlatform {
 
                 let target_path = normalize_path(
                     path,
-                    &repo_root.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
-                    &repo_root,
+                    &project_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
+                    project_dir,
                     |warning| {
                         warn!(
                             "syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}"
@@ -749,9 +749,6 @@ impl GolangTestPlatform {
                 }
             }
         }
-        // for p in current_lock.packages {
-        //     current_lock_map.insert(String::from(p.name), p.version);
-        // }
 
         // Cases to consider:
         // - Packages with same version in both: Ignore.
@@ -1004,6 +1001,7 @@ impl GolangTestPlatform {
     }
 
     async fn discover_tests_in_module(
+        project_dir: &Path,
         module_info: &ModuleInfo,
         module_path: &ModulePath,
     ) -> Result<HashSet<GolangConcreteTestIdentifier>> {
@@ -1024,6 +1022,7 @@ impl GolangTestPlatform {
         let mut cmd = Self::get_build_test_command(module_info, &tmp_dir, module_path);
         debug!("running: {cmd:?}");
         let output = cmd
+            .current_dir(project_dir)
             .output()
             .instrument(info_span!(
                 "get test build",
@@ -1116,9 +1115,9 @@ impl TestPlatform for GolangTestPlatform {
         }]
     }
 
-    fn project_name() -> Result<String> {
+    fn project_name(project_dir: &Path) -> Result<String> {
         Ok(String::from(
-            current_dir()?
+            project_dir
                 .file_name()
                 .ok_or_else(|| anyhow!("unable to find name of current directory"))?
                 .to_string_lossy(),
@@ -1126,7 +1125,7 @@ impl TestPlatform for GolangTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    async fn discover_tests() -> Result<GolangTestDiscovery> {
+    async fn discover_tests(project_dir: &Path) -> Result<GolangTestDiscovery> {
         let module_info = Self::parse_module_info()?;
 
         // Discover the modules to work with; this limits it to those with tests:
@@ -1138,6 +1137,7 @@ impl TestPlatform for GolangTestPlatform {
             "./...",
         ];
         cmd.args(args);
+        cmd.current_dir(project_dir);
         debug!("running: {cmd:?}");
         let output = cmd
             .output()
@@ -1166,8 +1166,9 @@ impl TestPlatform for GolangTestPlatform {
             // the go cmdline build multiple packages like this?
             for line in stdout.lines() {
                 let module_path = ModulePath(String::from(line));
-                all_test_cases
-                    .extend(Self::discover_tests_in_module(&module_info, &module_path).await?);
+                all_test_cases.extend(
+                    Self::discover_tests_in_module(project_dir, &module_info, &module_path).await?,
+                );
             }
             Ok::<_, anyhow::Error>(all_test_cases)
         }
@@ -1233,6 +1234,7 @@ impl TestPlatform for GolangTestPlatform {
     }
 
     async fn run_tests<'a, I>(
+        project_dir: &Path,
         test_cases: I,
         jobs: u16,
     ) -> Result<CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>, RunTestsErrors>
@@ -1253,7 +1255,7 @@ impl TestPlatform for GolangTestPlatform {
             if !package_baseline.contains_key(&test_case.test_identifier.module_path) {
                 package_baseline.insert(
                     test_case.test_identifier.module_path.clone(),
-                    Self::get_baseline_ext(&test_case.binary_path, tmp_dir.path())
+                    Self::get_baseline_ext(project_dir, &test_case.binary_path, tmp_dir.path())
                         .await
                         .map_err(|e| RunTestsErrors::PlatformError(e.to_string()))?,
                 );
@@ -1268,12 +1270,18 @@ impl TestPlatform for GolangTestPlatform {
             let tmp_path = PathBuf::from(tmp_dir.path());
             let module_info_ref = &module_info;
             futures.push(async move {
-                GolangTestPlatform::run_test(&tc, &tmp_path, module_info_ref, package_baseline_ref)
-                    .instrument(info_span!("go test",
-                        ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
-                        test_case = %tc.test_identifier(),
-                    ))
-                    .await
+                GolangTestPlatform::run_test(
+                    project_dir,
+                    &tc,
+                    &tmp_path,
+                    module_info_ref,
+                    package_baseline_ref,
+                )
+                .instrument(info_span!("go test",
+                    ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
+                    test_case = %tc.test_identifier(),
+                ))
+                .await
             });
         }
 
@@ -1304,11 +1312,10 @@ impl TestPlatform for GolangTestPlatform {
     }
 
     fn analyze_changed_files(
+        project_dir: &Path,
         changed_files: &HashSet<PathBuf>,
         coverage_data: &mut CommitCoverageData<GolangTestIdentifier, GolangCoverageIdentifier>,
     ) -> Result<()> {
-        let repo_root = env::current_dir()?;
-
         for file in changed_files {
             if file.extension().is_some_and(|ext| ext == "go") {
                 let mut found_references = false;
@@ -1323,7 +1330,7 @@ impl TestPlatform for GolangTestPlatform {
                     debug!("found that {file:?} references {target_path:?}");
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
-                    let target_path = normalize_path(&target_path, file, &repo_root, |warning| {
+                    let target_path = normalize_path(&target_path, file, project_dir, |warning| {
                         warn!(
                             "file {file:?} had a //go:embed, but reference could not be followed: {warning}"
                         );
