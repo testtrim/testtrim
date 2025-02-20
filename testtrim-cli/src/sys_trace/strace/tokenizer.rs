@@ -691,13 +691,20 @@ fn parse_variable_reference_argument<'i>(input: &mut &'i str) -> ModalResult<Arg
 
 fn parse_wait_flags_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     trace("parse_wait_flags_argument", |input: &mut _| {
-        let arg = (
-            literal("[{WIFEXITED(s) && WEXITSTATUS(s) == "),
-            digit1,
-            literal("}]"),
-        )
-            .take()
-            .parse_next(input)?;
+        let arg = alt((
+            (
+                literal("[{WIFEXITED(s) && WEXITSTATUS(s) == "),
+                digit1,
+                literal("}]"),
+            ),
+            (
+                literal("[{WIFSIGNALED(s) && WTERMSIG(s) == "),
+                enum_flags,
+                literal("}]"),
+            ),
+        ))
+        .take()
+        .parse_next(input)?;
         Ok(Argument::WaitFlags(arg))
     })
     .parse_next(input)
@@ -1233,6 +1240,26 @@ mod tests {
                 ],
                 outcome: CallOutcome::Resumed {
                     retval: Retval::Success(86_722)
+                }
+            }
+        );
+
+        let strace = String::from(
+            r"42167 <... wait4 resumed>[{WIFSIGNALED(s) && WTERMSIG(s) == SIGKILL}], WNOHANG, NULL) = 42357",
+        );
+        let tokenized = tokenize_syscall(&mut strace.as_str())?;
+        assert_eq!(
+            tokenized,
+            SyscallSegment {
+                pid: "42167",
+                function: "wait4",
+                arguments: vec![
+                    Argument::WaitFlags("[{WIFSIGNALED(s) && WTERMSIG(s) == SIGKILL}]"),
+                    Argument::Enum("WNOHANG"),
+                    Argument::Null,
+                ],
+                outcome: CallOutcome::Resumed {
+                    retval: Retval::Success(42_357)
                 }
             }
         );
