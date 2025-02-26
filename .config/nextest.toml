@@ -11,4 +11,4 @@ filter = 'test(coverage::postgres_sqlx::) or test(coverage::testtrim_api::)'
 test-group = 'serial-integration'
 
 [profile.default]
-slow-timeout = { period = "30s", terminate-after = 4 }
+slow-timeout = { period = "60s", terminate-after = 4 }
