@@ -116,9 +116,6 @@
           # We'll do tests outside of the build in the CI.
           doCheck = false;
 
-          # FIXME: it might be nicer to have the `cargo sql prepare` occur in this build script.  That'd nicer than
-          # having to run it, `git add .sqlx`, but not keep them.  But it would require starting Postgres here and running
-          # the SQL migrations, which is pretty awkward in a build script.
           buildPhase = ''
             runHook preBuild
 
