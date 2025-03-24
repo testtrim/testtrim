@@ -231,7 +231,7 @@ where
     async {
         for commit in commits {
             let commit_identifier = scm.get_commit_identifier(&commit);
-            info!("testing commit: {:?}", commit_identifier);
+            info!("testing commit: {commit_identifier:?}");
             commits_simulated.push(
                 simulate_commit::<_, _, _, _, _, _, TP>(
                     project_dir,

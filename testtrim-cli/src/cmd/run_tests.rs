@@ -226,8 +226,7 @@ where
         SourceMode::WorkingTree => AncestorSearchMode::AllCommits,
     };
     info!(
-        "source_mode: {:?}, save_coverage_data: {}, ancestor_search_mode: {:?}",
-        source_mode, save_coverage_data, ancestor_search_mode
+        "source_mode: {source_mode:?}, save_coverage_data: {save_coverage_data}, ancestor_search_mode: {ancestor_search_mode:?}"
     );
 
     let test_cases = get_target_test_cases::<Commit, MyScm, _, _, _, _, TP>(

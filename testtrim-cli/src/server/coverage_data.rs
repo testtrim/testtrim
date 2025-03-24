@@ -101,7 +101,7 @@ async fn get_any_coverage_data<TP: TestPlatform>(
     coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, GetCoverageDataError> {
     let project_name = path.into_inner();
-    debug!("get_any_coverage_data received: {:?}", project_name);
+    debug!("get_any_coverage_data received: {project_name:?}");
 
     Ok(HttpResponse::Ok().json(serde_json::to_value(
         coverage_db
@@ -153,10 +153,7 @@ async fn get_coverage_data<TP: TestPlatform>(
 ) -> Result<impl Responder, GetCoverageDataError> {
     let (project_name, commit_identifier) = path.into_inner();
     let tags = tags.into_inner();
-    debug!(
-        "get_coverage_data received: {:?} {:?} {:?}",
-        project_name, commit_identifier, tags
-    );
+    debug!("get_coverage_data received: {project_name:?} {commit_identifier:?} {tags:?}");
 
     // hashmap -> vec; can't be done in Query<T> because it's considered ordered when query parameters aren't, even
     // though we don't care about order (arguably we're using the wrong data struct inside)
@@ -217,7 +214,7 @@ async fn post_coverage_data<TP: TestPlatform>(
     coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, PostCoverageDataError> {
     let (project_name, commit_identifier) = path.into_inner();
-    debug!("post_coverage_data received: {:?}", req);
+    debug!("post_coverage_data received: {req:?}");
 
     // manually deserialize CommitCoverageData as workaround for multiple `impl`'s error
     let mut commit_coverage_data = CommitCoverageData::new();
@@ -304,11 +301,11 @@ async fn delete_coverage_data<TP: TestPlatform>(
     coverage_db: web::Data<CoverageDatabaseDispatch>,
 ) -> Result<impl Responder, DeleteCoverageDataError> {
     let project_name = path.into_inner();
-    debug!("delete_coverage_data received: {:?}", project_name);
+    debug!("delete_coverage_data received: {project_name:?}");
 
-    debug!("web: starting clear_project_data({})", project_name);
+    debug!("web: starting clear_project_data({project_name})");
     coverage_db.clear_project_data::<TP>(&project_name).await?;
-    debug!("web: completed clear_project_data({})", project_name);
+    debug!("web: completed clear_project_data({project_name})");
 
     Ok(HttpResponse::Ok().json(None::<String>))
 }

@@ -43,7 +43,7 @@ struct DbLogger;
 
 impl Instrumentation for DbLogger {
     fn on_connection_event(&mut self, event: diesel::connection::InstrumentationEvent<'_>) {
-        trace!("DB event: {:?}", event);
+        trace!("DB event: {event:?}");
     }
 }
 
