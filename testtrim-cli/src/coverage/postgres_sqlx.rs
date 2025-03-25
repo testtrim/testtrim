@@ -574,8 +574,7 @@ impl PostgresCoverageDatabase {
         .context("insert into commit_file_reference")?;
 
         debug!(
-            "save_denormalized_file_references may copy-forward from ancestor commit: {:?}",
-            ancestor_scm_commit_id
+            "save_denormalized_file_references may copy-forward from ancestor commit: {ancestor_scm_commit_id:?}"
         );
         if ancestor_scm_commit_id.is_some() {
             sqlx::query!(

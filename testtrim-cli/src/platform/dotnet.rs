@@ -680,7 +680,7 @@ impl TestPlatform for DotnetTestPlatform {
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     async fn discover_tests(project_dir: &Path) -> Result<DotnetTestDiscovery> {
         let all_test_cases = Self::get_all_test_cases(project_dir).await?;
-        trace!("all_test_cases: {:?}", all_test_cases);
+        trace!("all_test_cases: {all_test_cases:?}");
         Ok(DotnetTestDiscovery { all_test_cases })
     }
 

@@ -451,10 +451,7 @@ impl GolangTestPlatform {
             .join(&test_case.test_identifier.test_name)
             .with_extension("strace");
 
-        debug!(
-            "Execute test case {:?} into {:?}...",
-            test_case, profile_file
-        );
+        debug!("Execute test case {test_case:?} into {profile_file:?}...");
         let (output, trace) = async {
             let mut cmd = Self::get_run_test_command(
                 &test_case.binary_path,
@@ -768,26 +765,25 @@ impl GolangTestPlatform {
                     let old_module_path = ModulePath(String::from(old_module_path));
                     let old_version = String::from(&*old_version);
 
-                    let relevant_change =
-                        if let Some(current_version) = current_lock_map.get(&old_module_path) {
-                            if *current_version == old_version {
-                                false
-                            } else {
-                                trace!(
-                                    "go.mod package changed {:?}, old: {}, current: {}",
-                                    old_module_path, old_version, current_version
-                                );
-                                true
-                            }
+                    let relevant_change = if let Some(current_version) =
+                        current_lock_map.get(&old_module_path)
+                    {
+                        if *current_version == old_version {
+                            false
                         } else {
-                            trace!("go.mod package removed {:?}", old_module_path);
+                            trace!(
+                                "go.mod package changed {old_module_path:?}, old: {old_version}, current: {current_version}"
+                            );
                             true
-                        };
+                        }
+                    } else {
+                        trace!("go.mod package removed {old_module_path:?}");
+                        true
+                    };
 
                     if relevant_change {
                         info!(
-                            "Change to dependency {:?}; will run all tests that touched it",
-                            old_module_path
+                            "Change to dependency {old_module_path:?}; will run all tests that touched it"
                         );
                         changed_external_dependencies += 1;
                         let coverage_identifier =

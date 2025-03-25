@@ -487,7 +487,7 @@ impl RustTestPlatform {
                         break;
                     };
 
-                    trace!("Found package reference to {} / {}", package_name, version);
+                    trace!("Found package reference to {package_name} / {version}");
                     coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
                         test_identifier: test_case.test_identifier.clone(),
                         coverage_identifier: RustCoverageIdentifier::PackageDependency(
@@ -566,7 +566,7 @@ impl RustTestPlatform {
     ) -> Result<CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier>, RunTestError> {
         let mut coverage_data = CommitCoverageData::new();
 
-        trace!("preparing for test case {:?}", test_case);
+        trace!("preparing for test case {test_case:?}");
 
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
@@ -608,8 +608,7 @@ impl RustTestPlatform {
         // Match `cargo test` behavior by moving CWD into the root of the module
         let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
         debug!(
-            "Execute test case {:?} into {:?} from working-dir {:?}...",
-            test_case, profile_file, test_wd
+            "Execute test case {test_case:?} into {profile_file:?} from working-dir {test_wd:?}..."
         );
 
         let mut cmd = Command::new(&test_case.test_binary.executable_path);
@@ -719,7 +718,7 @@ impl TestPlatform for RustTestPlatform {
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     async fn discover_tests(project_dir: &Path) -> Result<RustTestDiscovery> {
         let test_binaries = RustTestPlatform::find_test_binaries(project_dir).await?;
-        trace!("test_binaries: {:?}", test_binaries);
+        trace!("test_binaries: {test_binaries:?}");
 
         let all_test_cases = RustTestPlatform::get_all_test_cases(project_dir, &test_binaries)
             .instrument(info_span!(
@@ -727,7 +726,7 @@ impl TestPlatform for RustTestPlatform {
                 ui_stage = Into::<u64>::into(UiStage::ListingTests)
             ))
             .await?;
-        trace!("all_test_cases: {:?}", all_test_cases);
+        trace!("all_test_cases: {all_test_cases:?}");
 
         Ok(RustTestDiscovery {
             test_binaries,

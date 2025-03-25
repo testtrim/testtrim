@@ -124,7 +124,7 @@ where
     let test_cases = match test_cases {
         Ok(test_cases) => test_cases,
         Err(err) => {
-            error!("error occurred in get_target_test_cases: {:?}", err);
+            error!("error occurred in get_target_test_cases: {err:?}");
             return ExitCode::FAILURE;
         }
     };
@@ -275,7 +275,7 @@ where
     )
     .in_scope(|| {
         let changed_files = scm.get_changed_files(&ancestor_commit)?;
-        debug!("changed files: {:?}", changed_files);
+        debug!("changed files: {changed_files:?}");
 
         let all_test_identifiers = all_test_cases
             .iter()
@@ -315,7 +315,7 @@ where
         ))
     })?;
 
-    debug!("relevant_test_cases: {:?}", relevant_test_cases);
+    debug!("relevant_test_cases: {relevant_test_cases:?}");
 
     Ok(TargetTestCases {
         all_test_cases: all_test_cases.clone(),
@@ -455,10 +455,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     let mut retval = HashMap::new();
 
     compute_all_new_test_cases(eval_target_test_cases, coverage_data, &mut retval);
-    debug!(
-        "relevant test cases after searching for new tests: {:?}",
-        retval
-    );
+    debug!("relevant test cases after searching for new tests: {retval:?}");
 
     // If retval already contains all the test cases, then we're done -- we don't need to start digging into the
     // modified files because we're already running all tests.
@@ -476,10 +473,7 @@ fn compute_relevant_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
             None,
         )?;
     }
-    debug!(
-        "relevant test cases after searching for file changes: {:?}",
-        retval
-    );
+    debug!("relevant test cases after searching for file changes: {retval:?}");
 
     Ok(retval)
 }
@@ -492,8 +486,7 @@ fn compute_all_new_test_cases<TI: TestIdentifier, CI: CoverageIdentifier>(
     for tc in eval_target_test_cases {
         if !coverage_data.all_tests().contains(tc) {
             trace!(
-                "test case {:?} was not found in parent coverage data and so will be run as a new test",
-                tc
+                "test case {tc:?} was not found in parent coverage data and so will be run as a new test"
             );
             retval
                 .entry(tc.clone())
