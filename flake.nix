@@ -17,16 +17,24 @@
       pkgs = import nixpkgs {
         inherit system overlays;
       };
-      my-rust-bin = pkgs.rust-bin.stable.latest.default.override {
+      my-rust-dev = pkgs.rust-bin.stable.latest.default.override {
         extensions = [
           "rust-src"
           "rust-analyzer"
           "llvm-tools-preview" # for llvm-profdata & llvm-cov # FIXME: maybe not needed anymore; pretty dated from early development days
         ];
       };
+      my-rust-build = pkgs.rust-bin.stable.latest.default.override {
+        # my-rust-build is to be used for packaging builds -- it should have the same capabilities as my-rust-dev but
+        # without any development tools.  In particular, "rust-src" must not be included as an extension as that will
+        # bloat the runtime dependencies -- https://github.com/oxalica/rust-overlay/issues/199 -- since it will cause all
+        # compiled binaries to have embedded references to the source files, requiring the entire dev environment for
+        # any package output.
+        extensions = [];
+      };
       rustPlatform = pkgs.makeRustPlatform {
-        cargo = my-rust-bin; # .stable.latest.minimal;
-        rustc = my-rust-bin; # .stable.latest.minimal;
+        cargo = my-rust-build; # .stable.latest.minimal;
+        rustc = my-rust-build; # .stable.latest.minimal;
       };
       myBuildInputs = with pkgs; [
         openssl
@@ -45,7 +53,6 @@
           ];
 
           packages = with pkgs;
-            [ my-rust-bin ] ++
             myBuildInputs ++
             myNativeBuildInputs ++
             [
@@ -56,7 +63,7 @@
               diesel-cli
               git-cliff # needed for release.yaml workflow
               jq # needed for release.yaml workflow
-              my-rust-bin
+              my-rust-dev
               reuse
               # rustfilt # LLVM rust demangler -- not available in nixpkgs anymore 2025-01-26 -- https://github.com/NixOS/nixpkgs/pull/377036
               sqlx-cli
@@ -108,8 +115,6 @@
             lockFile = ./Cargo.lock;
           };
 
-          # FIXME: not sure what dependencies are leftover here that might be affecting the binary output -- for
-          # example, "cargo" -- that shouldn't be present after build...
           buildInputs = myBuildInputs;
           nativeBuildInputs = myNativeBuildInputs;
 
