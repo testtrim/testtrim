@@ -3358,7 +3358,6 @@ dependencies = [
  "indicatif",
  "indicatif-log-bridge",
  "ipnet",
- "lazy_static",
  "llvm_profparser",
  "log",
  "named-lock",
