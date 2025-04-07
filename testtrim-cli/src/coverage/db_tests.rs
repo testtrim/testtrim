@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::LazyLock};
 
 use crate::{
     coverage::{
@@ -15,40 +15,33 @@ use crate::{
         RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier, RustTestPlatform,
     },
 };
-use lazy_static::lazy_static;
 
 use super::CoverageDatabase;
 
-lazy_static! {
-    static ref test1: RustTestIdentifier = {
-        RustTestIdentifier {
-            test_src_path: PathBuf::from("src/lib.rs"),
-            test_name: "test1".to_string(),
-        }
-    };
-    static ref test2: RustTestIdentifier = {
-        RustTestIdentifier {
-            test_src_path: PathBuf::from("src/lib.rs"),
-            test_name: "test2".to_string(),
-        }
-    };
-    static ref test3: RustTestIdentifier = {
-        RustTestIdentifier {
-            test_src_path: PathBuf::from("sub_module/src/lib.rs"),
-            test_name: "test1".to_string(),
-        }
-    };
-    static ref thiserror: RustCoverageIdentifier =
-        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-            package_name: String::from("thiserror"),
-            version: String::from("0.1"),
-        });
-    static ref regex: RustCoverageIdentifier =
-        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-            package_name: String::from("regex"),
-            version: String::from("0.1"),
-        });
-}
+static TEST1: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+    test_src_path: PathBuf::from("src/lib.rs"),
+    test_name: "test1".to_string(),
+});
+static TEST2: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+    test_src_path: PathBuf::from("src/lib.rs"),
+    test_name: "test2".to_string(),
+});
+static TEST3: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+    test_src_path: PathBuf::from("sub_module/src/lib.rs"),
+    test_name: "test1".to_string(),
+});
+static THISERROR: LazyLock<RustCoverageIdentifier> = LazyLock::new(|| {
+    RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+        package_name: String::from("thiserror"),
+        version: String::from("0.1"),
+    })
+});
+static REGEX: LazyLock<RustCoverageIdentifier> = LazyLock::new(|| {
+    RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+        package_name: String::from("regex"),
+        version: String::from("0.1"),
+    })
+});
 
 pub async fn has_any_coverage_data_false(db: impl CoverageDatabase) {
     let result = db
@@ -93,47 +86,47 @@ pub async fn load_empty(db: impl CoverageDatabase) {
 pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
     let mut saved_data = CommitCoverageData::new();
     // note -- no ancestor, so the only case that makes sense is for all existing tests to be executed tests
-    saved_data.add_executed_test(test1.clone());
-    saved_data.add_executed_test(test2.clone());
-    saved_data.add_executed_test(test3.clone());
-    saved_data.add_existing_test(test1.clone());
-    saved_data.add_existing_test(test2.clone());
-    saved_data.add_existing_test(test3.clone());
+    saved_data.add_executed_test(TEST1.clone());
+    saved_data.add_executed_test(TEST2.clone());
+    saved_data.add_executed_test(TEST3.clone());
+    saved_data.add_existing_test(TEST1.clone());
+    saved_data.add_existing_test(TEST2.clone());
+    saved_data.add_existing_test(TEST3.clone());
     saved_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     saved_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test2.clone(),
+        test_identifier: TEST2.clone(),
     });
     saved_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file2.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     saved_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     saved_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test2.clone(),
+        test_identifier: TEST2.clone(),
     });
     saved_data.add_function_to_test(FunctionCoverage {
         function_name: "func2".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-        test_identifier: test1.clone(),
-        coverage_identifier: regex.clone(),
+        test_identifier: TEST1.clone(),
+        coverage_identifier: REGEX.clone(),
     });
     saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-        test_identifier: test2.clone(),
-        coverage_identifier: regex.clone(),
+        test_identifier: TEST2.clone(),
+        coverage_identifier: REGEX.clone(),
     });
     saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-        test_identifier: test1.clone(),
-        coverage_identifier: thiserror.clone(),
+        test_identifier: TEST1.clone(),
+        coverage_identifier: THISERROR.clone(),
     });
     saved_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("file1.rs"),
@@ -161,9 +154,9 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
     assert!(result.is_some());
     let loaded_data = result.unwrap();
     assert_eq!(loaded_data.all_tests().len(), 3);
-    assert!(loaded_data.all_tests().contains(&test1));
-    assert!(loaded_data.all_tests().contains(&test2));
-    assert!(loaded_data.all_tests().contains(&test3));
+    assert!(loaded_data.all_tests().contains(&TEST1));
+    assert!(loaded_data.all_tests().contains(&TEST2));
+    assert!(loaded_data.all_tests().contains(&TEST3));
     assert_eq!(loaded_data.file_to_test_map().len(), 2);
     assert_eq!(
         loaded_data
@@ -186,21 +179,21 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
             .file_to_test_map()
             .get(&PathBuf::from("file1.rs"))
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .file_to_test_map()
             .get(&PathBuf::from("file2.rs"))
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .file_to_test_map()
             .get(&PathBuf::from("file1.rs"))
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
     assert_eq!(loaded_data.function_to_test_map().len(), 2);
     assert_eq!(
@@ -224,27 +217,27 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
             .function_to_test_map()
             .get("func1")
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .function_to_test_map()
             .get("func2")
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .function_to_test_map()
             .get("func1")
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
     assert_eq!(loaded_data.coverage_identifier_to_test_map().len(), 2);
     assert_eq!(
         loaded_data
             .coverage_identifier_to_test_map()
-            .get(&regex)
+            .get(&REGEX)
             .unwrap()
             .len(),
         2
@@ -252,7 +245,7 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
     assert_eq!(
         loaded_data
             .coverage_identifier_to_test_map()
-            .get(&thiserror)
+            .get(&THISERROR)
             .unwrap()
             .len(),
         1
@@ -260,23 +253,23 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
     assert!(
         loaded_data
             .coverage_identifier_to_test_map()
-            .get(&thiserror)
+            .get(&THISERROR)
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .coverage_identifier_to_test_map()
-            .get(&regex)
+            .get(&REGEX)
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .coverage_identifier_to_test_map()
-            .get(&regex)
+            .get(&REGEX)
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 2);
     assert_eq!(
@@ -321,23 +314,23 @@ pub async fn save_and_load_no_ancestor(db: impl CoverageDatabase) {
 /// Test an additive-only child coverage data set -- no overwrite/replacement of the ancestor
 pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
     let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    ancestor_data.add_executed_test(test1.clone());
-    ancestor_data.add_existing_test(test1.clone());
+    ancestor_data.add_executed_test(TEST1.clone());
+    ancestor_data.add_existing_test(TEST1.clone());
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file2.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func2".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("file1.rs"),
@@ -350,16 +343,16 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
     assert!(result.is_ok(), "result = {result:?}");
 
     let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    child_data.add_executed_test(test2.clone());
-    child_data.add_existing_test(test1.clone());
-    child_data.add_existing_test(test2.clone());
+    child_data.add_executed_test(TEST2.clone());
+    child_data.add_existing_test(TEST1.clone());
+    child_data.add_existing_test(TEST2.clone());
     child_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test2.clone(),
+        test_identifier: TEST2.clone(),
     });
     child_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test2.clone(),
+        test_identifier: TEST2.clone(),
     });
     child_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("file2.rs"),
@@ -385,8 +378,8 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
     assert!(result.is_some());
     let loaded_data = result.unwrap();
     assert_eq!(loaded_data.all_tests().len(), 2);
-    assert!(loaded_data.all_tests().contains(&test1));
-    assert!(loaded_data.all_tests().contains(&test2));
+    assert!(loaded_data.all_tests().contains(&TEST1));
+    assert!(loaded_data.all_tests().contains(&TEST2));
     assert_eq!(loaded_data.file_to_test_map().len(), 2);
     assert_eq!(
         loaded_data
@@ -409,21 +402,21 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
             .file_to_test_map()
             .get(&PathBuf::from("file1.rs"))
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .file_to_test_map()
             .get(&PathBuf::from("file2.rs"))
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .file_to_test_map()
             .get(&PathBuf::from("file1.rs"))
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
     assert_eq!(loaded_data.function_to_test_map().len(), 2);
     assert_eq!(
@@ -447,21 +440,21 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
             .function_to_test_map()
             .get("func1")
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .function_to_test_map()
             .get("func2")
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert!(
         loaded_data
             .function_to_test_map()
             .get("func1")
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
     assert_eq!(
@@ -491,23 +484,23 @@ pub async fn save_and_load_new_case_in_child(db: impl CoverageDatabase) {
 /// Test a replacement-only child coverage data set -- the same test was run with new coverage data in the child
 pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) {
     let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    ancestor_data.add_executed_test(test1.clone());
-    ancestor_data.add_existing_test(test1.clone());
+    ancestor_data.add_executed_test(TEST1.clone());
+    ancestor_data.add_existing_test(TEST1.clone());
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file2.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func2".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("file1.rs"),
@@ -528,15 +521,15 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
     assert!(result.is_ok(), "result = {result:?}");
 
     let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    child_data.add_executed_test(test1.clone());
-    child_data.add_existing_test(test1.clone());
+    child_data.add_executed_test(TEST1.clone());
+    child_data.add_existing_test(TEST1.clone());
     child_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file3.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     child_data.add_function_to_test(FunctionCoverage {
         function_name: "func3".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     child_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("file2.rs"),
@@ -562,7 +555,7 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
     assert!(result.is_some());
     let loaded_data = result.unwrap();
     assert_eq!(loaded_data.all_tests().len(), 1);
-    assert!(loaded_data.all_tests().contains(&test1));
+    assert!(loaded_data.all_tests().contains(&TEST1));
     assert_eq!(loaded_data.file_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -577,7 +570,7 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
             .file_to_test_map()
             .get(&PathBuf::from("file3.rs"))
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert_eq!(loaded_data.function_to_test_map().len(), 1);
     assert_eq!(
@@ -593,7 +586,7 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
             .function_to_test_map()
             .get("func3")
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 3);
     assert_eq!(
@@ -646,33 +639,33 @@ pub async fn save_and_load_replacement_case_in_child(db: impl CoverageDatabase) 
 /// Test a child coverage set which indicates a test was removed and no longer present
 pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
     let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    ancestor_data.add_executed_test(test1.clone());
-    ancestor_data.add_executed_test(test2.clone());
-    ancestor_data.add_existing_test(test1.clone());
-    ancestor_data.add_existing_test(test2.clone());
+    ancestor_data.add_executed_test(TEST1.clone());
+    ancestor_data.add_executed_test(TEST2.clone());
+    ancestor_data.add_existing_test(TEST1.clone());
+    ancestor_data.add_existing_test(TEST2.clone());
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file1.rs"),
-        test_identifier: test2.clone(),
+        test_identifier: TEST2.clone(),
     });
     ancestor_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("file2.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func1".to_string(),
-        test_identifier: test2.clone(),
+        test_identifier: TEST2.clone(),
     });
     ancestor_data.add_function_to_test(FunctionCoverage {
         function_name: "func2".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     ancestor_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("file2.rs"),
@@ -685,10 +678,10 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
     assert!(result.is_ok(), "result = {result:?}");
 
     // Also an odd case -- we'll give child_data no executed tests just to make sure that no "inner joins" turn
-    // into no data.  We should get all the test2 data from the ancestor because we're indicating that it still
+    // into no data.  We should get all the TEST2 data from the ancestor because we're indicating that it still
     // exists though...
     let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    child_data.add_existing_test(test2.clone());
+    child_data.add_existing_test(TEST2.clone());
 
     let result = db
         .save_coverage_data::<RustTestPlatform>(
@@ -709,7 +702,7 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
     assert!(result.is_some());
     let loaded_data = result.unwrap();
     assert_eq!(loaded_data.all_tests().len(), 1);
-    assert!(loaded_data.all_tests().contains(&test2));
+    assert!(loaded_data.all_tests().contains(&TEST2));
     assert_eq!(loaded_data.file_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -724,7 +717,7 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
             .file_to_test_map()
             .get(&PathBuf::from("file1.rs"))
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
     assert_eq!(loaded_data.function_to_test_map().len(), 1);
     assert_eq!(
@@ -740,15 +733,15 @@ pub async fn save_and_load_removed_case_in_child(db: impl CoverageDatabase) {
             .function_to_test_map()
             .get("func1")
             .unwrap()
-            .contains(&test2)
+            .contains(&TEST2)
     );
 }
 
 /// Test that we can remove file references from an ancestor
 pub async fn remove_file_references_in_child(db: impl CoverageDatabase) {
     let mut ancestor_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    ancestor_data.add_executed_test(test1.clone());
-    ancestor_data.add_existing_test(test1.clone());
+    ancestor_data.add_executed_test(TEST1.clone());
+    ancestor_data.add_existing_test(TEST1.clone());
     ancestor_data.add_file_reference(FileReference {
         referencing_file: PathBuf::from("src/two.rs"),
         target_file: PathBuf::from("extra-data/abc-123.txt"),
@@ -770,8 +763,8 @@ pub async fn remove_file_references_in_child(db: impl CoverageDatabase) {
     // Slightly weird here; the point of this test is to verify that the positive absence of data
     // (mark_file_makes_no_reference) correctly overwrites ancestor data with no records for that file.
     let mut child_data = CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-    child_data.add_executed_test(test1.clone());
-    child_data.add_existing_test(test1.clone());
+    child_data.add_executed_test(TEST1.clone());
+    child_data.add_existing_test(TEST1.clone());
     child_data.mark_file_makes_no_references(PathBuf::from("src/two.rs"));
 
     let result = db
@@ -822,18 +815,18 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
         package_name: String::from("windows-sys"),
         version: String::from("0.1"),
     });
-    saved_data.add_executed_test(test1.clone());
-    saved_data.add_existing_test(test1.clone());
+    saved_data.add_executed_test(TEST1.clone());
+    saved_data.add_existing_test(TEST1.clone());
     saved_data.add_file_to_test(FileCoverage {
         file_name: PathBuf::from("windows.rs"),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     saved_data.add_function_to_test(FunctionCoverage {
         function_name: "windows".to_string(),
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
     });
     saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-        test_identifier: test1.clone(),
+        test_identifier: TEST1.clone(),
         coverage_identifier: windows.clone(),
     });
     saved_data.add_file_reference(FileReference {
@@ -912,7 +905,7 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
 
     let loaded_data = result.unwrap();
     assert_eq!(loaded_data.all_tests().len(), 1);
-    assert!(loaded_data.all_tests().contains(&test1));
+    assert!(loaded_data.all_tests().contains(&TEST1));
     assert_eq!(loaded_data.file_to_test_map().len(), 1);
     assert_eq!(
         loaded_data
@@ -927,7 +920,7 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .file_to_test_map()
             .get(&PathBuf::from("windows.rs"))
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert_eq!(loaded_data.function_to_test_map().len(), 1);
     assert_eq!(
@@ -943,7 +936,7 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .function_to_test_map()
             .get("windows")
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert_eq!(loaded_data.coverage_identifier_to_test_map().len(), 1);
     assert_eq!(
@@ -959,7 +952,7 @@ pub async fn independent_tags(db: impl CoverageDatabase) {
             .coverage_identifier_to_test_map()
             .get(&windows)
             .unwrap()
-            .contains(&test1)
+            .contains(&TEST1)
     );
     assert_eq!(loaded_data.file_referenced_by_files_map().len(), 1);
     assert_eq!(

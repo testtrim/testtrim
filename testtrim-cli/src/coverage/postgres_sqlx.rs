@@ -1074,10 +1074,9 @@ impl CoverageDatabase for PostgresCoverageDatabase {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use lazy_static::lazy_static;
     use named_lock::NamedLock;
     use serde_json::Value;
-    use std::{env, time::Duration};
+    use std::{env, sync::LazyLock, time::Duration};
 
     use crate::{
         coverage::{
@@ -1087,12 +1086,12 @@ mod tests {
         platform::rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
     };
 
-    lazy_static! {
-        // Avoid running multiple concurrent tests that use the external DB.  An external intra-process lock is used to
-        // allow these tests to exclude each other even when run in multiple processes, eg. with testtrim or
-        // cargo-nexttest.
-        static ref DB_MUTEX: NamedLock = NamedLock::create("testtrim-postgres_sqlx-tests").unwrap();
-    }
+    // Avoid running multiple concurrent tests that use the external DB.  An external intra-process lock is used to
+    // allow these tests to exclude each other even when run in multiple processes, eg. with testtrim or
+    // cargo-nexttest.
+    static DB_MUTEX: LazyLock<NamedLock> =
+        LazyLock::new(|| NamedLock::create("testtrim-postgres_sqlx-tests").unwrap());
+
     fn create_test_db() -> PostgresCoverageDatabase {
         let test_db_url = env::var("TESTTRIM_UNITTEST_PGSQL_URL")
             .or(env::var("TESTTRIM_DATABASE_URL"))

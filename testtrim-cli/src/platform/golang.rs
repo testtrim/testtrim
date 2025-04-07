@@ -4,7 +4,6 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use gomod_rs::{Directive, parse_gomod};
-use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
 use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,7 @@ use std::fs::{File, read_to_string};
 use std::hash::Hash;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::{fmt, fs, io};
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -33,7 +32,7 @@ use crate::network::NetworkDependency;
 use crate::platform::util::normalize_path;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::{ResolvedSocketAddr, Trace};
-use crate::sys_trace::{SysTraceCommand as _, sys_trace_command};
+use crate::sys_trace::{SYS_TRACE_COMMAND, SysTraceCommand as _};
 
 use super::util::spawn_limited_concurrency;
 use super::{
@@ -177,9 +176,9 @@ impl<'a> From<&GoCoverageData<'a>> for (GoCoverageStatementIdentity, i32) {
     }
 }
 
-lazy_static! {
-    // See comment in guess_tests_from_test_file_changed for why this exists
-    static ref test_func_definition_regex: Regex = Regex::new(
+// See comment in guess_tests_from_test_file_changed for why this exists
+static TEST_FUNC_DEFINITION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
         r"(?xs)
         func
         \s+
@@ -190,11 +189,13 @@ lazy_static! {
         )
         \s*    # opt whitespace between name and params
         \(     # start of function parameters
-        "
+        ",
     )
-    .unwrap();
-    // Really hacky regex; probably should use a parser.  Supports up to five includes on one line.
-    static ref embed_regex: Regex = Regex::new(
+    .unwrap()
+});
+// Really hacky regex; probably should use a parser.  Supports up to five includes on one line.
+static EMBED_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
         r#"(?xm)
         ^
         [\t\v\f\x20]* # optional whitespace, not newlines
@@ -286,10 +287,10 @@ lazy_static! {
         )?
         [\t\v\f\x20]* # optional whitespace, not newlines
         $
-        "#
+        "#,
     )
-    .unwrap();
-}
+    .unwrap()
+});
 
 pub struct GolangTestPlatform;
 
@@ -460,7 +461,7 @@ impl GolangTestPlatform {
                 &profile_file,
             );
             cmd.current_dir(project_dir);
-            sys_trace_command.trace_command(cmd, &strace_file).await
+            SYS_TRACE_COMMAND.trace_command(cmd, &strace_file).await
         }
         .instrument(info_span!(
             "execute-test",
@@ -845,7 +846,7 @@ impl GolangTestPlatform {
         let test_file =
             fs::read_to_string(file).context(format!("reading changed test file {file:?}"))?;
 
-        for cap in test_func_definition_regex.captures_iter(&test_file) {
+        for cap in TEST_FUNC_DEFINITION_REGEX.captures_iter(&test_file) {
             let test_name = String::from(&cap["test_name"]);
             let mut any_match = false;
             for tc in all_test_cases {
@@ -965,7 +966,7 @@ impl GolangTestPlatform {
         let content =
             io::read_to_string(BufReader::new(file)).context("find_embed_includes file read")?;
 
-        for cap in embed_regex.captures_iter(&content) {
+        for cap in EMBED_REGEX.captures_iter(&content) {
             for i in 1..=5 {
                 if let Some(path) = Self::embed_extract(i, &cap) {
                     if path.starts_with("/") || path.starts_with(".") {
@@ -1360,7 +1361,7 @@ mod tests {
 
     use crate::platform::golang::GolangTestPlatform;
 
-    use super::test_func_definition_regex;
+    use super::TEST_FUNC_DEFINITION_REGEX;
 
     #[test]
     fn test_parse_go_coverage_line() {
@@ -1411,7 +1412,7 @@ func TestAddDecimal(t *testing.T) {
 	}
 }
 "#;
-        let caps = test_func_definition_regex
+        let caps = TEST_FUNC_DEFINITION_REGEX
             .captures_iter(code)
             .collect::<Vec<_>>();
         assert_eq!(caps.len(), 2, "expected two Test... functions to be found");

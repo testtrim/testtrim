@@ -185,6 +185,8 @@ impl<TI: TestIdentifier, CI: CoverageIdentifier> CommitCoverageData<TI, CI> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use crate::platform::rust::{
         RustCoverageIdentifier, RustPackageDependency, RustTestIdentifier,
     };
@@ -192,38 +194,27 @@ mod tests {
     use super::*;
 
     use anyhow::Result;
-    use lazy_static::lazy_static;
 
-    lazy_static! {
-        static ref test1: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref test2: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test2".to_string(),
-            }
-        };
-        static ref test3: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("sub_module/src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref thiserror: RustCoverageIdentifier =
-            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-                package_name: String::from("thiserror"),
-                version: String::from("0.1"),
-            });
-        static ref regex: RustCoverageIdentifier =
-            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-                package_name: String::from("regex"),
-                version: String::from("0.1"),
-            });
-    }
+    static TEST1: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("src/lib.rs"),
+        test_name: "test1".to_string(),
+    });
+    static TEST2: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("src/lib.rs"),
+        test_name: "test2".to_string(),
+    });
+    static THISERROR: LazyLock<RustCoverageIdentifier> = LazyLock::new(|| {
+        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+            package_name: String::from("thiserror"),
+            version: String::from("0.1"),
+        })
+    });
+    static REGEX: LazyLock<RustCoverageIdentifier> = LazyLock::new(|| {
+        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+            package_name: String::from("regex"),
+            version: String::from("0.1"),
+        })
+    });
 
     #[test]
     fn test_new_coverage_data() {
@@ -238,22 +229,22 @@ mod tests {
     fn test_add_executed_test() {
         let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
             CommitCoverageData::new();
-        coverage_data.add_executed_test(test1.clone());
-        coverage_data.add_executed_test(test2.clone());
+        coverage_data.add_executed_test(TEST1.clone());
+        coverage_data.add_executed_test(TEST2.clone());
         assert_eq!(coverage_data.executed_test_set().len(), 2);
-        assert!(coverage_data.executed_test_set().contains(&test1));
-        assert!(coverage_data.executed_test_set().contains(&test2));
+        assert!(coverage_data.executed_test_set().contains(&TEST1));
+        assert!(coverage_data.executed_test_set().contains(&TEST2));
     }
 
     #[test]
     fn test_add_existing_test() {
         let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
             CommitCoverageData::new();
-        coverage_data.add_existing_test(test1.clone());
-        coverage_data.add_existing_test(test2.clone());
+        coverage_data.add_existing_test(TEST1.clone());
+        coverage_data.add_existing_test(TEST2.clone());
         assert_eq!(coverage_data.existing_test_set().len(), 2);
-        assert!(coverage_data.existing_test_set().contains(&test1));
-        assert!(coverage_data.existing_test_set().contains(&test2));
+        assert!(coverage_data.existing_test_set().contains(&TEST1));
+        assert!(coverage_data.existing_test_set().contains(&TEST2));
     }
 
     #[test]
@@ -262,22 +253,22 @@ mod tests {
             CommitCoverageData::new();
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_identifier: test2.clone(),
+            test_identifier: TEST2.clone(),
         });
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file2.rs"),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
 
         assert_eq!(coverage_data.executed_test_to_files_map().len(), 2);
         assert_eq!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .len(),
             2
@@ -285,7 +276,7 @@ mod tests {
         assert_eq!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test2)
+                .get(&TEST2)
                 .unwrap()
                 .len(),
             1
@@ -293,21 +284,21 @@ mod tests {
         assert!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .contains(&PathBuf::from("file1.rs"))
         );
         assert!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .contains(&PathBuf::from("file2.rs"))
         );
         assert!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test2)
+                .get(&TEST2)
                 .unwrap()
                 .contains(&PathBuf::from("file1.rs"))
         );
@@ -319,22 +310,22 @@ mod tests {
             CommitCoverageData::new();
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
-            test_identifier: test2.clone(),
+            test_identifier: TEST2.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func2".to_string(),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
 
         assert_eq!(coverage_data.executed_test_to_functions_map().len(), 2);
         assert_eq!(
             coverage_data
                 .executed_test_to_functions_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .len(),
             2
@@ -342,7 +333,7 @@ mod tests {
         assert_eq!(
             coverage_data
                 .executed_test_to_functions_map()
-                .get(&test2)
+                .get(&TEST2)
                 .unwrap()
                 .len(),
             1
@@ -350,21 +341,21 @@ mod tests {
         assert!(
             coverage_data
                 .executed_test_to_functions_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .contains("func1")
         );
         assert!(
             coverage_data
                 .executed_test_to_functions_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .contains("func2")
         );
         assert!(
             coverage_data
                 .executed_test_to_functions_map()
-                .get(&test2)
+                .get(&TEST2)
                 .unwrap()
                 .contains("func1")
         );
@@ -374,16 +365,16 @@ mod tests {
     fn add_coverage_identifier_to_test() {
         let mut coverage_data = CommitCoverageData::new();
         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: test1.clone(),
-            coverage_identifier: regex.clone(),
+            test_identifier: TEST1.clone(),
+            coverage_identifier: REGEX.clone(),
         });
         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: test2.clone(),
-            coverage_identifier: regex.clone(),
+            test_identifier: TEST2.clone(),
+            coverage_identifier: REGEX.clone(),
         });
         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: test1.clone(),
-            coverage_identifier: thiserror.clone(),
+            test_identifier: TEST1.clone(),
+            coverage_identifier: THISERROR.clone(),
         });
 
         assert_eq!(
@@ -395,7 +386,7 @@ mod tests {
         assert_eq!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .len(),
             2
@@ -403,7 +394,7 @@ mod tests {
         assert_eq!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test2)
+                .get(&TEST2)
                 .unwrap()
                 .len(),
             1
@@ -411,23 +402,23 @@ mod tests {
         assert!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
-                .contains(&thiserror)
+                .contains(&THISERROR)
         );
         assert!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
-                .contains(&regex)
+                .contains(&REGEX)
         );
         assert!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test2)
+                .get(&TEST2)
                 .unwrap()
-                .contains(&regex)
+                .contains(&REGEX)
         );
     }
 
@@ -502,19 +493,19 @@ mod tests {
         let mut coverage_data: CommitCoverageData<RustTestIdentifier, RustCoverageIdentifier> =
             CommitCoverageData::new();
 
-        coverage_data.add_existing_test(test1.clone());
-        coverage_data.add_executed_test(test1.clone());
+        coverage_data.add_existing_test(TEST1.clone());
+        coverage_data.add_executed_test(TEST1.clone());
         coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("file1.rs"),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
         coverage_data.add_function_to_test(FunctionCoverage {
             function_name: "func1".to_string(),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: test1.clone(),
-            coverage_identifier: regex.clone(),
+            test_identifier: TEST1.clone(),
+            coverage_identifier: REGEX.clone(),
         });
         coverage_data.add_file_reference(FileReference {
             referencing_file: PathBuf::from("src/one.rs"),
@@ -526,14 +517,14 @@ mod tests {
             serde_json::from_value(serialized_data)?;
 
         assert_eq!(coverage_data.existing_test_set().len(), 1);
-        assert!(coverage_data.existing_test_set().contains(&test1));
+        assert!(coverage_data.existing_test_set().contains(&TEST1));
         assert_eq!(coverage_data.existing_test_set().len(), 1);
-        assert!(coverage_data.existing_test_set().contains(&test1));
+        assert!(coverage_data.existing_test_set().contains(&TEST1));
         assert_eq!(coverage_data.executed_test_to_files_map().len(), 1);
         assert_eq!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test1) // PathBuf::from("file1.rs"))
+                .get(&TEST1) // PathBuf::from("file1.rs"))
                 .unwrap()
                 .len(),
             1
@@ -541,7 +532,7 @@ mod tests {
         assert!(
             coverage_data
                 .executed_test_to_files_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .contains(&PathBuf::from("file1.rs"))
         );
@@ -554,7 +545,7 @@ mod tests {
         assert_eq!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
                 .len(),
             1
@@ -562,9 +553,9 @@ mod tests {
         assert!(
             coverage_data
                 .executed_test_to_coverage_identifier_map()
-                .get(&test1)
+                .get(&TEST1)
                 .unwrap()
-                .contains(&regex)
+                .contains(&REGEX)
         );
         assert_eq!(coverage_data.file_references_files_map().len(), 1);
         assert_eq!(

@@ -4,9 +4,8 @@
 
 use anyhow::Result;
 use enum_dispatch::enum_dispatch;
-use lazy_static::lazy_static;
 use log::warn;
-use std::{path::Path, process::Output};
+use std::{path::Path, process::Output, sync::LazyLock};
 #[cfg(target_os = "linux")]
 use strace::STraceSysTraceCommand;
 use tokio::process::Command;
@@ -55,9 +54,7 @@ pub enum SysTraceCommandDispatch {
     STraceSysTraceCommand,
 }
 
-lazy_static! {
-    pub static ref sys_trace_command: SysTraceCommandDispatch = get_trace_command();
-}
+pub static SYS_TRACE_COMMAND: LazyLock<SysTraceCommandDispatch> = LazyLock::new(get_trace_command);
 
 #[cfg(target_os = "linux")]
 fn get_trace_command() -> SysTraceCommandDispatch {

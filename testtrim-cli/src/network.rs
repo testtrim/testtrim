@@ -565,11 +565,11 @@ mod tests {
         net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
         path::PathBuf,
         str::FromStr as _,
+        sync::LazyLock,
     };
 
     use anyhow::Result;
     use ipnet::{IpNet, Ipv4Net, Ipv6Net};
-    use lazy_static::lazy_static;
     use serde::Deserialize;
 
     use crate::{
@@ -1181,32 +1181,22 @@ mod tests {
         );
     }
 
-    lazy_static! {
-        static ref test1: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref test2: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test2".to_string(),
-            }
-        };
-        static ref test3: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("sub_module/src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref test4: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("sub_module/src/lib.rs"),
-                test_name: "test4".to_string(),
-            }
-        };
-    }
+    static TEST1: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("src/lib.rs"),
+        test_name: "test1".to_string(),
+    });
+    static TEST2: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("src/lib.rs"),
+        test_name: "test2".to_string(),
+    });
+    static TEST3: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("sub_module/src/lib.rs"),
+        test_name: "test1".to_string(),
+    });
+    static TEST4: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("sub_module/src/lib.rs"),
+        test_name: "test4".to_string(),
+    });
 
     #[test]
     fn test_compute_tests() {
@@ -1243,25 +1233,25 @@ mod tests {
         let test1_network_ci = RustCoverageIdentifier::NetworkDependency(
             UnifiedSocketAddr::Unix(PathBuf::from("/tmp/socket")).into(),
         );
-        coverage_data.add_heuristic_coverage_to_test(test1.clone(), test1_network_ci.clone());
+        coverage_data.add_heuristic_coverage_to_test(TEST1.clone(), test1_network_ci.clone());
 
         // ignore case; network access was present but policy says nevermind it
         let test2_network_ci = RustCoverageIdentifier::NetworkDependency(
             UnifiedSocketAddr::Inet(create_socket_addr("127.0.0.1", 53)).into(),
         );
-        coverage_data.add_heuristic_coverage_to_test(test2.clone(), test2_network_ci.clone());
+        coverage_data.add_heuristic_coverage_to_test(TEST2.clone(), test2_network_ci.clone());
 
         // force-run case; network access was both "ignored" and "run-always"'d
         let test3_network_ci = RustCoverageIdentifier::NetworkDependency(
             UnifiedSocketAddr::Inet(create_socket_addr("192.168.1.1", 53)).into(),
         );
-        coverage_data.add_heuristic_coverage_to_test(test3.clone(), test3_network_ci.clone());
+        coverage_data.add_heuristic_coverage_to_test(TEST3.clone(), test3_network_ci.clone());
 
         // run-if-files-changed case
         let test4_network_ci = RustCoverageIdentifier::NetworkDependency(
             UnifiedSocketAddr::Inet(create_socket_addr("10.1.1.1", 5432)).into(),
         );
-        coverage_data.add_heuristic_coverage_to_test(test4.clone(), test4_network_ci.clone());
+        coverage_data.add_heuristic_coverage_to_test(TEST4.clone(), test4_network_ci.clone());
 
         let test_result = compute_tests_from_network_accesses::<RustTestPlatform>(
             &coverage_data,
@@ -1269,15 +1259,15 @@ mod tests {
             &HashSet::from([PathBuf::from("db/postgres/2024_schema.sql")]),
         );
 
-        let test1_reasons = test_result.get(&test1);
+        let test1_reasons = test_result.get(&TEST1);
         assert!(test1_reasons.is_some());
         let test1_reasons = test1_reasons.unwrap();
         assert!(test1_reasons.contains(&TestReason::CoverageIdentifier(test1_network_ci)));
 
-        let test2_reasons = test_result.get(&test2);
+        let test2_reasons = test_result.get(&TEST2);
         assert!(test2_reasons.is_none());
 
-        let test3_reasons = test_result.get(&test3);
+        let test3_reasons = test_result.get(&TEST3);
         assert!(test3_reasons.is_some());
         let test3_reasons = test3_reasons.unwrap();
         assert!(test3_reasons.contains(&TestReason::SideEffect(
@@ -1285,7 +1275,7 @@ mod tests {
             Box::new(TestReason::NetworkPolicy("local router access".to_string())),
         )));
 
-        let test4_reasons = test_result.get(&test4);
+        let test4_reasons = test_result.get(&TEST4);
         assert!(test4_reasons.is_some());
         let test4_reasons = test4_reasons.unwrap();
         assert!(test4_reasons.contains(&TestReason::SideEffect(

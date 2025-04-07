@@ -514,10 +514,9 @@ mod tests {
         web,
     };
     use anyhow::Result;
-    use lazy_static::lazy_static;
     use log::debug;
-    use std::str::FromStr;
     use std::{collections::HashMap, sync::Mutex};
+    use std::{str::FromStr, sync::LazyLock};
 
     use crate::{
         coverage::{
@@ -533,13 +532,11 @@ mod tests {
 
     use super::TesttrimApiCoverageDatabase;
 
-    lazy_static! {
-        // Avoid running multiple concurrent tests; assuming they're working well they would conflict on each other with
-        // the data being stored and retrieved.  Even though tests are often run in multiple processes (eg. w/ testtrim,
-        // cargo-nextest), this in-process Mutex is sufficient because the database used during the tests is an
-        // in-memory SQLite database.
-        static ref TEST_MUTEX: Mutex<i32> = Mutex::new(0);
-    }
+    // Avoid running multiple concurrent tests; assuming they're working well they would conflict on each other with the
+    // data being stored and retrieved.  Even though tests are often run in multiple processes (eg. w/ testtrim,
+    // cargo-nextest), this in-process Mutex is sufficient because the database used during the tests is an in-memory
+    // SQLite database.
+    static TEST_MUTEX: LazyLock<Mutex<i32>> = LazyLock::new(|| Mutex::new(0));
 
     struct TestInterceptState {
         last_req_url: Mutex<Option<String>>,

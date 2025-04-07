@@ -6,7 +6,6 @@ use anyhow::{Context, Result, anyhow};
 use cargo_lock::{Lockfile, Version};
 use cargo_toml::Manifest;
 use dashmap::DashSet;
-use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Component, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::{fmt, fs, io};
 use std::{hash::Hash, path::Path};
 use tokio::process::Command;
@@ -37,7 +36,7 @@ use crate::network::NetworkDependency;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::SysTraceCommand as _;
 use crate::sys_trace::trace::ResolvedSocketAddr;
-use crate::sys_trace::{sys_trace_command, trace::Trace};
+use crate::sys_trace::{SYS_TRACE_COMMAND, trace::Trace};
 
 use super::TestReason;
 use super::util::{normalize_path, spawn_limited_concurrency};
@@ -148,8 +147,8 @@ impl TestDiscovery<RustConcreteTestIdentifier, RustTestIdentifier> for RustTestD
     }
 }
 
-lazy_static! {
-    static ref include_regex: Regex = Regex::new(
+static INCLUDE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
         r#"(?xs)
         [\s=]
         (include|include_str|include_bytes)!
@@ -160,10 +159,10 @@ lazy_static! {
             "
             (?:[\s\n]*) # optional whitespace or linebreak
         *\)
-        "#
+        "#,
     )
-    .unwrap();
-}
+    .unwrap()
+});
 
 pub struct RustTestPlatform;
 
@@ -618,7 +617,7 @@ impl RustTestPlatform {
             .env("RUSTFLAGS", "-C instrument-coverage")
             .current_dir(test_wd);
 
-        let (output, trace) = sys_trace_command
+        let (output, trace) = SYS_TRACE_COMMAND
             .trace_command(cmd, &strace_file)
             .instrument(info_span!(
                 "execute-test",
@@ -664,7 +663,7 @@ impl RustTestPlatform {
         let content = io::read_to_string(BufReader::new(file))
             .context("find_compile_time_includes file read")?;
 
-        for cap in include_regex.captures_iter(&content) {
+        for cap in INCLUDE_REGEX.captures_iter(&content) {
             let path = String::from(&cap["path"])
                 // Un-escape any escaped double-quotes
                 .replace("\\\"", "\"");
@@ -874,10 +873,8 @@ impl TestPlatform for RustTestPlatform {
     }
 }
 
-lazy_static! {
-    static ref parse_cargo_package_regex: Regex =
-        Regex::new(r"^(?<package_name>.+)-(?<package_version>[0-9]+\..*)$").unwrap();
-}
+static PARSE_CARGO_PACKAGE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?<package_name>.+)-(?<package_version>[0-9]+\..*)$").unwrap());
 
 /// Parse a path from .cargo/registry/src/*/... (eg. `ws2_32-sys-0.2.1`) and return the package name (`ws2_32`) and
 /// version ("0.2.1") if they could be distinguished.
@@ -890,7 +887,7 @@ lazy_static! {
 fn parse_cargo_package(path: &OsStr) -> Option<(String, String)> {
     // I think splitting on "-[0-9]\." is probably reasonably good.
     match path.to_str() {
-        Some(path) => parse_cargo_package_regex.captures(path).map(|captures| {
+        Some(path) => PARSE_CARGO_PACKAGE_REGEX.captures(path).map(|captures| {
             (
                 String::from(&captures["package_name"]),
                 String::from(&captures["package_version"]),

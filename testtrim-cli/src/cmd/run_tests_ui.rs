@@ -142,7 +142,7 @@ where
                     self.root.remove(&progress_bar);
                     return;
                 }
-            };
+            }
             span_data.message_bar = Some(progress_bar);
         }
 

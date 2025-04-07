@@ -166,7 +166,7 @@ where
                     span_data.hide_when_finished = true;
                     span_data.was_test = true;
                 }
-            };
+            }
             span_data.message_bar = progress_bar;
         }
 
