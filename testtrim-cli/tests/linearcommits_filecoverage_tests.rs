@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
-use lazy_static::lazy_static;
 use std::env;
 use std::process::Command;
+use std::sync::LazyLock;
 use std::time::Duration;
 use testtrim::timing_tracer::RunTestTiming;
 use thiserror::Error;
@@ -14,12 +14,10 @@ use tokio::sync::Mutex;
 mod linearcommits_filecoverage;
 mod util;
 
-lazy_static! {
-    // Avoid running multiple concurrent tests that modify the CWD by having a mutex that each needs to acquire.
-    // There's only one of these tests right now but while doing some dev work I had duplicated it and found this
-    // problems, so kept this around as a reminder.
-    pub static ref CWD_MUTEX: Mutex<i32> = Mutex::new(0);
-}
+// Avoid running multiple concurrent tests that modify the CWD by having a mutex that each needs to acquire. There's
+// only one of these tests right now but while doing some dev work I had duplicated it and found this problems, so kept
+// this around as a reminder.
+pub static CWD_MUTEX: LazyLock<Mutex<i32>> = LazyLock::new(|| Mutex::new(0));
 
 #[derive(Error, Debug)]
 pub enum TestError {

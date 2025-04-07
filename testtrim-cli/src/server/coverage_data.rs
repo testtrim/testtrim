@@ -312,11 +312,10 @@ async fn delete_coverage_data<TP: TestPlatform>(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, sync::LazyLock};
 
     use actix_web::{App, test};
     use anyhow::Result;
-    use lazy_static::lazy_static;
 
     use crate::{
         coverage::{
@@ -337,31 +336,27 @@ mod tests {
 
     use super::*;
 
-    lazy_static! {
-        static ref rust_test_identifier: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref rust_coverage_identifier: RustCoverageIdentifier =
-            RustCoverageIdentifier::PackageDependency(RustPackageDependency {
-                package_name: String::from("thiserror"),
-                version: String::from("0.1"),
-            });
-        static ref dotnet_test_identifier: DotnetTestIdentifier = {
-            DotnetTestIdentifier {
-                fully_qualified_name: "Namespace.Class.Test".to_string(),
-            }
-        };
-        static ref dotnet_coverage_identifier: DotnetCoverageIdentifier =
-            DotnetCoverageIdentifier::PackageDependency(DotnetPackageDependency {
-                package_name: crate::platform::dotnet::PackageName(String::from(
-                    "Microsoft.Something"
-                )),
-                version: crate::platform::dotnet::PackageVersion(String::from("0.1")),
-            });
-    }
+    static RUST_TEST_IDENTIFIER: LazyLock<RustTestIdentifier> =
+        LazyLock::new(|| RustTestIdentifier {
+            test_src_path: PathBuf::from("src/lib.rs"),
+            test_name: "test1".to_string(),
+        });
+    static RUST_COVERAGE_IDENTIFIER: LazyLock<RustCoverageIdentifier> = LazyLock::new(|| {
+        RustCoverageIdentifier::PackageDependency(RustPackageDependency {
+            package_name: String::from("thiserror"),
+            version: String::from("0.1"),
+        })
+    });
+    static DOTNET_TEST_IDENTIFIER: LazyLock<DotnetTestIdentifier> =
+        LazyLock::new(|| DotnetTestIdentifier {
+            fully_qualified_name: "Namespace.Class.Test".to_string(),
+        });
+    static DOTNET_COVERAGE_IDENTIFIER: LazyLock<DotnetCoverageIdentifier> = LazyLock::new(|| {
+        DotnetCoverageIdentifier::PackageDependency(DotnetPackageDependency {
+            package_name: crate::platform::dotnet::PackageName(String::from("Microsoft.Something")),
+            version: crate::platform::dotnet::PackageVersion(String::from("0.1")),
+        })
+    });
 
     #[actix_web::test]
     async fn test_get_coverage_rust() -> Result<()> {
@@ -370,15 +365,15 @@ mod tests {
 
         let mut saved_data =
             CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        saved_data.add_executed_test(rust_test_identifier.clone());
-        saved_data.add_existing_test(rust_test_identifier.clone());
+        saved_data.add_executed_test(RUST_TEST_IDENTIFIER.clone());
+        saved_data.add_existing_test(RUST_TEST_IDENTIFIER.clone());
         saved_data.add_file_to_test(FileCoverage {
-            test_identifier: rust_test_identifier.clone(),
+            test_identifier: RUST_TEST_IDENTIFIER.clone(),
             file_name: PathBuf::from("file1.rs"),
         });
         saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: rust_test_identifier.clone(),
-            coverage_identifier: rust_coverage_identifier.clone(),
+            test_identifier: RUST_TEST_IDENTIFIER.clone(),
+            coverage_identifier: RUST_COVERAGE_IDENTIFIER.clone(),
         });
         coverage_db
             .save_coverage_data::<RustTestPlatform>(
@@ -441,15 +436,15 @@ mod tests {
 
         let mut saved_data =
             CommitCoverageData::<DotnetTestIdentifier, DotnetCoverageIdentifier>::new();
-        saved_data.add_executed_test(dotnet_test_identifier.clone());
-        saved_data.add_existing_test(dotnet_test_identifier.clone());
+        saved_data.add_executed_test(DOTNET_TEST_IDENTIFIER.clone());
+        saved_data.add_existing_test(DOTNET_TEST_IDENTIFIER.clone());
         saved_data.add_file_to_test(FileCoverage {
-            test_identifier: dotnet_test_identifier.clone(),
+            test_identifier: DOTNET_TEST_IDENTIFIER.clone(),
             file_name: PathBuf::from("file1.rs"),
         });
         saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: dotnet_test_identifier.clone(),
-            coverage_identifier: dotnet_coverage_identifier.clone(),
+            test_identifier: DOTNET_TEST_IDENTIFIER.clone(),
+            coverage_identifier: DOTNET_COVERAGE_IDENTIFIER.clone(),
         });
         coverage_db
             .save_coverage_data::<DotnetTestPlatform>(
@@ -512,15 +507,15 @@ mod tests {
 
         let mut saved_data =
             CommitCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        saved_data.add_executed_test(rust_test_identifier.clone());
-        saved_data.add_existing_test(rust_test_identifier.clone());
+        saved_data.add_executed_test(RUST_TEST_IDENTIFIER.clone());
+        saved_data.add_existing_test(RUST_TEST_IDENTIFIER.clone());
         saved_data.add_file_to_test(FileCoverage {
-            test_identifier: rust_test_identifier.clone(),
+            test_identifier: RUST_TEST_IDENTIFIER.clone(),
             file_name: PathBuf::from("file1.rs"),
         });
         saved_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-            test_identifier: rust_test_identifier.clone(),
-            coverage_identifier: rust_coverage_identifier.clone(),
+            test_identifier: RUST_TEST_IDENTIFIER.clone(),
+            coverage_identifier: RUST_COVERAGE_IDENTIFIER.clone(),
         });
         coverage_db
             .save_coverage_data::<RustTestPlatform>(

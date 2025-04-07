@@ -36,7 +36,6 @@ gomod-rs = { workspace = true }
 indicatif = { workspace = true }
 indicatif-log-bridge = { workspace = true }
 ipnet = { workspace = true }
-lazy_static = { workspace = true }
 llvm_profparser = { workspace = true }
 log = { workspace = true }
 nix = { workspace = true }

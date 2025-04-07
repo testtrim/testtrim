@@ -4,9 +4,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use dashmap::DashSet;
-use lazy_static::lazy_static;
 use log::{trace, warn};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -104,11 +102,6 @@ impl TestDiscovery<DotnetConcreteTestIdentifier, DotnetTestIdentifier> for Dotne
     ) -> Option<DotnetConcreteTestIdentifier> {
         Some(DotnetConcreteTestIdentifier { test_identifier })
     }
-}
-
-lazy_static! {
-    static ref slnProject: Regex =
-        Regex::new(r#"(?m)^Project\(\"[^"]+\"\)\s=\s\"[^"]+\",\s\"(?<path>[^"]+)\","#).unwrap();
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
@@ -452,7 +445,7 @@ impl DotnetTestPlatform {
     // fn parse_projects_from_sln(sln: &str) -> Vec<ProjectFile> {
     //     let mut retval = vec![];
     //     // FIXME: this is currently being tested in Linux, and might need tweaks in Windows...
-    //     for caps in slnProject.captures_iter(sln) {
+    //     for caps in SLNPROJECT.captures_iter(sln) {
     //         let p = &caps["path"];
     //         let path = PathBuf::from(p.replace('\\', std::path::MAIN_SEPARATOR_STR));
     //         retval.push(ProjectFile(path));

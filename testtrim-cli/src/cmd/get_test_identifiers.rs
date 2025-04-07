@@ -374,7 +374,7 @@ where
             commits_to_check.push(commit.clone());
         }
         AncestorSearchMode::SkipHeadCommit => {}
-    };
+    }
 
     while commits_to_check.len() < max_commits_to_check {
         let mut parents = scm.get_commit_parents(&commit)?;
@@ -565,62 +565,31 @@ mod tests {
         },
         platform::{
             TestIdentifier, TestPlatform,
-            rust::{
-                RustConcreteTestIdentifier, RustCoverageIdentifier, RustTestBinary,
-                RustTestIdentifier, RustTestPlatform,
-            },
+            rust::{RustCoverageIdentifier, RustTestIdentifier, RustTestPlatform},
         },
         scm::Scm,
     };
-    use lazy_static::lazy_static;
     use serde::{Serialize, de::DeserializeOwned};
     use serde_json::Value;
     use std::{
         collections::{HashMap, HashSet},
         path::PathBuf,
+        sync::LazyLock,
         time::Duration,
     };
 
-    lazy_static! {
-        static ref test1: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref test2: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("src/lib.rs"),
-                test_name: "test2".to_string(),
-            }
-        };
-        static ref test3: RustTestIdentifier = {
-            RustTestIdentifier {
-                test_src_path: PathBuf::from("sub_module/src/lib.rs"),
-                test_name: "test1".to_string(),
-            }
-        };
-        static ref sample_test_case_1: RustConcreteTestIdentifier = {
-            RustConcreteTestIdentifier {
-                test_binary: RustTestBinary {
-                    rel_src_path: PathBuf::from("src/lib.rs"),
-                    executable_path: PathBuf::from("target/crate/debug/crate-test"),
-                    manifest_path: PathBuf::from("Cargo.toml"),
-                },
-                test_identifier: test1.clone(),
-            }
-        };
-        static ref sample_test_case_2: RustConcreteTestIdentifier = {
-            RustConcreteTestIdentifier {
-                test_binary: RustTestBinary {
-                    rel_src_path: PathBuf::from("src/lib.rs"),
-                    executable_path: PathBuf::from("target/crate/debug/crate-test"),
-                    manifest_path: PathBuf::from("Cargo.toml"),
-                },
-                test_identifier: test2.clone(),
-            }
-        };
-    }
+    static TEST1: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("src/lib.rs"),
+        test_name: "test1".to_string(),
+    });
+    static TEST2: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("src/lib.rs"),
+        test_name: "test2".to_string(),
+    });
+    static TEST3: LazyLock<RustTestIdentifier> = LazyLock::new(|| RustTestIdentifier {
+        test_src_path: PathBuf::from("sub_module/src/lib.rs"),
+        test_name: "test1".to_string(),
+    });
 
     #[derive(Clone, Default)]
     struct MockScmCommit {
@@ -825,7 +794,7 @@ mod tests {
             ],
         };
         let mut previous_coverage_data = FullCoverageData::<_, RustCoverageIdentifier>::new();
-        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_existing_test(TEST1.clone());
         let result = find_ancestor_commit_with_coverage_data::<_, _, RustTestPlatform>(
             "testtrim-tests",
             &scm,
@@ -883,13 +852,13 @@ mod tests {
         };
 
         let mut branch_coverage_data = FullCoverageData::<_, RustCoverageIdentifier>::new();
-        branch_coverage_data.add_existing_test(test1.clone());
-        branch_coverage_data.add_existing_test(test2.clone());
-        branch_coverage_data.add_existing_test(test3.clone());
+        branch_coverage_data.add_existing_test(TEST1.clone());
+        branch_coverage_data.add_existing_test(TEST2.clone());
+        branch_coverage_data.add_existing_test(TEST3.clone());
 
         let mut ancestor_coverage_data = FullCoverageData::<_, RustCoverageIdentifier>::new();
-        ancestor_coverage_data.add_existing_test(test1.clone());
-        ancestor_coverage_data.add_existing_test(test3.clone());
+        ancestor_coverage_data.add_existing_test(TEST1.clone());
+        ancestor_coverage_data.add_existing_test(TEST3.clone());
 
         let result = find_ancestor_commit_with_coverage_data::<_, _, RustTestPlatform>(
             "testtrim-tests",
@@ -938,7 +907,7 @@ mod tests {
     #[test]
     fn compute_all_new_cases_empty_dbs() {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
-        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(TEST1.clone());
 
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
@@ -949,17 +918,17 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&test1));
+        assert!(result.contains_key(&TEST1));
     }
 
     #[test]
     fn compute_all_new_cases_are_in_previous_commit() {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
-        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(TEST1.clone());
 
         let mut previous_coverage_data =
             FullCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_existing_test(TEST1.clone());
 
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
@@ -975,12 +944,12 @@ mod tests {
     #[test]
     fn compute_some_new_cases_are_in_previous_commit() {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
-        eval_target_test_cases.insert(test1.clone());
-        eval_target_test_cases.insert(test2.clone());
+        eval_target_test_cases.insert(TEST1.clone());
+        eval_target_test_cases.insert(TEST2.clone());
 
         let mut previous_coverage_data =
             FullCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_existing_test(TEST1.clone());
 
         let result = compute_relevant_test_cases(
             &eval_target_test_cases,
@@ -991,23 +960,23 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&test2));
+        assert!(result.contains_key(&TEST2));
     }
 
     #[test]
     fn compute_no_new_cases_one_file_changed() {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
-        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(TEST1.clone());
 
         let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
         eval_target_changed_files.insert(PathBuf::from("src/lib.rs"));
 
         let mut previous_coverage_data =
             FullCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        previous_coverage_data.add_existing_test(test1.clone());
+        previous_coverage_data.add_existing_test(TEST1.clone());
         previous_coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("src/lib.rs"),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
 
         let result = compute_relevant_test_cases(
@@ -1019,28 +988,28 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&test1));
+        assert!(result.contains_key(&TEST1));
     }
 
     #[test]
     fn compute_no_new_cases_one_file_changed_w_outdated_test() {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
-        eval_target_test_cases.insert(test1.clone());
+        eval_target_test_cases.insert(TEST1.clone());
 
         let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
         eval_target_changed_files.insert(PathBuf::from("src/lib.rs"));
 
         let mut previous_coverage_data =
             FullCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        previous_coverage_data.add_existing_test(test1.clone());
-        previous_coverage_data.add_existing_test(test2.clone()); // test2 doesn't exist in current set, but does exist in historical data
+        previous_coverage_data.add_existing_test(TEST1.clone());
+        previous_coverage_data.add_existing_test(TEST2.clone()); // TEST2 doesn't exist in current set, but does exist in historical data
         previous_coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("src/lib.rs"),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
         previous_coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("src/lib.rs"),
-            test_identifier: test2.clone(),
+            test_identifier: TEST2.clone(),
         });
 
         let result = compute_relevant_test_cases(
@@ -1052,29 +1021,29 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&test1));
+        assert!(result.contains_key(&TEST1));
     }
 
     #[test]
     fn compute_no_new_cases_one_file_changed_another_not() {
         let mut eval_target_test_cases: HashSet<RustTestIdentifier> = HashSet::new();
-        eval_target_test_cases.insert(test1.clone());
-        eval_target_test_cases.insert(test2.clone());
+        eval_target_test_cases.insert(TEST1.clone());
+        eval_target_test_cases.insert(TEST2.clone());
 
         let mut eval_target_changed_files: HashSet<PathBuf> = HashSet::new();
         eval_target_changed_files.insert(PathBuf::from("src/file2.rs"));
 
         let mut previous_coverage_data =
             FullCoverageData::<RustTestIdentifier, RustCoverageIdentifier>::new();
-        previous_coverage_data.add_existing_test(test1.clone());
-        previous_coverage_data.add_existing_test(test2.clone());
+        previous_coverage_data.add_existing_test(TEST1.clone());
+        previous_coverage_data.add_existing_test(TEST2.clone());
         previous_coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("src/file1.rs"),
-            test_identifier: test1.clone(),
+            test_identifier: TEST1.clone(),
         });
         previous_coverage_data.add_file_to_test(FileCoverage {
             file_name: PathBuf::from("src/file2.rs"),
-            test_identifier: test2.clone(),
+            test_identifier: TEST2.clone(),
         });
 
         let result = compute_relevant_test_cases(
@@ -1086,6 +1055,6 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&test2));
+        assert!(result.contains_key(&TEST2));
     }
 }
