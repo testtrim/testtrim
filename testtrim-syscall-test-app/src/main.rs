@@ -96,7 +96,7 @@ fn access_files() -> Result<(), std::io::Error> {
             nix::sys::stat::Mode::S_IRUSR,
         )?;
         let fd = nix::fcntl::openat(
-            Some(dirfd),
+            &dirfd,
             "test-file-3.txt",
             nix::fcntl::OFlag::O_RDONLY,
             nix::sys::stat::Mode::S_IRUSR,
@@ -115,7 +115,7 @@ fn access_files() -> Result<(), std::io::Error> {
             nix::sys::stat::Mode::S_IRUSR,
         )?;
         let fd = nix::fcntl::openat(
-            Some(dirfd),
+            &dirfd,
             "test-file-3.txt",
             nix::fcntl::OFlag::O_RDONLY,
             nix::sys::stat::Mode::S_IRUSR,

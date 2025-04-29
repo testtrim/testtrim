@@ -15,7 +15,7 @@ use std::{
     collections::HashMap,
     env,
     fs::remove_file,
-    os::fd::{AsRawFd, FromRawFd as _, IntoRawFd, OwnedFd},
+    os::fd::{FromRawFd as _, IntoRawFd, OwnedFd},
     path::{Path, PathBuf},
     process::{Command as SyncCommand, Output},
 };
@@ -606,8 +606,10 @@ impl STraceSysTraceCommand {
 
                 // Connect stdout, stderr to the pipes
                 nix::unistd::close(0).expect("close(0)"); // stdin
-                nix::unistd::dup2(stdout_write_fd.as_raw_fd(), 1).expect("dup2(1)"); // stdout
-                nix::unistd::dup2(stderr_write_fd.as_raw_fd(), 2).expect("dup2(2)"); // stderr
+                nix::unistd::dup2(&stdout_write_fd, &mut unsafe { OwnedFd::from_raw_fd(1) })
+                    .expect("dup2(1)"); // stdout
+                nix::unistd::dup2(&stderr_write_fd, &mut unsafe { OwnedFd::from_raw_fd(2) })
+                    .expect("dup2(2)"); // stderr
 
                 // Drop all the unused pipe ends.
                 drop(write_goahead_fd);
