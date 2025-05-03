@@ -32,7 +32,7 @@ gomod-rs = "0.1.1"
 indicatif = "0.17.11"
 indicatif-log-bridge = "0.2.3"
 ipnet = { version = "2.10.1", features = ["serde"] }
-llvm_profparser = "0.7.0"
+llvm_profparser = "0.8.0"
 log = "0.4.22"
 named-lock = "0.4.1"
 nix = { version = "^0.30.0", features = ["fs", "process", "socket", "user", "signal"] }
