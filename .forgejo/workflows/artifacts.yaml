@@ -11,12 +11,11 @@ on:
 
 jobs:
   oci-container:
-    runs-on: debian-latest
+    runs-on: debian-ci-latest
     container:
       options: --volume nix-forgejo-cache-public:/nix
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-      - run: apt-get update && apt-get install -y sudo podman # install-nix-actions requires `sudo`; and psql will be used below
       - uses: https://github.com/cachix/install-nix-action@526118121621777ccd86f79b04685a9319637641 # v31
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't

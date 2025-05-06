@@ -13,7 +13,7 @@ on:
 
 jobs:
   rust-checks:
-    runs-on: debian-latest
+    runs-on: debian-ci-latest
     container:
       options: --volume nix-forgejo-cache-public:/nix
 
@@ -35,7 +35,6 @@ jobs:
           # would be the safest in order to ensure the "last commit we have coverage data" is available, but if it slows
           # the repo checkout down too much it could probably be changed to a handful of commits instead.
           fetch-depth: 0
-      - run: apt-get update && apt-get install -y sudo postgresql-client # install-nix-actions requires `sudo`...
       - name: verify pgsql service is available
         env:
           DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
