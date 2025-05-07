@@ -4,23 +4,8 @@
 
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "timezone": "America/Edmonton",
-  "nix": {"enabled": true},
   "extends": [
-    "config:best-practices",
-    ":dependencyDashboard",
-    ":maintainLockFilesWeekly",
-    ":automergeMinor",
-    ":semanticCommitTypeAll(chore)"
-  ],
-  "packageRules": [
-    {
-      "description": "packages that update regularly (eg. daily) and aren't security critical are infrequent for less noise",
-      "matchPackageNames": [
-        "https://github.com/oxalica/rust-overlay",
-        "https://github.com/NixOS/nixpkgs",
-      ],
-      "schedule": ["* 0-3 1,15 * *"]
-    }
+    "https://forgejo.kainnef.com/mfenniak/renovate-config/raw/branch/main/rust.json5",
+    ":maintainLockFilesWeekly"
   ]
 }
