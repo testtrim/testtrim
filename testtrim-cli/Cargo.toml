@@ -5,7 +5,7 @@
 [package]
 name = "testtrim"
 description = "Intelligently select automated tests to run via code coverage analysis"
-version = "0.13.3"
+version = "0.13.4"
 edition = "2024"
 authors = ["Mathieu Fenniak <mathieu@fenniak.net>"]
 repository = "https://codeberg.org/testtrim/testtrim"
