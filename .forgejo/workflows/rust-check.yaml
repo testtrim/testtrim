@@ -35,6 +35,7 @@ jobs:
           # would be the safest in order to ensure the "last commit we have coverage data" is available, but if it slows
           # the repo checkout down too much it could probably be changed to a handful of commits instead.
           fetch-depth: 0
+      - uses: https://github.com/Swatinem/rust-cache@v2
       - name: verify pgsql service is available
         env:
           DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
