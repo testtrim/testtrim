@@ -1280,12 +1280,15 @@ mod tests {
         let test4_reasons = test_result.get(&TEST4);
         assert!(test4_reasons.is_some());
         let test4_reasons = test4_reasons.unwrap();
-        assert!(test4_reasons.contains(&TestReason::SideEffect(
-            Box::new(TestReason::CoverageIdentifier(test4_network_ci)),
-            Box::new(TestReason::NetworkPolicy(
-                "PostgreSQL server (\"db/postgres/2024_schema.sql\")".to_string()
+        assert!(
+            test4_reasons.contains(&TestReason::SideEffect(
+                Box::new(TestReason::CoverageIdentifier(test4_network_ci)),
+                Box::new(TestReason::NetworkPolicy(
+                    "PostgreSQL server (\"db/postgres/2024_schema.sql\")".to_string()
+                )),
             )),
-        )));
+            "test4_reasons missing expected contents, was: {test4_reasons:?}"
+        );
     }
 
     #[test]
