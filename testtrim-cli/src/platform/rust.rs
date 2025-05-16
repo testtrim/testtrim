@@ -520,8 +520,9 @@ impl RustTestPlatform {
         for path in trace.get_open_paths() {
             if path.is_relative() || path.starts_with(project_dir) {
                 debug!(
-                    "found test {} accessed local file {path:?}",
-                    test_case.test_identifier
+                    "found test {} accessed local file {}",
+                    test_case.test_identifier,
+                    path.display(),
                 );
 
                 let target_path = normalize_path(
@@ -530,7 +531,8 @@ impl RustTestPlatform {
                     project_dir,
                     |warning| {
                         warn!(
-                            "syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}"
+                            "syscall trace accessed path {} but couldn't normalize to repo root: {warning}",
+                            path.display()
                         );
                     },
                 );
@@ -607,7 +609,9 @@ impl RustTestPlatform {
         // Match `cargo test` behavior by moving CWD into the root of the module
         let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
         debug!(
-            "Execute test case {test_case:?} into {profile_file:?} from working-dir {test_wd:?}..."
+            "Execute test case {test_case:?} into {} from working-dir {}...",
+            profile_file.display(),
+            test_wd.display()
         );
 
         let mut cmd = Command::new(&test_case.test_binary.executable_path);
@@ -658,7 +662,8 @@ impl RustTestPlatform {
         let mut result = HashSet::new();
 
         let file = File::open(file).context(format!(
-            "error in find_compile_time_includes opening file {file:?}"
+            "error in find_compile_time_includes opening file {}",
+            file.display(),
         ))?;
         let content = io::read_to_string(BufReader::new(file))
             .context("find_compile_time_includes file read")?;
@@ -847,7 +852,8 @@ impl TestPlatform for RustTestPlatform {
                     // them might be better elevated to errors?
                     let target_path = normalize_path(&target_path, file, project_dir, |warning| {
                         warn!(
-                            "file {file:?} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}"
+                            "file {} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}",
+                            file.display()
                         );
                     });
 
