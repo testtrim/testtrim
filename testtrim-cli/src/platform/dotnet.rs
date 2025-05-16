@@ -328,7 +328,8 @@ impl DotnetTestPlatform {
         // dep_map: &SolutionDependencyMap, // TODO: external dependency tracking
         coverage_data: &mut CommitCoverageData<DotnetTestIdentifier, DotnetCoverageIdentifier>,
     ) -> Result<()> {
-        let reader = File::open(profile_file).context(format!("error opening {profile_file:?}"))?;
+        let reader = File::open(profile_file)
+            .context(format!("error opening {}", profile_file.display()))?;
 
         let coverage: Coverage = quick_xml::de::from_reader(BufReader::new(reader))?;
 
@@ -360,8 +361,11 @@ impl DotnetTestPlatform {
                 if cls.line_rate > 0.0 {
                     let current_source_file = Path::new(&cls.filename);
                     trace!(
-                        "test hit file {} {} {current_source_file:?}; project_dir: {project_dir:?}",
-                        pkg.name, cls.name
+                        "test hit file {} {} {}; project_dir: {}",
+                        pkg.name,
+                        cls.name,
+                        current_source_file.display(),
+                        project_dir.display()
                     );
 
                     // current_source_file should be an absolute path thanks to the DeterministicReport setting, but
@@ -371,7 +375,7 @@ impl DotnetTestPlatform {
                     if let Ok(relative_path) =
                         Path::new(&current_source_file).strip_prefix(project_dir)
                     {
-                        trace!("test hit file relative path: {relative_path:?}");
+                        trace!("test hit file relative path: {}", relative_path.display());
                         coverage_data.add_file_to_test(FileCoverage {
                             file_name: relative_path.to_path_buf(),
                             test_identifier: test_case.test_identifier.clone(),

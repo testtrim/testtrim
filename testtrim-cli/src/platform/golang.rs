@@ -387,7 +387,7 @@ impl GolangTestPlatform {
         debug!("running: {cmd:?}");
         let output = cmd.current_dir(project_dir).output().await.map_err(|e| {
             SubcommandErrors::UnableToStart {
-                command: format!("{test_binary_path:?} ...run-noop-test...").to_string(),
+                command: format!("{} ...run-noop-test...", test_binary_path.display()).to_string(),
                 error: e,
             }
         })?;
@@ -452,7 +452,10 @@ impl GolangTestPlatform {
             .join(&test_case.test_identifier.test_name)
             .with_extension("strace");
 
-        debug!("Execute test case {test_case:?} into {profile_file:?}...");
+        debug!(
+            "Execute test case {test_case:?} into {}...",
+            profile_file.display()
+        );
         let (output, trace) = async {
             let mut cmd = Self::get_run_test_command(
                 &test_case.binary_path,
@@ -622,8 +625,9 @@ impl GolangTestPlatform {
         for path in trace.get_open_paths() {
             if path.is_relative() || path.starts_with(project_dir) {
                 debug!(
-                    "found test {} accessed local file {path:?}",
-                    test_case.test_identifier
+                    "found test {} accessed local file {}",
+                    test_case.test_identifier,
+                    path.display()
                 );
 
                 let target_path = normalize_path(
@@ -632,7 +636,8 @@ impl GolangTestPlatform {
                     project_dir,
                     |warning| {
                         warn!(
-                            "syscall trace accessed path {path:?} but couldn't normalize to repo root: {warning}"
+                            "syscall trace accessed path {} but couldn't normalize to repo root: {warning}",
+                            path.display()
                         );
                     },
                 );
@@ -843,8 +848,8 @@ impl GolangTestPlatform {
         //   Coverage-based testing would identify these dependencies, but this hack doesn't -- if you change a_test.go
         //   and it had a function used by b_test.go, we won't know that the tests in b_test.go need to be rerun.
         // However, it's probably "pretty good for most cases"?
-        let test_file =
-            fs::read_to_string(file).context(format!("reading changed test file {file:?}"))?;
+        let test_file = fs::read_to_string(file)
+            .context(format!("reading changed test file {}", file.display()))?;
 
         for cap in TEST_FUNC_DEFINITION_REGEX.captures_iter(&test_file) {
             let test_name = String::from(&cap["test_name"]);
@@ -852,7 +857,10 @@ impl GolangTestPlatform {
             for tc in all_test_cases {
                 if tc.test_name == test_name {
                     any_match = true;
-                    debug!("guessed that modification to {file:?} would require running {tc}");
+                    debug!(
+                        "guessed that modification to {} would require running {tc}",
+                        file.display()
+                    );
                     test_cases
                         .entry(tc.clone())
                         .or_default()
@@ -870,7 +878,8 @@ impl GolangTestPlatform {
             }
             if !any_match {
                 warn!(
-                    "inferred that a test named {test_name} exists in file {file:?} but couldn't find it in test cases"
+                    "inferred that a test named {test_name} exists in file {} but couldn't find it in test cases",
+                    file.display()
                 );
             }
         }
@@ -956,12 +965,16 @@ impl GolangTestPlatform {
         let mut result = HashSet::new();
 
         let Some(parent) = src_file.parent() else {
-            warn!("couldn't resolve path {src_file:?} to its parent directory");
+            warn!(
+                "couldn't resolve path {} to its parent directory",
+                src_file.display()
+            );
             return Ok(result);
         };
 
         let file = File::open(src_file).context(format!(
-            "error in find_embed_includes opening file {src_file:?}"
+            "error in find_embed_includes opening file {}",
+            src_file.display()
         ))?;
         let content =
             io::read_to_string(BufReader::new(file)).context("find_embed_includes file read")?;
@@ -1324,12 +1337,17 @@ impl TestPlatform for GolangTestPlatform {
                 }
 
                 for target_path in Self::find_embed_includes(file)? {
-                    debug!("found that {file:?} references {target_path:?}");
+                    debug!(
+                        "found that {} references {}",
+                        file.display(),
+                        target_path.display()
+                    );
                     // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
                     // them might be better elevated to errors?
                     let target_path = normalize_path(&target_path, file, project_dir, |warning| {
                         warn!(
-                            "file {file:?} had a //go:embed, but reference could not be followed: {warning}"
+                            "file {} had a //go:embed, but reference could not be followed: {warning}",
+                            file.display(),
                         );
                     });
 

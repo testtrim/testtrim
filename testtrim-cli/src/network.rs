@@ -124,12 +124,14 @@ where
                 }
                 Outcome::RunFromFileChange(ref policy_name, ref file_changed) => {
                     debug!(
-                        "network to {network_dependency:?} + file {file_changed:?} hit run policy {policy_name}"
+                        "network to {network_dependency:?} + file {} hit run policy {policy_name}",
+                        file_changed.display(),
                     );
                     TestReason::SideEffect(
                         Box::new(TestReason::CoverageIdentifier(ci.clone())),
                         Box::new(TestReason::NetworkPolicy(format!(
-                            "{policy_name} ({file_changed:?})",
+                            "{policy_name} ({})",
+                            file_changed.display()
                         ))),
                     )
                 }

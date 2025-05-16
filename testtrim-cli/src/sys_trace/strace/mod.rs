@@ -78,9 +78,10 @@ impl STraceSysTraceCommand {
         receptionist_address: PathBuf,
     ) -> Result<Trace> {
         let receptionist = Receptionist::startup(receptionist_address)?;
-        let file = File::open(&trace_path)
-            .await
-            .context(format!("failed to open strace output file {trace_path:?}"))?;
+        let file = File::open(&trace_path).await.context(format!(
+            "failed to open strace output file {}",
+            trace_path.display()
+        ))?;
         let mut lines = BufReader::new(file).lines();
         let result = Self::read_strace_output(&mut lines, receptionist).await;
         if result.is_err() {
@@ -266,13 +267,13 @@ impl STraceSysTraceCommand {
                                         // I'm not sure why this might happen, so, help diagnose a race condition in
                                         // output ordering by outputting recent and upcoming log lines:
                                         error!(
-                                            "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
+                                            "pid {pid:?} in tgid {tgid:?} accessed path {} relative to fd {relative_fd:?} which wasn't open", path_ref.display()
                                         );
                                         error!("current known FDs is {tgid_open_fd:?}");
                                         let tgid = *tgid; // drop mutable borrow of pid_to_tgid
                                         error!("current known TGIDs is {pid_to_tgid:?}");
                                         return Err(anyhow!(
-                                            "pid {pid:?} in tgid {tgid:?} accessed path {path_ref:?} relative to fd {relative_fd:?} which wasn't open"
+                                            "pid {pid:?} in tgid {tgid:?} accessed path {} relative to fd {relative_fd:?} which wasn't open", path_ref.display()
                                         ));
                                     }
                                 }
@@ -690,18 +691,16 @@ impl Drop for OwnedChildPid {
                 // Wait up to 5 seconds for graceful termination
                 let start = std::time::Instant::now();
                 loop {
-                    match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
-                        Ok(_) => return, // Child exited
-                        Err(_) => {
-                            if start.elapsed() >= std::time::Duration::from_secs(5) {
-                                // Timeout reached, send SIGKILL
-                                let _ = kill(pid, Signal::SIGKILL);
-                                let _ = waitpid(pid, None);
-                                return;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                        }
+                    if waitpid(pid, Some(WaitPidFlag::WNOHANG)).is_ok() {
+                        return;
                     }
+                    if start.elapsed() >= std::time::Duration::from_secs(5) {
+                        // Timeout reached, send SIGKILL
+                        let _ = kill(pid, Signal::SIGKILL);
+                        let _ = waitpid(pid, None);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             });
         }
