@@ -1818,9 +1818,9 @@ checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 
 [[package]]
 name = "llvm_profparser"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "057fc03b8bfdc071acd01f4234a6c791f728c2c47bccdd14a7e51ebe5288522b"
+checksum = "a26adc0bb42dc9aa3b6b6dc52306986a545c648428cc6fbf25261fc22f8ab1bb"
 dependencies = [
  "anyhow",
  "flate2",
