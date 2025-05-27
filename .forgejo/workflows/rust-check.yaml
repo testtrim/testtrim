@@ -39,7 +39,7 @@ jobs:
         env:
           DATABASE_URL: postgres://testtrim:testtrim@pgsql/testtrim
         run: timeout 30 bash -c 'while ! psql $DATABASE_URL -c "SELECT 1"; do sleep 1; done'
-      - uses: https://github.com/cachix/install-nix-action@526118121621777ccd86f79b04685a9319637641 # v31
+      - uses: https://github.com/cachix/install-nix-action@17fe5fb4a23ad6cbbe47d6b3f359611ad276644c # v31
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
