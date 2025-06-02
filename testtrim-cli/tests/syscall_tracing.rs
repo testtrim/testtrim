@@ -58,7 +58,12 @@ async fn run_test_binary(trace_command: &SysTraceCommandDispatch, arg: &str) -> 
     cmd.current_dir(repo_root);
     let (output, trace) = trace_command.trace_command(cmd, &trace_file).await?;
     if !output.status.success() {
-        panic!("failed to run subcommand: {output:?}");
+        let stdout_content = String::from_utf8_lossy(&output.stdout);
+        let stderr_content = String::from_utf8_lossy(&output.stderr);
+        panic!(
+            "failed to run subcommand: {:?}; stdout: {stdout_content:?}, stderr: {stderr_content:?}",
+            output.status
+        );
     }
     Ok(trace)
 }

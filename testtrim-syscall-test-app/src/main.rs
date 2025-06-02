@@ -278,21 +278,24 @@ fn access_network_multithread() -> Result<(), std::io::Error> {
     let mut attempt_counter = 0;
     loop {
         attempt_counter += 1;
+        println!("access_network_multithread: attempt {attempt_counter}...");
         if attempt_counter > 5 {
             panic!("aborting after multiple retries");
         }
 
         // Test #1 & #2: UDP access and DNS resolution with shared threading:
         let socket = UdpSocket::bind("0.0.0.0:0")?;
+        socket.set_read_timeout(Some(Duration::from_secs(10)))?;
+        socket.set_write_timeout(Some(Duration::from_secs(10)))?;
+        println!("access_network_multithread: connect 1.1.1.1:53 UDP...");
         socket.connect("1.1.1.1:53")?;
         let mut buf = vec![0; 1024];
         let mut questions = [Question::new("example.com", ResourceType::A, 1)];
-        let mut answers = [ResourceRecord::default()];
         let message = Message::new(
             rand::random(),
             Flags::default(),
             &mut questions,
-            &mut answers,
+            &mut [],
             &mut [],
             &mut [],
         );
@@ -300,6 +303,8 @@ fn access_network_multithread() -> Result<(), std::io::Error> {
         let msg_len = message.write(&mut buf).expect("message.write");
         // Share `socket` into another thread, requiring syscall tracing to be able to follow the shared socket:
         let (mut buf, socket) = thread::spawn(move || {
+            println!("access_network_multithread: send 1.1.1.1:53 UDP...");
+            println!("DNS query bytes: {:02x?}", &buf[..msg_len]);
             let bytes_sent = socket.send(&buf[..msg_len]).unwrap();
             assert_eq!(bytes_sent, msg_len);
             (buf, socket)
@@ -308,17 +313,18 @@ fn access_network_multithread() -> Result<(), std::io::Error> {
         .unwrap();
         // Throw it to one other thread for a recv.
         let (buf, bytes_recvd) = thread::spawn(move || {
+            println!("access_network_multithread: recv 1.1.1.1:53 UDP...");
             let bytes_recvd = socket.recv(&mut buf).unwrap();
             (buf, bytes_recvd)
         })
         .join()
         .unwrap();
-        let mut questions = [dns_protocol::Question::default(); 1];
-        let mut answers = [dns_protocol::ResourceRecord::default(); 10];
-        let mut authorities = [dns_protocol::ResourceRecord::default(); 10];
-        let mut additional = [dns_protocol::ResourceRecord::default(); 10];
+        let mut questions = [Question::default(); 1];
+        let mut answers = [ResourceRecord::default(); 10];
+        let mut authorities = [ResourceRecord::default(); 10];
+        let mut additional = [ResourceRecord::default(); 10];
         let binding = buf[..bytes_recvd].to_vec();
-        let message = dns_protocol::Message::read(
+        let message = Message::read(
             &binding,
             &mut questions,
             &mut answers,
@@ -338,10 +344,12 @@ fn access_network_multithread() -> Result<(), std::io::Error> {
             if let dns_protocol::ResourceType::A = answer.ty() {
                 let addr = answer.data().try_into().map(u32::from_be_bytes).unwrap();
                 let addr = Ipv4Addr::from_bits(addr);
+                println!("access_network_multithread: connect example.com:80 ({addr:?}:80)...");
                 let mut stream = TcpStream::connect(SocketAddrV4::new(addr, 80))?;
 
                 // Throw it to another thread for a write.
                 let _stream = thread::spawn(move || {
+                    println!("access_network_multithread: write example.com:80 ({addr:?}:80)...");
                     let msg = "GET / HTTP/1.1\nHost: example.com\n\n".as_bytes();
                     let bytes_sent = stream.write(msg).unwrap();
                     assert_eq!(bytes_sent, msg.len());
