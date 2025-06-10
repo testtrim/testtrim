@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
+use std::process::Command;
 use std::sync::Arc;
 use testtrim::platform::javascript::JavascriptMochaTestPlatform;
 use testtrim::timing_tracer::{PerformanceStorage, PerformanceStoringLayer};
@@ -10,13 +11,33 @@ use tracing::instrument::WithSubscriber as _;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-use crate::assert_performance_tracing;
 use crate::linearcommits_filecoverage::{CommitTestData, execute_test, setup_test};
+use crate::{TestError, assert_performance_tracing};
+
+pub fn npm_install() -> Result<()> {
+    let output = Command::new("npm")
+        .arg("install")
+        .output()
+        .expect("Failed to execute npm install command");
+
+    // Check for non-zero exit status
+    if !output.status.success() {
+        return Err(TestError::SubcommandFailed {
+            command: "git checkout".to_string(),
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+        .into());
+    }
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn add_new_test() -> Result<()> {
     let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
         setup_test::<JavascriptMochaTestPlatform>("javascript-coverage-specimen").await?;
+    npm_install()?;
 
     let test_commits = vec![
         CommitTestData {

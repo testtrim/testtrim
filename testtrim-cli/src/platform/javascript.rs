@@ -2,20 +2,28 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::Result;
-use log::trace;
+use anyhow::Context as _;
+use anyhow::{Result, anyhow};
+use log::warn;
+use log::{debug, trace};
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::{fmt, fs};
+use tokio::process::Command;
+use tracing::Instrument as _;
+use tracing::info_span;
 use tracing::instrument;
 
 use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
 use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::RunTestsErrors;
+use crate::errors::SubcommandErrors;
 use crate::network::NetworkDependency;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::ResolvedSocketAddr;
@@ -28,16 +36,17 @@ use super::{
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct JavascriptMochaTestIdentifier {
     /// Project-relative source path that defines the binary which contains the test.  For example,
-    /// `some_module/src/lib.rs`
+    /// `src/basic_ops.js`
     pub test_src_path: PathBuf,
-    /// Name of the test.  For example, `basic_ops::tests::test_add`
-    pub test_name: String,
+    /// Full title of the test, combined from all describe/it functions.  For example, `basic ops div should divide two
+    /// numbers`.`
+    pub full_title: String,
 }
 
 impl TestIdentifier for JavascriptMochaTestIdentifier {}
 impl TestIdentifierCore for JavascriptMochaTestIdentifier {
     fn lightly_unique_name(&self) -> String {
-        self.test_name.clone()
+        self.full_title.clone()
     }
 }
 
@@ -47,7 +56,7 @@ impl fmt::Display for JavascriptMochaTestIdentifier {
             f,
             "{} / {}",
             self.test_src_path.to_string_lossy(),
-            self.test_name
+            self.full_title
         )
     }
 }
@@ -55,7 +64,7 @@ impl fmt::Display for JavascriptMochaTestIdentifier {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum JavascriptCoverageIdentifier {
     // Possible future: node.js version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
-    PackageDependency(JavascriptPackageDependency),
+    // PackageDependency(JavascriptPackageDependency),
     NetworkDependency(ResolvedSocketAddr),
 }
 
@@ -68,27 +77,21 @@ impl TryFrom<JavascriptCoverageIdentifier> for NetworkDependency {
     fn try_from(value: JavascriptCoverageIdentifier) -> std::result::Result<Self, Self::Error> {
         match value {
             JavascriptCoverageIdentifier::NetworkDependency(socket) => Ok(Self { socket }),
-            _ => Err("not supported"),
+            // _ => Err("not supported"),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-pub struct JavascriptPackageDependency {
-    pub package_name: String,
-    pub version: String,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct RustTestBinary {
-    pub rel_src_path: PathBuf,
-    pub executable_path: PathBuf,
-    pub manifest_path: PathBuf,
-}
+// #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
+// pub struct JavascriptPackageDependency {
+//     pub package_name: String,
+//     pub version: String,
+// }
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub struct JavascriptMochaConcreteTestIdentifier {
     pub test_identifier: JavascriptMochaTestIdentifier,
+    pub absolute_test_src_path: PathBuf,
 }
 
 impl ConcreteTestIdentifier<JavascriptMochaTestIdentifier>
@@ -114,7 +117,117 @@ impl TestDiscovery<JavascriptMochaConcreteTestIdentifier, JavascriptMochaTestIde
         &self,
         test_identifier: JavascriptMochaTestIdentifier,
     ) -> Option<JavascriptMochaConcreteTestIdentifier> {
-        Some(JavascriptMochaConcreteTestIdentifier { test_identifier })
+        for test_case in &self.all_test_cases {
+            if test_case.test_identifier == test_identifier {
+                return Some(test_case.clone());
+            }
+        }
+        warn!("Unable to find test file for test: {test_identifier:?}");
+        None
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MochaTestOutput {
+    pub stats: TestStats,
+    pub tests: Vec<TestCase>,
+    pub pending: Vec<TestCase>,
+    pub failures: Vec<TestCase>,
+    pub passes: Vec<TestCase>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TestStats {
+    pub suites: u32,
+    pub tests: u32,
+    pub passes: u32,
+    pub pending: u32,
+    pub failures: u32,
+    pub start: String, // ISO 8601 timestamp
+    pub end: String,   // ISO 8601 timestamp
+    pub duration: u64, // milliseconds
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TestCase {
+    pub title: String,
+    #[serde(rename = "fullTitle")]
+    pub full_title: String,
+    pub file: String,
+    #[serde(rename = "currentRetry")]
+    pub current_retry: u32,
+    pub speed: String, // "fast", "medium", "slow"
+    pub err: TestError,
+    // Optional fields that might appear in some test cases
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TestError {
+    // For successful tests, this is typically an empty object
+    // For failed tests, this would contain error details
+    #[serde(flatten)]
+    pub details: HashMap<String, serde_json::Value>,
+}
+
+impl Default for TestError {
+    fn default() -> Self {
+        Self {
+            details: HashMap::new(),
+        }
+    }
+}
+
+// Alternative implementation if you want to handle the error field more specifically
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum TestErrorAlt {
+    Empty {},
+    Error {
+        message: String,
+        stack: Option<String>,
+        #[serde(flatten)]
+        other: HashMap<String, serde_json::Value>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TestCaseAlt {
+    pub title: String,
+    #[serde(rename = "fullTitle")]
+    pub full_title: String,
+    pub file: String,
+    #[serde(rename = "currentRetry")]
+    pub current_retry: u32,
+    pub speed: String,
+    pub err: TestErrorAlt,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+// Example usage and helper methods
+impl MochaTestOutput {
+    /// Get all test cases regardless of their status
+    pub fn all_tests(&self) -> &Vec<TestCase> {
+        &self.tests
+    }
+
+    /// Check if all tests passed
+    pub fn all_passed(&self) -> bool {
+        self.stats.failures == 0 && self.stats.pending == 0
+    }
+
+    /// Get test success rate as a percentage
+    pub fn success_rate(&self) -> f64 {
+        if self.stats.tests == 0 {
+            return 100.0;
+        }
+        (self.stats.passes as f64 / self.stats.tests as f64) * 100.0
     }
 }
 
@@ -236,6 +349,8 @@ impl JavascriptMochaTestPlatform {
 
     //     Ok(())
     // }
+
+    // FIXME: npm run test -- --jobs=1 test/basic_ops.js --grep "^basic ops add should add two numbers$"
 
     // async fn run_test(
     //     project_dir: &Path,
@@ -381,24 +496,69 @@ impl TestPlatform for JavascriptMochaTestPlatform {
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
-    async fn discover_tests(_project_dir: &Path) -> Result<JavascriptMochaTestDiscovery> {
-        unimplemented!("discover_tests")
+    async fn discover_tests(project_dir: &Path) -> Result<JavascriptMochaTestDiscovery> {
+        // --reporter-option output=test-output.json
+        let json_output = tempfile::Builder::new().prefix("testtrim").tempfile()?;
 
-        // let test_binaries = JavascriptMochaTestPlatform::find_test_binaries(project_dir).await?;
-        // trace!("test_binaries: {test_binaries:?}");
+        let output = Command::new("npm")
+            .args([
+                "run",
+                "test",
+                "--",
+                "--dry-run",
+                "--reporter=json",
+                &format!(
+                    "--reporter-option=output={}",
+                    json_output.path().to_string_lossy()
+                ),
+            ])
+            .current_dir(project_dir)
+            .output()
+            .instrument(info_span!("npm run test -- --dry-run",
+                subcommand = true,
+                subcommand_binary = ?"npm",
+                subcommand_args = ?["run", "test", "--", "--dry-run", "--reporter=json"],
+            ))
+            .await
+            .map_err(|e| SubcommandErrors::UnableToStart {
+                command: format!("npm run test -- --dry-run").to_string(),
+                error: e,
+            })?;
 
-        // let all_test_cases = JavascriptMochaTestPlatform::get_all_test_cases(project_dir, &test_binaries)
-        //     .instrument(info_span!(
-        //         "get_all_test_cases",
-        //         ui_stage = Into::<u64>::into(UiStage::ListingTests)
-        //     ))
-        //     .await?;
-        // trace!("all_test_cases: {all_test_cases:?}");
+        if !output.status.success() {
+            return Err(SubcommandErrors::SubcommandFailed {
+                command: format!("npm run test -- --dry-run").to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
 
-        // Ok(JavascriptMochaTestDiscovery {
-        //     test_binaries,
-        //     all_test_cases,
-        // })
+        debug!(
+            "npm dry run output: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let mocha_output: MochaTestOutput = serde_json::from_reader(File::open(json_output)?)
+            .context("while parsing npm run test output")?;
+        let mut test_cases = HashSet::new();
+        for mocha_test in mocha_output.tests {
+            let success = test_cases.insert(JavascriptMochaConcreteTestIdentifier {
+                test_identifier: JavascriptMochaTestIdentifier {
+                    test_src_path: PathBuf::new(),
+                    full_title: mocha_test.full_title.clone(),
+                },
+                absolute_test_src_path: PathBuf::new(),
+            });
+            if !success {
+                return Err(anyhow!(
+                    "failed to insert test case for {mocha_test:?}, indicating a duplicate test case"
+                ));
+            }
+        }
+
+        Ok(JavascriptMochaTestDiscovery {
+            all_test_cases: test_cases,
+        })
     }
 
     #[instrument(skip_all, fields(perftrace = "platform-specific-test-cases"))]
@@ -563,138 +723,54 @@ impl TestPlatform for JavascriptMochaTestPlatform {
 
 #[cfg(test)]
 mod tests {
-    // use std::{
-    //     collections::HashSet,
-    //     ffi::OsStr,
-    //     fs,
-    //     path::{Path, PathBuf},
-    //     str::FromStr,
-    // };
+    use super::*;
 
-    // use anyhow::Result;
-    // use cargo_lock::Lockfile;
+    #[test]
+    fn test_deserialize_mocha_output() {
+        let json_data = r#"
+        {
+          "stats": {
+            "suites": 8,
+            "tests": 6,
+            "passes": 6,
+            "pending": 0,
+            "failures": 0,
+            "start": "2025-06-10T19:16:56.428Z",
+            "end": "2025-06-10T19:16:56.429Z",
+            "duration": 1
+          },
+          "tests": [
+            {
+              "title": "should add two numbers",
+              "fullTitle": "basic ops add should add two numbers",
+              "file": "/home/test/basic_ops.js",
+              "currentRetry": 0,
+              "speed": "fast",
+              "err": {}
+            }
+          ],
+          "pending": [],
+          "failures": [],
+          "passes": [
+            {
+              "title": "should add two numbers",
+              "fullTitle": "basic ops add should add two numbers",
+              "file": "/home/test/basic_ops.js",
+              "currentRetry": 0,
+              "speed": "fast",
+              "err": {}
+            }
+          ]
+        }
+        "#;
 
-    // use crate::{
-    //     coverage::commit_coverage_data::CommitCoverageData,
-    //     platform::{
-    //         TestPlatform,
-    //         rust::{JavascriptPackageDependency, JavascriptMochaTestPlatform},
-    //     },
-    // };
+        let result: Result<MochaTestOutput, _> = serde_json::from_str(json_data);
+        assert!(result.is_ok());
 
-    // use super::parse_cargo_package;
-
-    // #[test]
-    // fn test_parse_cargo_package() {
-    //     assert_eq!(
-    //         parse_cargo_package(OsStr::new("regex-automata-0.4.7")),
-    //         Some((String::from("regex-automata"), String::from("0.4.7")))
-    //     );
-    //     assert_eq!(
-    //         parse_cargo_package(OsStr::new("ws2_32-sys-0.2.1")),
-    //         Some((String::from("ws2_32-sys"), String::from("0.2.1")))
-    //     );
-    //     assert_eq!(
-    //         parse_cargo_package(OsStr::new("winit-0.29.1-beta")),
-    //         Some((String::from("winit"), String::from("0.29.1-beta")))
-    //     );
-    //     assert_eq!(
-    //         parse_cargo_package(OsStr::new("yeslogic-fontconfig-sys-5.0.0")),
-    //         Some((
-    //             String::from("yeslogic-fontconfig-sys"),
-    //             String::from("5.0.0")
-    //         ))
-    //     );
-    //     assert_eq!(
-    //         parse_cargo_package(OsStr::new("wasi-0.11.0+wasi-snapshot-preview1")),
-    //         Some((
-    //             String::from("wasi"),
-    //             String::from("0.11.0+wasi-snapshot-preview1")
-    //         ))
-    //     );
-    // }
-
-    // #[test]
-    // fn find_compile_time_includes() {
-    //     let res = JavascriptMochaTestPlatform::find_compile_time_includes(&PathBuf::from(
-    //         "tests/rust_parse_examples/sequences.rs",
-    //     ));
-    //     assert!(res.is_ok());
-    //     let res = res.unwrap();
-    //     assert_eq!(res.len(), 5, "correct # of files read");
-    //     assert!(res.contains(&PathBuf::from("../test_data/Factorial_Vec.txt")));
-    //     assert!(res.contains(&PathBuf::from(
-    //         "/this-is-not-a-file-path-that-really-exists-but-it-is-quite-long-wouldnt-you-say?"
-    //     )));
-    //     assert!(res.contains(&PathBuf::from("abc.txt ")));
-    //     assert!(res.contains(&PathBuf::from("file\"with\"quotes.txt")));
-    //     assert!(res.contains(&PathBuf::from("/proc/cpuinfo")));
-    // }
-
-    // #[test]
-    // fn analyze_changed_files_include() {
-    //     let mut files = HashSet::new();
-    //     files.insert(PathBuf::from("tests/rust_parse_examples/sequences.rs"));
-
-    //     let mut coverage_data = CommitCoverageData::new();
-
-    //     let res = JavascriptMochaTestPlatform::analyze_changed_files(
-    //         &fs::canonicalize(Path::new(".")).unwrap(),
-    //         &files,
-    //         &mut coverage_data,
-    //     );
-    //     assert!(res.is_ok());
-    //     assert_eq!(
-    //         coverage_data.file_references_files_map().len(),
-    //         1,
-    //         "correct # of files read"
-    //     );
-    //     assert_eq!(
-    //         coverage_data
-    //             .file_references_files_map()
-    //             .get(&PathBuf::from("tests/rust_parse_examples/sequences.rs"))
-    //             .unwrap()
-    //             .len(),
-    //         1
-    //     );
-    //     assert!(
-    //         coverage_data
-    //             .file_references_files_map()
-    //             .get(&PathBuf::from("tests/rust_parse_examples/sequences.rs"))
-    //             .unwrap()
-    //             .contains(&PathBuf::from("tests/test_data/Factorial_Vec.txt"))
-    //     );
-    // }
-
-    // #[test]
-    // fn cargo_lock_equal() -> Result<()> {
-    //     let lock = Lockfile::from_str(include_str!("../../tests/test_data/Cargo-newer.lock"))?;
-    //     let relevant_changes = JavascriptMochaTestPlatform::diff_cargo_lock(&lock, &lock);
-    //     assert_eq!(
-    //         relevant_changes.len(),
-    //         0,
-    //         "checking no changes in the same file, but was: {relevant_changes:?}"
-    //     );
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn cargo_lock_updated() -> Result<()> {
-    //     let ancestor_lock =
-    //         Lockfile::from_str(include_str!("../../tests/test_data/Cargo-older.lock"))?;
-    //     let current_lock =
-    //         Lockfile::from_str(include_str!("../../tests/test_data/Cargo-newer.lock"))?;
-    //     let mut relevant_changes = JavascriptMochaTestPlatform::diff_cargo_lock(&ancestor_lock, &current_lock);
-    //     println!("relevant_changes: {relevant_changes:?}");
-    //     assert_eq!(relevant_changes.len(), 2);
-    //     assert!(relevant_changes.remove(&JavascriptPackageDependency {
-    //         package_name: String::from("reqwest"),
-    //         version: String::from("0.12.11")
-    //     }));
-    //     assert!(relevant_changes.remove(&JavascriptPackageDependency {
-    //         package_name: String::from("testtrim"),
-    //         version: String::from("0.6.6")
-    //     }));
-    //     Ok(())
-    // }
+        let output = result.unwrap();
+        assert_eq!(output.stats.tests, 6);
+        assert_eq!(output.stats.passes, 6);
+        assert!(output.all_passed());
+        assert_eq!(output.success_rate(), 100.0);
+    }
 }
