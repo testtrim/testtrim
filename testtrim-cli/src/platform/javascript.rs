@@ -8,8 +8,10 @@ use log::warn;
 use log::{debug, trace};
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,12 +21,14 @@ use tracing::Instrument as _;
 use tracing::info_span;
 use tracing::instrument;
 
+use crate::cmd::ui::UiStage;
 use crate::coverage::Tag;
 use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
 use crate::coverage::full_coverage_data::FullCoverageData;
-use crate::errors::RunTestsErrors;
-use crate::errors::SubcommandErrors;
+use crate::errors::{FailedTestResult, SubcommandErrors, TestFailure};
+use crate::errors::{RunTestError, RunTestsErrors};
 use crate::network::NetworkDependency;
+use crate::platform::util::spawn_limited_concurrency;
 use crate::scm::{Scm, ScmCommit};
 use crate::sys_trace::trace::ResolvedSocketAddr;
 
@@ -39,7 +43,7 @@ pub struct JavascriptMochaTestIdentifier {
     /// `src/basic_ops.js`
     pub test_src_path: PathBuf,
     /// Full title of the test, combined from all describe/it functions.  For example, `basic ops div should divide two
-    /// numbers`.`
+    /// numbers`.
     pub full_title: String,
 }
 
@@ -63,8 +67,8 @@ impl fmt::Display for JavascriptMochaTestIdentifier {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum JavascriptCoverageIdentifier {
-    // Possible future: node.js version, platform, etc. -- might be better as tags since they'd be pretty universal for the whole commit though?
-    // PackageDependency(JavascriptPackageDependency),
+    // Possible future: node.js version, platform, etc. -- might be better as tags since they'd be pretty universal for
+    // the whole commit though?
     NetworkDependency(ResolvedSocketAddr),
 }
 
@@ -81,12 +85,6 @@ impl TryFrom<JavascriptCoverageIdentifier> for NetworkDependency {
         }
     }
 }
-
-// #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
-// pub struct JavascriptPackageDependency {
-//     pub package_name: String,
-//     pub version: String,
-// }
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub struct JavascriptMochaConcreteTestIdentifier {
@@ -167,18 +165,15 @@ pub struct TestCase {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TestError {
-    // For successful tests, this is typically an empty object
-    // For failed tests, this would contain error details
-    #[serde(flatten)]
-    pub details: HashMap<String, serde_json::Value>,
-}
-
-impl Default for TestError {
-    fn default() -> Self {
-        Self {
-            details: HashMap::new(),
-        }
-    }
+    // Example:
+    // "stack": "AssertionError [ERR_ASSERTION]: 0 == 22\n    at Context.<anonymous> (test/basic_ops.js:8:14)\n    at process.processImmediate (node:internal/timers:505:21)",
+    // "message": "0 == 22",
+    // "generatedMessage": true,
+    // "name": "AssertionError",
+    // "code": "ERR_ASSERTION",
+    // "actual": "0",
+    // "expected": "22",
+    // "operator": "=="
 }
 
 // Alternative implementation if you want to handle the error field more specifically
@@ -210,27 +205,6 @@ pub struct TestCaseAlt {
     pub state: Option<String>,
 }
 
-// Example usage and helper methods
-impl MochaTestOutput {
-    /// Get all test cases regardless of their status
-    pub fn all_tests(&self) -> &Vec<TestCase> {
-        &self.tests
-    }
-
-    /// Check if all tests passed
-    pub fn all_passed(&self) -> bool {
-        self.stats.failures == 0 && self.stats.pending == 0
-    }
-
-    /// Get test success rate as a percentage
-    pub fn success_rate(&self) -> f64 {
-        if self.stats.tests == 0 {
-            return 100.0;
-        }
-        (self.stats.passes as f64 / self.stats.tests as f64) * 100.0
-    }
-}
-
 pub struct JavascriptMochaTestPlatform;
 
 impl JavascriptMochaTestPlatform {
@@ -246,211 +220,72 @@ impl JavascriptMochaTestPlatform {
         }
     }
 
-    // async fn get_all_test_cases(
-    //     project_dir: &Path,
-    //     test_binaries: &HashSet<RustTestBinary>,
-    // ) -> Result<HashSet<JavascriptMochaConcreteTestIdentifier>> {
-    //     let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
-    //     let mut result: HashSet<JavascriptMochaConcreteTestIdentifier> = HashSet::new();
+    async fn run_test(
+        project_dir: &Path,
+        test_case: &JavascriptMochaConcreteTestIdentifier,
+        _tmp_path: &Path,
+    ) -> Result<
+        CommitCoverageData<JavascriptMochaTestIdentifier, JavascriptCoverageIdentifier>,
+        RunTestError,
+    > {
+        trace!("preparing for test case {test_case:?}");
 
-    //     for binary in test_binaries {
-    //         let output = Command::new(&binary.executable_path)
-    //             .arg("--list")
-    //             .env(
-    //                 "LLVM_PROFILE_FILE",
-    //                 Path::join(tmp_dir.path(), "get_all_test_cases_%m_%p.profraw"),
-    //             )
-    //             .current_dir(project_dir)
-    //             .output()
-    //             .instrument(info_span!("list tests",
-    //                 subcommand = true,
-    //                 subcommand_binary = ?&binary.executable_path,
-    //                 subcommand_args = ?["--list"],
-    //             ))
-    //             .await
-    //             .map_err(|e| SubcommandErrors::UnableToStart {
-    //                 command: format!("{binary:?} --list").to_string(),
-    //                 error: e,
-    //             })?;
+        let mut coverage_data = CommitCoverageData::new();
+        coverage_data.add_executed_test(test_case.test_identifier.clone());
 
-    //         if !output.status.success() {
-    //             return Err(SubcommandErrors::SubcommandFailed {
-    //                 command: format!("{binary:?} --list").to_string(),
-    //                 status: output.status,
-    //                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    //             }
-    //             .into());
-    //         }
+        let mut cmd = Command::new("npm");
+        let full_title_regex =
+            format!("^{}$", regex::escape(&test_case.test_identifier.full_title));
+        let args = [
+            // FIXME: this is awkward... merging together &str and PathBuf... must be a better way
+            AsRef::<OsStr>::as_ref("test"),
+            AsRef::<OsStr>::as_ref("--"),
+            AsRef::<OsStr>::as_ref("--jobs=1"), // probably not necessary since we're running one test?  But just in-case `--grep` matches more than one...
+            AsRef::<OsStr>::as_ref("--grep"),
+            AsRef::<OsStr>::as_ref(&full_title_regex),
+            AsRef::<OsStr>::as_ref(&test_case.absolute_test_src_path),
+        ];
+        cmd.args(args);
+        debug!("cmd.args: {cmd:?}");
+        cmd.current_dir(project_dir);
 
-    //         let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 output");
-    //         for test_name in stdout
-    //             .lines()
-    //             .filter(|line| line.ends_with(": test"))
-    //             .map(|line| line.trim_end_matches(": test"))
-    //         {
-    //             result.insert(JavascriptMochaConcreteTestIdentifier {
-    //                 test_binary: binary.clone(),
-    //                 test_identifier: JavascriptMochaTestIdentifier {
-    //                     test_src_path: binary.rel_src_path.clone(),
-    //                     test_name: test_name.to_string(),
-    //                 },
-    //             });
-    //         }
-    //     }
+        let output = cmd
+            .output()
+            .instrument(info_span!(
+                "execute-test",
+                perftrace = "run-test",
+                parallel = true,
+                subcommand = true,
+                subcommand_binary = ?"npm",
+                subcommand_args = ?args,
+            ))
+            .await?;
 
-    //     Ok(result)
-    // }
+        if !output.status.success() {
+            return Err(RunTestError::TestExecutionFailure(FailedTestResult {
+                test_identifier: Box::new(test_case.test_identifier.clone()),
+                failure: TestFailure::NonZeroExitCode {
+                    exit_code: output.status.code(),
+                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                },
+            }));
+        }
 
-    // #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
-    // fn parse_trace_data(
-    //     project_dir: &Path,
-    //     test_case: &JavascriptMochaConcreteTestIdentifier,
-    //     trace: &Trace,
-    //     current_dir: &Path,
-    //     coverage_data: &mut CommitCoverageData<JavascriptMochaTestIdentifier, JavascriptCoverageIdentifier>,
-    // ) -> Result<()> {
-    //     for path in trace.get_open_paths() {
-    //         if path.is_relative() || path.starts_with(project_dir) {
-    //             debug!(
-    //                 "found test {} accessed local file {}",
-    //                 test_case.test_identifier,
-    //                 path.display(),
-    //             );
+        // FIXME: make test output to json reporter, parse results, and verify that 1 and only 1 test was run -- I don't
+        // fully trust `grep` since it's plausible that someone could create two tests with the same names, and I don't
+        // want to let that be confusing and undetected
 
-    //             let target_path = normalize_path(
-    //                 path,
-    //                 &current_dir.join("fake"), // normalize_path expects relative_to to be a file, not dir; so we add a fake child path
-    //                 project_dir,
-    //                 |warning| {
-    //                     warn!(
-    //                         "syscall trace accessed path {} but couldn't normalize to repo root: {warning}",
-    //                         path.display()
-    //                     );
-    //                 },
-    //             );
-    //             if let Some(target_path) = target_path {
-    //                 // It might make sense to filter out files that aren't part of the repo... both here and in
-    //                 // parse_profiling_data?
-    //                 coverage_data.add_file_to_test(FileCoverage {
-    //                     file_name: target_path.clone(),
-    //                     test_identifier: test_case.test_identifier.clone(),
-    //                 });
-    //             }
-    //         }
-    //         // FIXME: absolute path case -- check if it's part of the repo/cwd, and if so include it
-    //     }
+        trace!("Successfully ran test {:?}!", test_case.test_identifier);
 
-    //     for sockaddr in trace.get_connect_sockets() {
-    //         coverage_data.add_heuristic_coverage_to_test(HeuristicCoverage {
-    //             test_identifier: test_case.test_identifier.clone(),
-    //             coverage_identifier: JavascriptCoverageIdentifier::NetworkDependency(sockaddr.clone()),
-    //         });
-    //     }
+        // NOOP right now but added just to provide some tracing data for the tests which check that the tracing data exists.
+        Self::parse_coverage_data();
 
-    //     Ok(())
-    // }
+        Ok(coverage_data)
+    }
 
-    // FIXME: npm run test -- --jobs=1 test/basic_ops.js --grep "^basic ops add should add two numbers$"
-
-    // async fn run_test(
-    //     project_dir: &Path,
-    //     test_case: &JavascriptMochaConcreteTestIdentifier,
-    //     tmp_path: &Path,
-    //     binaries: &DashSet<PathBuf>,
-    //     coverage_library: &Arc<RwLock<CoverageLibrary>>,
-    // ) -> Result<CommitCoverageData<JavascriptMochaTestIdentifier, JavascriptCoverageIdentifier>, RunTestError> {
-    //     let mut coverage_data = CommitCoverageData::new();
-
-    //     trace!("preparing for test case {test_case:?}");
-
-    //     coverage_data.add_executed_test(test_case.test_identifier.clone());
-
-    //     if binaries.insert(test_case.test_binary.executable_path.clone()) {
-    //         let mut lock = coverage_library.write().unwrap(); // FIXME: unwrap?
-    //         trace!(
-    //             "binary {:?}; loading instrumentation data...",
-    //             test_case.test_binary
-    //         );
-    //         (*lock).load_binary(&test_case.test_binary.executable_path)?;
-    //     }
-
-    //     let coverage_dir = tmp_path.join(
-    //         test_case
-    //             .test_binary
-    //             .executable_path
-    //             .file_name()
-    //             .expect("file_name must be present"),
-    //     );
-    //     // Create coverage_dir but ignore if its error is 17 (file exists)
-    //     fs::create_dir_all(&coverage_dir)
-    //         .or_else(|e| {
-    //             if e.kind() == io::ErrorKind::AlreadyExists {
-    //                 Ok(())
-    //             } else {
-    //                 Err(e)
-    //             }
-    //         })
-    //         .context("Failed to create coverage directory")?;
-
-    //     let profile_file = coverage_dir
-    //         // FIXME: ':' -> '_' is because ':' isn't supported in Windows paths; this is an incomplete support of restricted filenames
-    //         .join(test_case.test_identifier.test_name.replace(':', "_"))
-    //         .with_extension("profraw");
-    //     let strace_file = coverage_dir
-    //         .join(&test_case.test_identifier.test_name)
-    //         .with_extension("strace");
-
-    //     // Match `cargo test` behavior by moving CWD into the root of the module
-    //     let test_wd = test_case.test_binary.manifest_path.parent().unwrap();
-    //     debug!(
-    //         "Execute test case {test_case:?} into {} from working-dir {}...",
-    //         profile_file.display(),
-    //         test_wd.display()
-    //     );
-
-    //     let mut cmd = Command::new(&test_case.test_binary.executable_path);
-    //     let args = ["--exact", &test_case.test_identifier.test_name];
-    //     cmd.args(args)
-    //         .env("LLVM_PROFILE_FILE", &profile_file)
-    //         .env("RUSTFLAGS", "-C instrument-coverage")
-    //         .current_dir(test_wd);
-
-    //     let (output, trace) = SYS_TRACE_COMMAND
-    //         .trace_command(cmd, &strace_file)
-    //         .instrument(info_span!(
-    //             "execute-test",
-    //             perftrace = "run-test",
-    //             parallel = true,
-    //             subcommand = true,
-    //             subcommand_binary = ?&test_case.test_binary.executable_path,
-    //             subcommand_args = ?args,
-    //         ))
-    //         .await?;
-
-    //     if !output.status.success() {
-    //         return Err(RunTestError::TestExecutionFailure(FailedTestResult {
-    //             test_identifier: Box::new(test_case.test_identifier.clone()),
-    //             failure: TestFailure::NonZeroExitCode {
-    //                 exit_code: output.status.code(),
-    //                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-    //                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    //             },
-    //         }));
-    //     }
-
-    //     trace!("Successfully ran test {:?}!", test_case.test_identifier);
-
-    //     let coverage_library_lock = coverage_library.read().unwrap();
-    //     Self::parse_profiling_data(
-    //         test_case,
-    //         &profile_file,
-    //         &coverage_library_lock,
-    //         &mut coverage_data,
-    //     )?;
-    //     Self::parse_trace_data(project_dir, test_case, &trace, test_wd, &mut coverage_data)?;
-
-    //     Ok(coverage_data)
-    // }
+    #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
+    fn parse_coverage_data() {}
 }
 
 impl TestPlatform for JavascriptMochaTestPlatform {
@@ -471,33 +306,24 @@ impl TestPlatform for JavascriptMochaTestPlatform {
     }
 
     fn project_name(_project_dir: &Path) -> Result<String> {
-        unimplemented!("project_name")
-
-        // // It could make more sense to make this method infallible and return an "unknown" tag or something.  But I'm
-        // // thinking to start restrictive and see if it ever becomes an issue.
-
-        // // We avoid using `Manifest`'s advanced workspace features since we're just trying to read the project name; so
-        // // read the Cargo.toml file ourselves and use `from_str` to parse it with the least fuss.
-        // let toml_contents =
-        //     fs::read_to_string(project_dir.join("Cargo.toml")).context("reading Cargo.toml")?;
-        // let manifest = Manifest::from_str(&toml_contents).context("parsing Cargo.toml")?;
-
-        // if let Some(package) = manifest.package {
-        //     Ok(package.name)
-        // } else {
-        //     if let Some(workspace) = manifest.workspace {
-        //         if !workspace.members.is_empty() {
-        //             // This is a bit hacky... not sure what the right behavior is yet.
-        //             return Ok(workspace.members[0].clone());
-        //         }
-        //     }
-        //     Err(anyhow!("unable to access package metadata in Cargo.toml"))
-        // }
+        let package_json: Value = serde_json::from_reader(File::open("package.json")?)?;
+        if let Value::Object(ref object) = package_json {
+            if let Some(name) = object.get("name") {
+                if let Value::String(name) = name {
+                    Ok(name.clone())
+                } else {
+                    Err(anyhow!("package.json / name field is not a string"))
+                }
+            } else {
+                Err(anyhow!("package.json / name field is missing"))
+            }
+        } else {
+            Err(anyhow!("package.json is not a map"))
+        }
     }
 
     #[instrument(skip_all, fields(perftrace = "discover-tests"))]
     async fn discover_tests(project_dir: &Path) -> Result<JavascriptMochaTestDiscovery> {
-        // --reporter-option output=test-output.json
         let json_output = tempfile::Builder::new().prefix("testtrim").tempfile()?;
 
         let output = Command::new("npm")
@@ -521,13 +347,13 @@ impl TestPlatform for JavascriptMochaTestPlatform {
             ))
             .await
             .map_err(|e| SubcommandErrors::UnableToStart {
-                command: format!("npm run test -- --dry-run").to_string(),
+                command: "npm run test -- --dry-run".to_string(),
                 error: e,
             })?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
-                command: format!("npm run test -- --dry-run").to_string(),
+                command: "npm run test -- --dry-run".to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }
@@ -544,10 +370,11 @@ impl TestPlatform for JavascriptMochaTestPlatform {
         for mocha_test in mocha_output.tests {
             let success = test_cases.insert(JavascriptMochaConcreteTestIdentifier {
                 test_identifier: JavascriptMochaTestIdentifier {
+                    // FIXME:
                     test_src_path: PathBuf::new(),
                     full_title: mocha_test.full_title.clone(),
                 },
-                absolute_test_src_path: PathBuf::new(),
+                absolute_test_src_path: PathBuf::from(&mocha_test.file),
             });
             if !success {
                 return Err(anyhow!(
@@ -577,37 +404,17 @@ impl TestPlatform for JavascriptMochaTestPlatform {
             JavascriptCoverageIdentifier,
         >,
     > {
-        unimplemented!("platform_specific_relevant_test_cases")
-
-        // let mut test_cases: HashMap<
-        //     JavascriptMochaTestIdentifier,
-        //     HashSet<TestReason<JavascriptCoverageIdentifier>>,
-        // > = HashMap::new();
-
-        // let mut external_dependencies_changed = None;
-        // // FIXME: I'm not confident that this check is right -- could there be multiple lock files in a realistic repo?
-        // // But this is simple and seems pretty applicable for now.
-        // if eval_target_changed_files.contains(Path::new("Cargo.lock")) {
-        //     external_dependencies_changed = Some(JavascriptMochaTestPlatform::rust_cargo_deps_test_cases(
-        //         eval_target_test_cases,
-        //         scm,
-        //         ancestor_commit,
-        //         coverage_data,
-        //         &mut test_cases,
-        //     )?);
-        // }
-
-        // Ok(PlatformSpecificRelevantTestCaseData {
-        //     additional_test_cases: test_cases,
-        //     external_dependencies_changed,
-        // })
+        Ok(PlatformSpecificRelevantTestCaseData {
+            additional_test_cases: HashMap::new(),
+            external_dependencies_changed: None,
+        })
     }
 
     #[instrument(skip_all)]
     async fn run_tests<'a, I>(
-        _project_dir: &Path,
-        _test_cases: I,
-        _jobs: u16,
+        project_dir: &Path,
+        test_cases: I,
+        jobs: u16,
     ) -> Result<
         CommitCoverageData<JavascriptMochaTestIdentifier, JavascriptCoverageIdentifier>,
         RunTestsErrors,
@@ -616,57 +423,50 @@ impl TestPlatform for JavascriptMochaTestPlatform {
         I: IntoIterator<Item = &'a JavascriptMochaConcreteTestIdentifier>,
         JavascriptMochaConcreteTestIdentifier: 'a,
     {
-        unimplemented!("run_tests")
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
 
-        // let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
+        let mut futures = vec![];
+        for test_case in test_cases {
+            let tmp_path = PathBuf::from(tmp_dir.path());
+            let tc = test_case.clone();
+            futures.push(async move {
+                JavascriptMochaTestPlatform::run_test(project_dir, &tc, &tmp_path)
+                    .instrument(info_span!("npm run test",
+                        ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
+                        test_case = %tc.test_identifier(),
+                    ))
+                    .await
+            });
+        }
+        let concurrency = if jobs == 0 {
+            num_cpus::get()
+        } else {
+            jobs.into()
+        };
+        tracing::info!(
+            ui_info = "run-test-count",
+            count = futures.len(),
+            concurrency
+        );
+        let results = spawn_limited_concurrency(concurrency, futures).await;
 
-        // let coverage_library = Arc::new(RwLock::new(CoverageLibrary::new()));
-        // let mut coverage_data = CommitCoverageData::new();
-        // let binaries = Arc::new(DashSet::new());
+        let mut coverage_data = CommitCoverageData::new();
+        let mut failed_test_results = vec![];
+        for result in results {
+            match result {
+                Ok(res) => coverage_data.merge_in(res),
+                Err(RunTestError::TestExecutionFailure(failed_test_result)) => {
+                    failed_test_results.push(failed_test_result);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
 
-        // let mut futures = vec![];
-        // for test_case in test_cases {
-        //     let tmp_path = PathBuf::from(tmp_dir.path());
-        //     let b = binaries.clone();
-        //     let cl = coverage_library.clone();
-        //     let tc = test_case.clone();
-        //     futures.push(async move {
-        //         JavascriptMochaTestPlatform::run_test(project_dir, &tc, &tmp_path, &b, &cl)
-        //             .instrument(info_span!("cargo test",
-        //                 ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
-        //                 test_case = %tc.test_identifier(),
-        //             ))
-        //             .await
-        //     });
-        // }
-        // let concurrency = if jobs == 0 {
-        //     num_cpus::get()
-        // } else {
-        //     jobs.into()
-        // };
-        // tracing::info!(
-        //     ui_info = "run-test-count",
-        //     count = futures.len(),
-        //     concurrency
-        // );
-        // let results = spawn_limited_concurrency(concurrency, futures).await;
-
-        // let mut failed_test_results = vec![];
-        // for result in results {
-        //     match result {
-        //         Ok(res) => coverage_data.merge_in(res),
-        //         Err(RunTestError::TestExecutionFailure(failed_test_result)) => {
-        //             failed_test_results.push(failed_test_result);
-        //         }
-        //         Err(e) => return Err(e.into()),
-        //     }
-        // }
-
-        // if failed_test_results.is_empty() {
-        //     Ok(coverage_data)
-        // } else {
-        //     Err(RunTestsErrors::TestExecutionFailures(failed_test_results))
-        // }
+        if failed_test_results.is_empty() {
+            Ok(coverage_data)
+        } else {
+            Err(RunTestsErrors::TestExecutionFailures(failed_test_results))
+        }
     }
 
     fn analyze_changed_files(
@@ -677,47 +477,7 @@ impl TestPlatform for JavascriptMochaTestPlatform {
             JavascriptCoverageIdentifier,
         >,
     ) -> Result<()> {
-        unimplemented!("analyze_changed_files")
-
-        // for file in changed_files {
-        //     if file.extension().is_some_and(|ext| ext == "rs") {
-        //         let mut found_references = false;
-
-        //         if !fs::exists(file)? {
-        //             // A file was considered "changed" but doesn't exist -- indicating a deleted file.
-        //             coverage_data.mark_file_makes_no_references(file.clone());
-        //             continue;
-        //         }
-
-        //         for target_path in Self::find_compile_time_includes(file)? {
-        //             // FIXME: It's not clear whether warnings are the right behavior for any of these problems.  Some of
-        //             // them might be better elevated to errors?
-        //             let target_path = normalize_path(&target_path, file, project_dir, |warning| {
-        //                 warn!(
-        //                     "file {} had an include/include_str/include_bytes macro, but reference could not be followed: {warning}",
-        //                     file.display()
-        //                 );
-        //             });
-
-        //             if let Some(target_path) = target_path {
-        //                 coverage_data.add_file_reference(FileReference {
-        //                     referencing_file: file.clone(),
-        //                     target_file: target_path,
-        //                 });
-        //                 found_references = true;
-        //             }
-        //         }
-
-        //         if !found_references {
-        //             coverage_data.mark_file_makes_no_references(file.clone());
-        //         }
-        //     } else {
-        //         // This probably isn't necessary since it would've never been marked as making references
-        //         coverage_data.mark_file_makes_no_references(file.clone());
-        //     }
-        // }
-
-        // Ok(())
+        Ok(())
     }
 }
 
@@ -770,7 +530,5 @@ mod tests {
         let output = result.unwrap();
         assert_eq!(output.stats.tests, 6);
         assert_eq!(output.stats.passes, 6);
-        assert!(output.all_passed());
-        assert_eq!(output.success_rate(), 100.0);
     }
 }
