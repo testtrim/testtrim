@@ -30,7 +30,8 @@ use crate::{
     errors::{RunTestsCommandErrors, RunTestsErrors, TestFailure},
     platform::{
         ConcreteTestIdentifier, TestDiscovery, TestIdentifier, TestPlatform,
-        dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform,
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform,
+        javascript::JavascriptMochaTestPlatform, rust::RustTestPlatform,
     },
     scm::{Scm, ScmCommit, git::GitScm},
     timing_tracer::{PerformanceStorage, PerformanceStoringLayer},
@@ -64,6 +65,10 @@ pub async fn cli(
         }
         TestProjectType::Golang => {
             specific_cli::<_, _, _, _, GolangTestPlatform>(logger, common_opts, run_opts).await
+        }
+        TestProjectType::JavascriptMocha => {
+            specific_cli::<_, _, _, _, JavascriptMochaTestPlatform>(logger, common_opts, run_opts)
+                .await
         }
     }
 }

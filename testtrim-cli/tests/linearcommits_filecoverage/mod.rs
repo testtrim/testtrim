@@ -22,6 +22,7 @@ use crate::{CWD_MUTEX, git_checkout, git_clone};
 
 mod dotnet_test;
 mod golang_test;
+mod javascript_test;
 mod rust_test;
 
 struct CommitTestData<'a> {

@@ -146,6 +146,9 @@ pub enum TestProjectType {
 
     /// Operate on Go language tests; eg. using `go test`
     Golang,
+
+    /// Operate on JavaScript tests using the mocha test framework for discovery and execution
+    JavascriptMocha,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
