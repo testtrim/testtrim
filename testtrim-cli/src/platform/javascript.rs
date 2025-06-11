@@ -4,6 +4,7 @@
 
 use anyhow::Context as _;
 use anyhow::{Result, anyhow};
+use lcov::{Reader, Record};
 use log::warn;
 use log::{debug, trace};
 use serde::Deserialize;
@@ -23,7 +24,7 @@ use tracing::instrument;
 
 use crate::cmd::ui::UiStage;
 use crate::coverage::Tag;
-use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier};
+use crate::coverage::commit_coverage_data::{CommitCoverageData, CoverageIdentifier, FileCoverage};
 use crate::coverage::full_coverage_data::FullCoverageData;
 use crate::errors::{FailedTestResult, SubcommandErrors, TestFailure};
 use crate::errors::{RunTestError, RunTestsErrors};
@@ -291,13 +292,71 @@ impl JavascriptMochaTestPlatform {
         trace!("Successfully ran test {:?}!", test_case.test_identifier);
 
         // NOOP right now but added just to provide some tracing data for the tests which check that the tracing data exists.
-        Self::parse_coverage_data();
+        Self::parse_coverage_data(
+            &tmp_dir.path().join("lcov.info"),
+            &mut coverage_data,
+            test_case,
+        )?;
 
         Ok(coverage_data)
     }
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
-    fn parse_coverage_data() {}
+    fn parse_coverage_data(
+        lcov_path: &Path,
+        coverage_data: &mut CommitCoverageData<
+            JavascriptMochaTestIdentifier,
+            JavascriptCoverageIdentifier,
+        >,
+        test_case: &JavascriptMochaConcreteTestIdentifier,
+    ) -> Result<(), RunTestError> {
+        let reader = Reader::open_file(lcov_path).expect("Failed to open LCOV file");
+        let mut current_source_file = None;
+        let mut current_source_file_is_hit = false;
+
+        for record in reader {
+            match record {
+                Ok(Record::SourceFile { path }) => {
+                    current_source_file = Some(path.clone());
+                    current_source_file_is_hit = false;
+                }
+                Ok(Record::LineData { count, .. }) if count > 0 => {
+                    if !current_source_file_is_hit {
+                        if let Some(ref current_source_file) = current_source_file {
+                            if current_source_file.starts_with("node_modules") {
+                                // dependency; skip for now.
+                            } else if current_source_file.is_absolute() {
+                                // not sure what an absolute file is here, but it's not a project file
+                            } else {
+                                debug!(
+                                    "test {:?} hit in-project file {}",
+                                    test_case.test_identifier,
+                                    current_source_file.display()
+                                );
+                                coverage_data.add_file_to_test(FileCoverage {
+                                    file_name: current_source_file.clone(),
+                                    test_identifier: test_case.test_identifier.clone(),
+                                });
+                            }
+                        }
+                    }
+
+                    current_source_file_is_hit = true;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    // fn process_lcov_file(lcov_path: &Path, file_to_test_map: &mut HashMap<String, Vec<String>>) {
+    //     // let test_name = lcov_path
+    //     //     .file_stem()
+    //     //     .and_then(|stem| stem.to_str())
+    //     //     .expect("Failed to extract test name")
+    //     //     .to_string();
+    // }
 }
 
 impl TestPlatform for JavascriptMochaTestPlatform {
@@ -353,20 +412,20 @@ impl TestPlatform for JavascriptMochaTestPlatform {
             ])
             .current_dir(project_dir)
             .output()
-            .instrument(info_span!("npm run test -- --dry-run",
+            .instrument(info_span!("npm run test -- mocha --dry-run --reporter=json",
                 subcommand = true,
                 subcommand_binary = ?"npm",
-                subcommand_args = ?["run", "test", "--", "--dry-run", "--reporter=json"],
+                subcommand_args = ?["run", "test", "--", "mocha", "--dry-run", "--reporter=json"],
             ))
             .await
             .map_err(|e| SubcommandErrors::UnableToStart {
-                command: "npm run test -- --dry-run".to_string(),
+                command: "npm run test -- mocha --dry-run --reporter=json".to_string(),
                 error: e,
             })?;
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
-                command: "npm run test -- --dry-run".to_string(),
+                command: "npm run test -- mocha --dry-run --reporter=json".to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }

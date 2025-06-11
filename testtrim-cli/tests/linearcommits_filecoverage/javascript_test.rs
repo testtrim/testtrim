@@ -77,121 +77,122 @@ async fn add_new_test() -> Result<()> {
     Ok(())
 }
 
-// #[tokio::test]
-// async fn modify_single_file() -> Result<()> {
-//     let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
-//         setup_test::<JavascriptMochaTestPlatform>("javascript-coverage-specimen").await?;
+#[tokio::test]
+async fn modify_single_file() -> Result<()> {
+    let (_tmp_dir, _tmp_dir_cwd, _mutex, coverage_db) =
+        setup_test::<JavascriptMochaTestPlatform>("javascript-coverage-specimen").await?;
+    npm_install()?;
 
-//     let test_commits = vec![
-//         CommitTestData {
-//             test_commit: "check-2",
-//             all_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "sequences fibonacci should calculate accurately",
-//             ],
-//             relevant_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "sequences fibonacci should calculate accurately",
-//             ],
-//             expected_failing_test_cases: vec![],
-//         },
-//         CommitTestData {
-//             test_commit: "check-3",
-//             all_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//             ],
-//             relevant_test_cases: vec![
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//             ],
-//             expected_failing_test_cases: vec![],
-//         },
-//         CommitTestData {
-//             test_commit: "check-4",
-//             all_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
-//             ],
-//             relevant_test_cases: vec![
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
-//             ],
-//             expected_failing_test_cases: vec![],
-//         },
-//         CommitTestData {
-//             test_commit: "check-5",
-//             all_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
-//             ],
-//             relevant_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
-//             ],
-//             expected_failing_test_cases: vec![],
-//         },
-//         CommitTestData {
-//             test_commit: "check-6",
-//             all_test_cases: vec![
-//                 "basic ops add should add two numbers",
-//                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
-//                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
-//             ],
-//             relevant_test_cases: vec![
-//                 "sequences fibonacci should calculate accurately",
-//                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
-//             ],
-//             expected_failing_test_cases: vec![],
-//         },
-//     ];
+    let test_commits = vec![
+        CommitTestData {
+            test_commit: "check-2",
+            all_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "sequences fibonacci should calculate accurately",
+            ],
+            relevant_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "sequences fibonacci should calculate accurately",
+            ],
+            expected_failing_test_cases: vec![],
+        },
+        CommitTestData {
+            test_commit: "check-3",
+            all_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+            ],
+            relevant_test_cases: vec![
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+            ],
+            expected_failing_test_cases: vec![],
+        },
+        CommitTestData {
+            test_commit: "check-4",
+            all_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+                "sequences factorial should calculate with memo function",
+            ],
+            relevant_test_cases: vec![
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+                "sequences factorial should calculate with memo function",
+            ],
+            expected_failing_test_cases: vec![],
+        },
+        CommitTestData {
+            test_commit: "check-5",
+            all_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "basic ops power should calculate power correctly",
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+                "sequences factorial should calculate with memo function",
+            ],
+            relevant_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "basic ops power should calculate power correctly",
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+                "sequences factorial should calculate with memo function",
+            ],
+            expected_failing_test_cases: vec![],
+        },
+        CommitTestData {
+            test_commit: "check-6",
+            all_test_cases: vec![
+                "basic ops add should add two numbers",
+                "basic ops sub should subtract two numbers",
+                "basic ops mul should multiply two numbers",
+                "basic ops div should divide two numbers",
+                "basic ops power should calculate power correctly",
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+                "sequences factorial should calculate with memo function",
+            ],
+            relevant_test_cases: vec![
+                "sequences fibonacci should calculate accurately",
+                "sequences factorial should calculate accurately",
+                "sequences factorial should calculate with memo function",
+            ],
+            expected_failing_test_cases: vec![],
+        },
+    ];
 
-//     let perf_storage = Arc::new(PerformanceStorage::new());
-//     for commit_test_data in test_commits {
-//         execute_test::<JavascriptMochaTestPlatform>(&commit_test_data, &coverage_db)
-//             .with_subscriber(
-//                 Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
-//             )
-//             .await?;
-//     }
-//     assert_performance_tracing(perf_storage.interpret_run_test_timing());
+    let perf_storage = Arc::new(PerformanceStorage::new());
+    for commit_test_data in test_commits {
+        execute_test::<JavascriptMochaTestPlatform>(&commit_test_data, &coverage_db)
+            .with_subscriber(
+                Registry::default().with(PerformanceStoringLayer::new(perf_storage.clone())),
+            )
+            .await?;
+    }
+    assert_performance_tracing(perf_storage.interpret_run_test_timing());
 
-//     Ok(())
-// }
+    Ok(())
+}
 
 // #[tokio::test]
 // async fn remove_test() -> Result<()> {
@@ -204,22 +205,22 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
+//                 "sequences factorial should calculate with memo function",
 //             ],
 //             relevant_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences factorial should calculate accurately",
-//                 "sequences::tests::test_fibonacci_memo",
+//                 "sequences factorial should calculate with memo function",
 //             ],
 //             expected_failing_test_cases: vec![],
 //         },
@@ -228,9 +229,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences factorial should calculate accurately",
 //             ],
@@ -266,9 +267,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences factorial should calculate accurately",
@@ -276,9 +277,9 @@ async fn add_new_test() -> Result<()> {
 //             relevant_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences factorial should calculate accurately",
@@ -290,9 +291,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences factorial should calculate accurately",
@@ -326,9 +327,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -337,9 +338,9 @@ async fn add_new_test() -> Result<()> {
 //             relevant_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -352,9 +353,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -389,9 +390,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -401,9 +402,9 @@ async fn add_new_test() -> Result<()> {
 //             relevant_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -417,9 +418,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -460,9 +461,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -476,9 +477,9 @@ async fn add_new_test() -> Result<()> {
 //             relevant_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -496,9 +497,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -548,9 +549,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -564,9 +565,9 @@ async fn add_new_test() -> Result<()> {
 //             relevant_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -584,9 +585,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
@@ -606,9 +607,9 @@ async fn add_new_test() -> Result<()> {
 //             all_test_cases: vec![
 //                 "basic ops add should add two numbers",
 //                 "basic ops sub should subtract two numbers",
-//                 "basic ops mul should mul two numbers",
+//                 "basic ops mul should multiply two numbers",
 //                 "basic ops div should divide two numbers",
-//                 "basic_ops::tests::test_power",
+//                 "basic ops power should calculate power correctly",
 //                 "basic_ops::tests::test_add_decimal",
 //                 "sequences fibonacci should calculate accurately",
 //                 "sequences::tests::test_fibonacci_sequence",
