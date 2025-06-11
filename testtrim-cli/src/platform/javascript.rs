@@ -223,13 +223,13 @@ impl JavascriptMochaTestPlatform {
     async fn run_test(
         project_dir: &Path,
         test_case: &JavascriptMochaConcreteTestIdentifier,
-        _tmp_path: &Path,
     ) -> Result<
         CommitCoverageData<JavascriptMochaTestIdentifier, JavascriptCoverageIdentifier>,
         RunTestError,
     > {
         trace!("preparing for test case {test_case:?}");
 
+        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
         let mut coverage_data = CommitCoverageData::new();
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
@@ -238,8 +238,20 @@ impl JavascriptMochaTestPlatform {
             format!("^{}$", regex::escape(&test_case.test_identifier.full_title));
         let args = [
             // FIXME: this is awkward... merging together &str and PathBuf... must be a better way
+
+            // npm options:
             AsRef::<OsStr>::as_ref("test"),
             AsRef::<OsStr>::as_ref("--"),
+            // nyc options:
+            AsRef::<OsStr>::as_ref("--reporter=lcovonly"),
+            AsRef::<OsStr>::as_ref("--report-dir"),
+            AsRef::<OsStr>::as_ref(tmp_dir.path()),
+            // Instrument node_modules files so that we can track dependency usage.
+            AsRef::<OsStr>::as_ref("--exclude-node-modules=false"),
+            // Override the default --exclude which would exclude test files.
+            AsRef::<OsStr>::as_ref("--exclude=\"\""),
+            // mocha options...
+            AsRef::<OsStr>::as_ref("mocha"),
             AsRef::<OsStr>::as_ref("--jobs=1"), // probably not necessary since we're running one test?  But just in-case `--grep` matches more than one...
             AsRef::<OsStr>::as_ref("--grep"),
             AsRef::<OsStr>::as_ref(&full_title_regex),
@@ -331,6 +343,7 @@ impl TestPlatform for JavascriptMochaTestPlatform {
                 "run",
                 "test",
                 "--",
+                "mocha",
                 "--dry-run",
                 "--reporter=json",
                 &format!(
@@ -383,6 +396,7 @@ impl TestPlatform for JavascriptMochaTestPlatform {
             }
         }
 
+        debug!("discovered tests: {test_cases:?}");
         Ok(JavascriptMochaTestDiscovery {
             all_test_cases: test_cases,
         })
@@ -423,14 +437,11 @@ impl TestPlatform for JavascriptMochaTestPlatform {
         I: IntoIterator<Item = &'a JavascriptMochaConcreteTestIdentifier>,
         JavascriptMochaConcreteTestIdentifier: 'a,
     {
-        let tmp_dir = tempfile::Builder::new().prefix("testtrim").tempdir()?;
-
         let mut futures = vec![];
         for test_case in test_cases {
-            let tmp_path = PathBuf::from(tmp_dir.path());
             let tc = test_case.clone();
             futures.push(async move {
-                JavascriptMochaTestPlatform::run_test(project_dir, &tc, &tmp_path)
+                JavascriptMochaTestPlatform::run_test(project_dir, &tc)
                     .instrument(info_span!("npm run test",
                         ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
                         test_case = %tc.test_identifier(),
