@@ -2788,9 +2788,9 @@ dependencies = [
 
 [[package]]
 name = "serde-map-to-array"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34370bcdc1f60827e76c2407e302f8477bf0233e08d33a11de5994b48d545f03"
+checksum = "804bf2adf3c9806fe139a2eb9ffbb2869d916aca8d5ef4078e126b7ec67aeafe"
 dependencies = [
  "serde",
  "serde_json",
