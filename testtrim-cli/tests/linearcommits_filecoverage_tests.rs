@@ -45,8 +45,8 @@ pub fn git_clone(repo: &str) -> Result<()> {
     // the required auth.
     let auth_token = env::var("RUST_COVERAGE_SPECIMEN_PAT").ok();
     let repo_url = match auth_token {
-        Some(token) => format!("https://:{}@codeberg.org/testtrim/{}.git", token, repo,),
-        None => format!("git@codeberg.org:testtrim/{}.git", repo),
+        Some(token) => format!("https://:{token}@codeberg.org/testtrim/{repo}.git"),
+        None => format!("git@codeberg.org:testtrim/{repo}.git"),
     };
 
     let output = Command::new("git")

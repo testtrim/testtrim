@@ -364,7 +364,7 @@ fn access_network_multithread() -> Result<(), std::io::Error> {
             }
         }
         if !success {
-            panic!("no answers for DNS? {:?}", message);
+            panic!("no answers for DNS? {message:?}");
         }
 
         break;

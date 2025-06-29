@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// #![feature(let_chains)]
 // #![feature(once_cell_try)]
 // #![feature(path_add_extension)]
 #![warn(clippy::pedantic)]

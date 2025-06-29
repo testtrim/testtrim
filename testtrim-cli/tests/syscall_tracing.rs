@@ -46,15 +46,12 @@ fn get_test_binary() -> PathBuf {
 
 async fn run_test_binary(trace_command: &SysTraceCommandDispatch, arg: &str) -> Result<Trace> {
     let tmp_dir = tempfile::Builder::new().prefix("testtrim-test").tempdir()?;
-    let trace_file = tmp_dir.path().join(format!("test_{}.trace", arg));
+    let trace_file = tmp_dir.path().join(format!("test_{arg}.trace"));
     let mut cmd = Command::new(get_test_binary());
     cmd.arg(arg);
     let cwd = env::current_dir()?;
     let repo_root = cwd.parent().unwrap(); // Run app in `testtrim` root for consistent path access
-    println!(
-        "will run testtrim-syscall-test-app in the working directory: {:?}",
-        repo_root
-    );
+    println!("will run testtrim-syscall-test-app in the working directory: {repo_root:?}");
     cmd.current_dir(repo_root);
     let (output, trace) = trace_command.trace_command(cmd, &trace_file).await?;
     if !output.status.success() {
