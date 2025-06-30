@@ -90,7 +90,7 @@ These results are also great, but suffer from some of the same reasons listed ab
 testtrim supports a small number of test project types in different programming languages and runtimes, but not all of them have the same features and capabilities.
 
 | Feature | Rust | Go | .NET (C#, etc.) | JavaScript |
-|---|:---:|:---:|:---:|
+|---|:---:|:---:|:---:|:---:|
 | File-based coverage tracking<br>(ie. changes that will affect tests are tracked on a file-by-file basis;<br>the least granular but simplest approach) | ✅ | ✅ | ✅ | ✅ |
 | Function-based coverage tracking<br>(Only theorized, not implemented at all yet) | ❌ | ❌ | ❌ | ❌ |
 | External dependency change tracking | ✅ | ✅ | ❌ | ❌ |
