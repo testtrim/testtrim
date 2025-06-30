@@ -79,7 +79,16 @@
               # tools in place that are relevant to the project.
               dotnet-sdk_8  # for dotnet-coverage-specimen
               go_1_23 # for go-coverage-specimen
-              nodejs_22 # for javascript-coverage-specimen
+              (nodejs_24.overrideAttrs (old: { # for javascript-coverage-specimen
+                patches = (old.patches or []) ++ [
+                  # Fix for flaky test -- https://github.com/NixOS/nixpkgs/pull/420937
+                  # TODO: remove when included in a release
+                  (pkgs.fetchpatch2 {
+                    url = "https://github.com/nodejs/node/commit/cd685fe3b6b18d2a1433f2635470513896faebe6.patch?full_index=1";
+                    hash = "sha256-KA7WBFnLXCKx+QVDGxFixsbj3Y7uJkAKEUTeLShI1Xo=";
+                  })
+                ];
+              }))
             ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
