@@ -21,6 +21,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use crate::cmd::ui::UiStage;
 use crate::coverage::{Tag, create_db_infallible};
 use crate::network::compute_tests_from_network_accesses;
+use crate::platform::javascript::JavascriptMochaTestPlatform;
 use crate::repo_config::get_repo_config;
 use crate::timing_tracer::{PerformanceStorage, PerformanceStoringLayer};
 use crate::{
@@ -69,6 +70,14 @@ pub async fn cli<Logger: Log + 'static>(
         }
         TestProjectType::Golang => {
             specific_cli::<_, _, _, _, _, GolangTestPlatform>(
+                logger,
+                common_opts,
+                target_parameters,
+            )
+            .await
+        }
+        TestProjectType::JavascriptMocha => {
+            specific_cli::<_, _, _, _, _, JavascriptMochaTestPlatform>(
                 logger,
                 common_opts,
                 target_parameters,

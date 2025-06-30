@@ -16,7 +16,10 @@ use std::{
 
 use crate::{
     coverage::Tag,
-    platform::{dotnet::DotnetTestPlatform, golang::GolangTestPlatform, rust::RustTestPlatform},
+    platform::{
+        dotnet::DotnetTestPlatform, golang::GolangTestPlatform,
+        javascript::JavascriptMochaTestPlatform, rust::RustTestPlatform,
+    },
     server::{self},
 };
 
@@ -146,6 +149,9 @@ pub enum TestProjectType {
 
     /// Operate on Go language tests; eg. using `go test`
     Golang,
+
+    /// Operate on JavaScript tests using the mocha test framework for discovery and execution
+    JavascriptMocha,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -264,6 +270,8 @@ pub fn autodetect_test_project_type(project_dir: &Path) -> TestProjectType {
         TestProjectType::Golang
     } else if DotnetTestPlatform::autodetect(project_dir) {
         TestProjectType::Dotnet
+    } else if JavascriptMochaTestPlatform::autodetect(project_dir) {
+        TestProjectType::JavascriptMocha
     } else {
         panic!("Autodetect test project type failed.");
     }

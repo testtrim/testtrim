@@ -89,14 +89,14 @@ These results are also great, but suffer from some of the same reasons listed ab
 
 testtrim supports a small number of test project types in different programming languages and runtimes, but not all of them have the same features and capabilities.
 
-| Feature | Rust | Go | .NET (C#, etc.) |
+| Feature | Rust | Go | .NET (C#, etc.) | JavaScript |
 |---|:---:|:---:|:---:|
-| File-based coverage tracking<br>(ie. changes that will affect tests are tracked on a file-by-file basis;<br>the least granular but simplest approach) | ✅ | ✅ | ✅ |
-| Function-based coverage tracking<br>(Only theorized, not implemented at all yet) | ❌ | ❌ | ❌ |
-| External dependency change tracking | ✅ | ✅ | ❌ |
-| syscall tracking for file & network tracking | ✅ | ✅ | ❌ |
-| Embedded file tracking (ie. if a file embeds another file, changes to<br>either will trigger related tests) | ✅ | ✅ | ❌ |
-| Performance | 👍 | OK | Mega-👎 |
+| File-based coverage tracking<br>(ie. changes that will affect tests are tracked on a file-by-file basis;<br>the least granular but simplest approach) | ✅ | ✅ | ✅ | ✅ |
+| Function-based coverage tracking<br>(Only theorized, not implemented at all yet) | ❌ | ❌ | ❌ | ❌ |
+| External dependency change tracking | ✅ | ✅ | ❌ | ❌ |
+| syscall tracking for file & network tracking | ✅ | ✅ | ❌ | ❌ |
+| Embedded file tracking (ie. if a file embeds another file, changes to<br>either will trigger related tests) | ✅ | ✅ | ❌ | ❌ |
+| Performance | 👍 | OK | Mega-👎 | OK |
 
 # Coverage Database
 
@@ -134,6 +134,12 @@ Significant problems that are known to exist within the scope described above, a
     - Go does not instrument test files (`*_test.go`) when tests are executed, preventing testtrim from identifying what codepaths are executed in those files for each test.  As a substitute, testtrim makes the assumption that changing such a file requires rerunning all the tests defined in this file.  This is a reasonable approximation, but tests may reference each other or common utility functions defined in other `*_test.go` files and such dependencies cannot be identified at this time.
     - testrim can be fooled when [`const` and package-level `var` values are changed](https://codeberg.org/testtrim/testtrim/issues/136).  The codepaths to initialize these values are always invoked regardless of whether they're accessed or not, and so testtrim can't tell the difference between initialization and access.
     - The current Go implementation requires building test binaries into temp storage space and then executing them, which will likely be incompatible with `noexec` tmp spaces.
+- **JavaScript**:
+    - The project under test must use a specific supported combination of tools:
+        - the `npm` package manager must be used (not `pnpm` or `yarn`); other tooling is possible in the future but not currently implemented
+        - `npm test` must run `nyc`
+        - the tests must be implemented with the `mocha` test platform; it may be possible to add support for more tooling, but a hard requirement of the test runner is that it supports a "dry run" mode to discover the available tests in a test suite which precludes the use of some more popular testing tools like `jest` at the moment
+    - JavaScript support for external dependency tracking and syscall tracing is planned, but not currently implemented.
 - testtrim isn't published as a released tool and must be checked out and built from source.
     - exception: testtrim has an OCI/Docker container published intended as a Remote API server, the container is `codeberg.org/testtrim/server:latest`
 - Using the [Network Configuration](#network-configuration) feature is often necessary to reduce superfluous test re-execution; however it's capabilities in matching hostnames for connections is limited by current DNS interpretation limitations such as [inaccurate multithreading support](https://codeberg.org/testtrim/testtrim/issues/217).
@@ -144,7 +150,8 @@ Unknowns within the scope described above, which should be considered with skept
 
 - **Rust**:
     - testtrim hasn't been [tested with macros](https://codeberg.org/testtrim/testtrim/issues/40) to ensure that changes that touch them are appropriately tested.  It's probably fine though.
-
+- **JavaScript**:
+    - Modifications to exports from a file that are not functions, such as constants, will likely fool testtrim into believing that no test-relevant changes have been made.
 
 # How to use?
 

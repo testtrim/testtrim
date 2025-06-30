@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{Result, anyhow};
-use log::info;
+use log::{debug, info};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
@@ -22,6 +22,7 @@ use crate::{CWD_MUTEX, git_checkout, git_clone};
 
 mod dotnet_test;
 mod golang_test;
+mod javascript_test;
 mod rust_test;
 
 struct CommitTestData<'a> {
@@ -83,6 +84,11 @@ async fn execute_test<TP: TestPlatform>(
     )
     .await?
     .target_test_cases;
+    debug!(
+        "expected all_test_cases: {:?}",
+        commit_test_data.all_test_cases
+    );
+    debug!("calculated actual all_test_cases: {all_test_cases:?}");
     assert_eq!(
         all_test_cases.len(),
         commit_test_data.all_test_cases.len(),
@@ -111,6 +117,11 @@ async fn execute_test<TP: TestPlatform>(
     )
     .await?
     .target_test_cases;
+    debug!(
+        "expected relevant_test_cases: {:?}",
+        commit_test_data.relevant_test_cases
+    );
+    debug!("calculated actual relevant_test_cases: {relevant_test_cases:?}");
     assert_eq!(
         relevant_test_cases.len(),
         commit_test_data.relevant_test_cases.len(),
@@ -135,7 +146,7 @@ async fn execute_test<TP: TestPlatform>(
         &project_dir,
         GetTestIdentifierMode::Relevant,
         &scm,
-        SourceMode::Automatic,
+        SourceMode::CleanCommit,
         0,
         tags,
         coverage_db,
