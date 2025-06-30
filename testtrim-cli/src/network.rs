@@ -458,13 +458,13 @@ fn analyze_dns(
             continue;
         };
 
-        // Experimentally the largest attempted write I've seen is for 5 Answer responses (NotEnoughWriteSpace {
-        // tried_to_write: 5, available: 1, buffer_type: "Answer" }) -- this impl current allocates 10 of each response
-        // type to write into to see whether that's enough.
+        // Experimentally the largest attempted write I've seen is for 12 Answer responses (NotEnoughWriteSpace {
+        // tried_to_write: 12, available: 10, buffer_type: "Answer" }) -- this impl current allocates 12 of each
+        // response type to write into to see whether that's enough.
         let mut questions = [dns_protocol::Question::default(); 1];
-        let mut answers = [dns_protocol::ResourceRecord::default(); 10];
-        let mut authorities = [dns_protocol::ResourceRecord::default(); 10];
-        let mut additional = [dns_protocol::ResourceRecord::default(); 10];
+        let mut answers = [dns_protocol::ResourceRecord::default(); 12];
+        let mut authorities = [dns_protocol::ResourceRecord::default(); 12];
+        let mut additional = [dns_protocol::ResourceRecord::default(); 12];
         match dns_protocol::Message::read(
             buffer,
             &mut questions,
