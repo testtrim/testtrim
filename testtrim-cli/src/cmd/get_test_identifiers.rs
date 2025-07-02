@@ -178,8 +178,10 @@ pub struct TargetTestCases<
     TI: TestIdentifier,
     CTI: ConcreteTestIdentifier<TI>,
     CI: CoverageIdentifier,
+    TD: TestDiscovery<CTI, TI>,
 > {
     // Test discovery and analysis results
+    pub test_discovery: TD,
     pub all_test_cases: HashSet<CTI>,
     pub target_test_cases: HashMap<CTI, HashSet<TestReason<CI>>>,
     pub ancestor_commit: Option<Commit>,
@@ -205,7 +207,7 @@ pub async fn get_target_test_cases<Commit, MyScm, TI, CI, TD, CTI, TP>(
     tags: &[Tag],
     coverage_db: &impl CoverageDatabase,
     override_config: Option<&String>,
-) -> Result<TargetTestCases<Commit, TI, CTI, CI>>
+) -> Result<TargetTestCases<Commit, TI, CTI, CI, TD>>
 where
     Commit: ScmCommit,
     MyScm: Scm<Commit>,
@@ -229,6 +231,7 @@ where
             files_changed: None,
             external_dependencies_changed: None,
             test_identifier_type: PhantomData,
+            test_discovery,
         });
     }
 
@@ -275,6 +278,7 @@ where
             files_changed: None,
             external_dependencies_changed: None,
             test_identifier_type: PhantomData,
+            test_discovery,
         });
     };
 
@@ -336,6 +340,7 @@ where
         files_changed: Some(changed_files),
         external_dependencies_changed,
         test_identifier_type: PhantomData,
+        test_discovery,
     })
 }
 

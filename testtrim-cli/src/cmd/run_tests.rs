@@ -245,13 +245,18 @@ where
     )
     .await?;
 
-    let mut coverage_data = TP::run_tests(project_dir, test_cases.target_test_cases.keys(), jobs)
-        .instrument(info_span!(
-            "run_tests",
-            ui_stage = Into::<u64>::into(UiStage::RunTests),
-            test_count = test_cases.target_test_cases.keys().len(),
-        ))
-        .await?;
+    let mut coverage_data = TP::run_tests(
+        &test_cases.test_discovery,
+        project_dir,
+        test_cases.target_test_cases.keys(),
+        jobs,
+    )
+    .instrument(info_span!(
+        "run_tests",
+        ui_stage = Into::<u64>::into(UiStage::RunTests),
+        test_count = test_cases.target_test_cases.keys().len(),
+    ))
+    .await?;
     for tc in &test_cases.all_test_cases {
         coverage_data.add_existing_test(tc.test_identifier().clone());
     }

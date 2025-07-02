@@ -706,6 +706,7 @@ impl TestPlatform for DotnetTestPlatform {
     }
 
     async fn run_tests<'a, I>(
+        _test_discovery: &DotnetTestDiscovery,
         project_dir: &Path,
         test_cases: I,
         _jobs: u16, // FIXME: parallel tests are causing errors

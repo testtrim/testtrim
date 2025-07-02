@@ -100,6 +100,7 @@ pub trait TestPlatform {
     fn platform_tags() -> Vec<Tag>;
 
     async fn run_tests<'a, I>(
+        test_discovery: &Self::TD,
         project_dir: &Path,
         test_cases: I,
         jobs: u16,

@@ -1244,6 +1244,7 @@ impl TestPlatform for GolangTestPlatform {
     }
 
     async fn run_tests<'a, I>(
+        _test_discovery: &GolangTestDiscovery,
         project_dir: &Path,
         test_cases: I,
         jobs: u16,

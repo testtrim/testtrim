@@ -179,7 +179,7 @@ impl RustTestPlatform {
         }
     }
 
-    // fixme: don't take references, then we don't have to clone
+    // FIXME: don't take references, then we don't have to clone
     fn diff_cargo_lock(
         ancestor_lock: &Lockfile,
         current_lock: &Lockfile,
@@ -773,6 +773,7 @@ impl TestPlatform for RustTestPlatform {
 
     #[instrument(skip_all)]
     async fn run_tests<'a, I>(
+        _test_discovery: &RustTestDiscovery,
         project_dir: &Path,
         test_cases: I,
         jobs: u16,
