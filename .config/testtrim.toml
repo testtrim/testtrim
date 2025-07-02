@@ -91,6 +91,14 @@ apply = "ignore"
 [[network-policy.match]]
 host-port = ["proxy.golang.org", 443]
 
+# The JavaScript integration tests install 3rd party dependencies; these network accesses occur during that outreach,
+# and can be ignored for rerunning tests.
+[[network-policy]]
+name = "Javascript packages"
+apply = "ignore"
+[[network-policy.match]]
+host-port = ["registry.npmjs.org", 443]
+
 # Rust & Go integration tests validate that network access rerun their specimen tests by accessing google.com -- we
 # don't need to rerun the actual integration tests because of that.
 [[network-policy]]
