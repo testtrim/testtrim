@@ -18,6 +18,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fmt, fs};
+use tempfile::TempDir;
 use tokio::process::Command;
 use tracing::Instrument as _;
 use tracing::info_span;
@@ -116,6 +117,8 @@ impl ConcreteTestIdentifier<JavascriptMochaTestIdentifier>
 pub struct JavascriptMochaTestDiscovery {
     all_test_cases: HashSet<JavascriptMochaConcreteTestIdentifier>,
     coverage_data_baseline: HashMap<PathBuf, HashSet<FunctionName>>,
+    _cache_tmp_dir: TempDir, // keep the TempDir alive to support cache_dir's storage
+    cache_dir: PathBuf,
 }
 
 impl TestDiscovery<JavascriptMochaConcreteTestIdentifier, JavascriptMochaTestIdentifier>
@@ -259,6 +262,7 @@ impl JavascriptMochaTestPlatform {
         test_case: &JavascriptMochaConcreteTestIdentifier,
         external_dependencies: &HashMap<String, Package>,
         coverage_data_baseline: &HashMap<PathBuf, HashSet<FunctionName>>,
+        cache_dir: &PathBuf,
     ) -> Result<
         CommitCoverageData<JavascriptMochaTestIdentifier, JavascriptCoverageIdentifier>,
         RunTestError,
@@ -269,7 +273,6 @@ impl JavascriptMochaTestPlatform {
         let mut coverage_data = CommitCoverageData::new();
         coverage_data.add_executed_test(test_case.test_identifier.clone());
 
-        let cache_dir = tmp_dir.path().join("cache");
         let report_dir = tmp_dir.path().join("report");
         let nyc_temp_dir = tmp_dir.path().join("nyc_output");
 
@@ -287,7 +290,6 @@ impl JavascriptMochaTestPlatform {
             // If we don't use separate `--temp-dir` for each test run, then coverage data bleeds between tests.
             AsRef::<OsStr>::as_ref("--temp-dir"),
             AsRef::<OsStr>::as_ref(&nyc_temp_dir),
-            // FIXME: it might be OK for `--cache-dir` to be shared and, for basic tests, reduces runtime by about 1/3rd...
             AsRef::<OsStr>::as_ref("--cache-dir"),
             AsRef::<OsStr>::as_ref(&cache_dir),
             AsRef::<OsStr>::as_ref("--report-dir"),
@@ -780,6 +782,8 @@ impl TestPlatform for JavascriptMochaTestPlatform {
         Ok(JavascriptMochaTestDiscovery {
             all_test_cases: test_cases,
             coverage_data_baseline,
+            _cache_tmp_dir: tmp_dir,
+            cache_dir,
         })
     }
 
@@ -849,6 +853,7 @@ impl TestPlatform for JavascriptMochaTestPlatform {
                     &tc,
                     &ed,
                     &test_discovery.coverage_data_baseline,
+                    &test_discovery.cache_dir,
                 )
                 .instrument(info_span!("npm run test",
                     ui_stage = Into::<u64>::into(UiStage::RunSingleTest),
