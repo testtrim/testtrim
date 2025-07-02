@@ -81,9 +81,10 @@ pub enum JavascriptCoverageIdentifier {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub struct JavascriptPackageDependency {
-    pub version: String,
-    pub resolved: String,
-    pub integrity: String,
+    package_subpath: String, // eg. "node_modules/yargs-unparser/node_modules/camelcase"
+    version: String,
+    resolved: String,
+    integrity: String,
 }
 
 impl CoverageIdentifier for JavascriptCoverageIdentifier {}
@@ -507,8 +508,8 @@ impl JavascriptMochaTestPlatform {
         let mut success = false;
         while let Some(parent) = path.parent() {
             // FIXME: might make more sense to have HashMap<PathBuf, Package> to avoid conversions here
-            let package_name = parent.to_str().expect("referenced path in JS trace to str");
-            if let Some(package) = external_dependencies.get(package_name) {
+            let package_subpath = parent.to_str().expect("referenced path in JS trace to str");
+            if let Some(package) = external_dependencies.get(package_subpath) {
                 match package {
                     Package {
                         version: Some(version),
@@ -517,6 +518,7 @@ impl JavascriptMochaTestPlatform {
                         ..
                     } => {
                         let package_dependency = JavascriptPackageDependency {
+                            package_subpath: String::from(package_subpath),
                             version: version.clone(),
                             resolved: resolved.clone(),
                             integrity: integrity.clone(),
@@ -532,7 +534,7 @@ impl JavascriptMochaTestPlatform {
                     _ => {
                         // FIXME: not sure if this should be a warning or an error
                         warn!(
-                            "missing version, resolved, or integrity field in dependency {package_name:}: {package:?}"
+                            "missing version, resolved, or integrity field in dependency {package_subpath:}: {package:?}"
                         );
                     }
                 }
@@ -561,35 +563,31 @@ impl JavascriptMochaTestPlatform {
         Ok(package_json.packages)
     }
 
-    // FIXME: don't take references, then we don't have to clone
     fn diff_package_lock(
         ancestor_lock: &PackageLock,
         current_lock: &PackageLock,
     ) -> HashSet<JavascriptPackageDependency> {
         let mut relevant_changes = HashSet::new();
 
-        // FIXME: Keeping it simple here right now... if the ancestor lock file has a package in it, and the new lock
-        // file doesn't, then trigger any tests that referenced the ancestor's package.  This might have some risks
-        // because it's possible that the same package could exist in multiple locations in node_modules -- if a
-        // dependency is updated from v1 to v2 but v1 is still used by a transitive dependency, then we wouldn't trigger
-        // tests that used v1 as a direct dependency.  We might want to revisit this to track the dependencies based
-        // upon the node_modules path rather than just the version/resolved/integrity fields currently used.
+        // If the ancestor lock file has a package in it, and the new lock file doesn't, then trigger any tests that
+        // referenced the ancestor's package.
 
-        let mut current_lock_map: HashSet<Package> = HashSet::new();
-        for p in current_lock.packages.values() {
-            current_lock_map.insert(p.clone());
+        let mut current_lock_map: HashSet<(&String, &Package)> = HashSet::new();
+        for (package_subpath, package) in &current_lock.packages {
+            current_lock_map.insert((package_subpath, package));
         }
 
-        for p in ancestor_lock.packages.values() {
-            if !current_lock_map.contains(p) {
+        for (package_subpath, package) in &ancestor_lock.packages {
+            if !current_lock_map.contains(&(package_subpath, package)) {
                 if let Package {
                     version: Some(version),
                     resolved: Some(resolved),
                     integrity: Some(integrity),
                     ..
-                } = p
+                } = package
                 {
                     relevant_changes.insert(JavascriptPackageDependency {
+                        package_subpath: package_subpath.clone(),
                         version: version.clone(),
                         resolved: resolved.clone(),
                         integrity: integrity.clone(),
