@@ -8,7 +8,7 @@
 
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::PathBuf, str::FromStr};
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use ouroboros::self_referencing;
 
 use crate::sys_trace::trace::UnifiedSocketAddr;
@@ -154,19 +154,34 @@ impl FunctionExtractor {
             }
         };
 
+        let err_context = || {
+            format!(
+                "err while understanding args from trace: {}",
+                syscall.original_trace_output()
+            )
+        };
+
         let pid = i32::from_str(syscall.pid())?;
         Ok(match syscall.function() {
-            "close" => Some(Self::extract_close(syscall.arguments())?),
-            "chdir" => Some(Self::extract_chdir(syscall.arguments())?),
-            "openat" => Some(Self::extract_openat(syscall.arguments(), *retval)?),
-            "clone" => Some(Self::extract_clone(syscall.arguments(), *retval)?),
-            "clone3" => Some(Self::extract_clone3(syscall.arguments(), *retval)?),
+            "close" => Some(Self::extract_close(syscall.arguments()).with_context(err_context)?),
+            "chdir" => Some(Self::extract_chdir(syscall.arguments()).with_context(err_context)?),
+            "openat" => {
+                Some(Self::extract_openat(syscall.arguments(), *retval).with_context(err_context)?)
+            }
+            "clone" => {
+                Some(Self::extract_clone(syscall.arguments(), *retval).with_context(err_context)?)
+            }
+            "clone3" => {
+                Some(Self::extract_clone3(syscall.arguments(), *retval).with_context(err_context)?)
+            }
             "vfork" => Some(Self::extract_vfork(*retval)),
-            "sendto" => Self::extract_sendto(syscall)?, // may have None
-            "read" => Some(Self::extract_read(syscall)?),
-            "connect" => Self::extract_connect(syscall.arguments())?, // may have None
-            "recvfrom" => Some(Self::extract_recvfrom(syscall.arguments())?),
-            "execve" => Some(Self::extract_execve(syscall.arguments())?),
+            "sendto" => Self::extract_sendto(syscall).with_context(err_context)?, // may have None
+            "read" => Some(Self::extract_read(syscall).with_context(err_context)?),
+            "connect" => Self::extract_connect(syscall.arguments()).with_context(err_context)?, // may have None
+            "recvfrom" => {
+                Some(Self::extract_recvfrom(syscall.arguments()).with_context(err_context)?)
+            }
+            "execve" => Some(Self::extract_execve(syscall.arguments()).with_context(err_context)?),
             "tgkill" => Some(Self::extract_tgkill(syscall)?),
 
             // some syscalls we receive because we trace "%process" (for completeness if anything comes along to
@@ -222,8 +237,8 @@ impl FunctionExtractor {
 
     fn extract_clone<'a>(arguments: &[&Argument<'a>], retval: i32) -> Result<Function<'a>> {
         ensure!(
-            arguments.len() == 3,
-            "expected 3 arguments to clone, but arguments were: {:?}",
+            arguments.len() >= 2,
+            "expected >=2 arguments to clone, but arguments were: {:?}",
             arguments
         );
         let flags = Self::enum_text(arguments, 1)?;
@@ -572,6 +587,40 @@ mod tests {
                 function: Function::Clone {
                     child_pid: 337_653,
                     thread: false
+                }
+            })
+        );
+
+        // This syscall signature w/ 5 args is observed when running the same processes under docker-in-docker... not
+        // sure why.
+        let t = fe.extract(String::from(r"24820 clone(child_stack=0x7fe8200b5d30, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, parent_tid=[24886], tls=0x7fe8200b66c0, child_tidptr=0x7fe8200b6990) = 24886"))?;
+        assert_eq!(
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 24_820,
+                function: Function::Clone {
+                    child_pid: 24_886,
+                    thread: true
+                }
+            })
+        );
+
+        let mut fe = FunctionExtractor::new();
+        let t = fe.extract(
+                String::from(r"23811 clone(child_stack=0x7f1a0b915ff0, flags=CLONE_VM|CLONE_VFORK|SIGCHLD <unfinished ...>"),
+            )?;
+        assert_eq!(*t.borrow_function_trace(), None);
+
+        let t = fe.extract(String::from(
+            r"23811 <... clone resumed>)              = 23813",
+        ))?;
+        assert_eq!(
+            *t.borrow_function_trace(),
+            Some(FunctionTrace::Function {
+                pid: 23_811,
+                function: Function::Clone {
+                    child_pid: 23813,
+                    thread: false,
                 }
             })
         );

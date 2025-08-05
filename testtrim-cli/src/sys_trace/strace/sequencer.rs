@@ -47,7 +47,11 @@ impl TraceLineProcessExit {
     }
 }
 
-pub trait CompleteSyscall {
+pub trait DebugOriginalTraceOutput {
+    fn original_trace_output(&self) -> String;
+}
+
+pub trait CompleteSyscall: DebugOriginalTraceOutput {
     fn pid(&self) -> &str;
     fn function(&self) -> &str;
     fn arguments(&self) -> &Vec<&Argument<'_>>;
@@ -81,6 +85,12 @@ impl OnelineSyscall {
                 "OnelineSyscall must be constructored with a Complete SyscallSegment, but was: {complete:?}"
             ),
         })
+    }
+}
+
+impl DebugOriginalTraceOutput for OnelineSyscall {
+    fn original_trace_output(&self) -> String {
+        self.borrow_complete().borrow_input().clone()
     }
 }
 
@@ -204,6 +214,16 @@ impl TwolineSyscall {
                     ),
                 }
             },
+        )
+    }
+}
+
+impl DebugOriginalTraceOutput for TwolineSyscall {
+    fn original_trace_output(&self) -> String {
+        format!(
+            "line1: {:?}, line2: {:?}",
+            self.borrow_unfinished().borrow_input().clone(),
+            self.borrow_resumed().borrow_input().clone(),
         )
     }
 }

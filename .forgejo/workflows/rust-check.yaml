@@ -75,11 +75,11 @@ jobs:
           nix run $FLAKE#testtrim -- --version
           echo "TESTTRIM=$FLAKE#testtrim" >> $GITHUB_ENV
       - name: get-test-identifiers -- output tests that will be run, and why
-        run: nix develop .# --command nix run $TESTTRIM -- get-test-identifiers -v
+        run: nix develop .# --command nix run .#testtrim -- get-test-identifiers -v
       - name: build testtrim-syscall-test-app
         run: nix develop .# --command cargo build --bin testtrim-syscall-test-app
       - name: run-tests
-        run: nix develop .# --command nix run $TESTTRIM -- run-tests -v --source-mode=clean-commit
+        run: nix develop .# --command nix run .#testtrim -- run-tests -v --source-mode=clean-commit
         env:
           TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
           RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
