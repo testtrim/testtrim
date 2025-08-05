@@ -14,6 +14,8 @@ jobs:
     runs-on: debian-ci-latest
     container:
       options: --volume nix-forgejo-cache-public:/nix
+    env:
+      DOCKER_HOST: "tcp://forgejo-act-runner-docker-in-docker:2375"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - uses: https://github.com/cachix/install-nix-action@c134e4c9e34bac6cab09cf239815f9339aaaf84e # v31
@@ -23,17 +25,14 @@ jobs:
       - run: sed -i 's/github.com/codeberg.org/' /etc/nix/nix.conf
       - name: nix build docker
         run: nix build .#docker
-      # podman seems to not check remote hosts for blobs proactively, causing it to push upload existing layers if
-      # there's no local information that they might exist upstream (https://github.com/containers/podman/issues/17892)
-      # (maybe)?  This kinda sucks... so my thought to workaround it is: (a) load the new image; (b) pull "latest" from
-      # upstream; any blobs that are available locally won't be pulled but maybe we'll cache that they're remote; (c)
-      # push to remote; (d) update "latest" tag for next time.
-      - name: load podman container
-        run: gunzip < result | podman load
+      - name: load docker container
+        run: gunzip < result | docker load
+      - name: docker login
+        run: echo "${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }}" | docker login codeberg.org -u mfenniak --password-stdin
       - name: pull latest
-        run: podman pull --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:latest || true # ok to fail, expected if "latest" tag doesn't eixst
-      - name: push versioned podman container
+        run: docker pull --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:latest || true # ok to fail, expected if "latest" tag doesn't eixst
+      - name: push versioned docker container
         # GITHUB_REF_NAME should be the tag name (eg. v0.2.1), but the container is built without the leading v...
-        run: podman push --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:${GITHUB_REF_NAME#v}
-      - name: podman tag and push latest
-        run: podman tag codeberg.org/testtrim/server:${GITHUB_REF_NAME#v} codeberg.org/testtrim/server:latest && podman push --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:latest
+        run: docker push --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:${GITHUB_REF_NAME#v}
+      - name: docker tag and push latest
+        run: docker tag codeberg.org/testtrim/server:${GITHUB_REF_NAME#v} codeberg.org/testtrim/server:latest && docker push codeberg.org/testtrim/server:latest
