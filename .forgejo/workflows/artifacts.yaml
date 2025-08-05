@@ -29,10 +29,8 @@ jobs:
         run: gunzip < result | docker load
       - name: docker login
         run: echo "${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }}" | docker login codeberg.org -u mfenniak --password-stdin
-      - name: pull latest
-        run: docker pull --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:latest || true # ok to fail, expected if "latest" tag doesn't eixst
       - name: push versioned docker container
         # GITHUB_REF_NAME should be the tag name (eg. v0.2.1), but the container is built without the leading v...
-        run: docker push --creds=mfenniak:${{ secrets.TESTTRIM_PACKAGE_REGISTRY_PAT }} codeberg.org/testtrim/server:${GITHUB_REF_NAME#v}
+        run: docker push codeberg.org/testtrim/server:${GITHUB_REF_NAME#v}
       - name: docker tag and push latest
         run: docker tag codeberg.org/testtrim/server:${GITHUB_REF_NAME#v} codeberg.org/testtrim/server:latest && docker push codeberg.org/testtrim/server:latest
