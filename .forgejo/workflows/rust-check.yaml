@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 name: Rust Checks
+enable-email-notifications: true
 
 on:
   push:
