@@ -201,13 +201,13 @@ async fn test_access_network(trace_command: &SysTraceCommandDispatch) -> Result<
 
     assert!(trace.get_connect_sockets().iter().any(|s| match s.address {
         UnifiedSocketAddr::Inet(SocketAddr::V4(sock_addr)) =>
-            sock_addr.ip() == &Ipv4Addr::new(127, 0, 0, 1) && sock_addr.port() == 9999,
+            sock_addr.ip() == &Ipv4Addr::LOCALHOST && sock_addr.port() == 9999,
         _ => false,
     } && s.hostnames.contains("localhost")));
 
     assert!(trace.get_connect_sockets().iter().any(|s| match s.address {
         UnifiedSocketAddr::Inet(SocketAddr::V6(sock_addr)) =>
-            sock_addr.ip() == &Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1) && sock_addr.port() == 9999,
+            sock_addr.ip() == &Ipv6Addr::LOCALHOST && sock_addr.port() == 9999,
         _ => false,
     } && s.hostnames.contains("localhost")));
 

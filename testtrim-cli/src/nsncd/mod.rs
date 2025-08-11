@@ -11,69 +11,9 @@ use std::{
 
 use anyhow::{Result, anyhow, ensure};
 use nix::sys::socket::AddressFamily;
-#[cfg(test)]
-use protocol::PwResponseHeader;
 use protocol::{AiResponseHeader, Request, RequestType};
 
 mod protocol;
-
-#[cfg(test)]
-#[derive(Debug, PartialEq)]
-struct PwResponse {
-    header: PwResponseHeader,
-    name: CString,
-    passwd: CString,
-    gecos: CString,
-    dir: CString,
-    shell: CString,
-}
-
-// Don't really need this in testtrim right now, but it was the first packet I decoded for testing... will keep it
-// around just in case it might be needed in the future.  It is technically an external dependency that can change.
-#[cfg(test)]
-#[allow(clippy::cast_sign_loss)]
-fn read_response_getpwbyuid<T: io::Read>(reader: &mut T) -> Result<PwResponse> {
-    let mut buf: [u8; size_of::<PwResponseHeader>()] = [0; size_of::<PwResponseHeader>()];
-    reader.read_exact(&mut buf)?;
-    let header = PwResponseHeader::parse(&buf)?;
-
-    ensure!(header.pw_name_len >= 0, "pw_name_len cannot be negative");
-    let mut name_bytes = vec![0; header.pw_name_len as usize];
-    reader.read_exact(name_bytes.as_mut_slice())?;
-    let name = CString::from_vec_with_nul(name_bytes)?;
-
-    ensure!(
-        header.pw_passwd_len >= 0,
-        "pw_passwd_len cannot be negative"
-    );
-    let mut passwd_bytes = vec![0; header.pw_passwd_len as usize];
-    reader.read_exact(passwd_bytes.as_mut_slice())?;
-    let passwd = CString::from_vec_with_nul(passwd_bytes)?;
-
-    ensure!(header.pw_gecos_len >= 0, "pw_gecos_len cannot be negative");
-    let mut gecos_bytes = vec![0; header.pw_gecos_len as usize];
-    reader.read_exact(gecos_bytes.as_mut_slice())?;
-    let gecos = CString::from_vec_with_nul(gecos_bytes)?;
-
-    ensure!(header.pw_dir_len >= 0, "pw_dir_len cannot be negative");
-    let mut dir_bytes = vec![0; header.pw_dir_len as usize];
-    reader.read_exact(dir_bytes.as_mut_slice())?;
-    let dir = CString::from_vec_with_nul(dir_bytes)?;
-
-    ensure!(header.pw_shell_len >= 0, "pw_shell_len cannot be negative");
-    let mut shell_bytes = vec![0; header.pw_shell_len as usize];
-    reader.read_exact(shell_bytes.as_mut_slice())?;
-    let shell = CString::from_vec_with_nul(shell_bytes)?;
-
-    Ok(PwResponse {
-        header,
-        name,
-        passwd,
-        gecos,
-        dir,
-        shell,
-    })
-}
 
 #[derive(Debug, PartialEq)]
 struct AiResponse {
@@ -157,7 +97,7 @@ pub fn parse_nscd_interchange(
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        ffi::{CStr, CString},
+        ffi::CStr,
         net::IpAddr,
         str::FromStr as _,
     };
@@ -165,13 +105,11 @@ mod tests {
     use anyhow::Result;
 
     use crate::nsncd::{
-        AiResponse, PwResponse,
-        protocol::{AiResponseHeader, PwResponseHeader, RequestType},
+        AiResponse,
+        protocol::{AiResponseHeader, RequestType},
     };
 
-    use super::{
-        parse_nscd_interchange, protocol::Request, read_response_getai, read_response_getpwbyuid,
-    };
+    use super::{parse_nscd_interchange, protocol::Request, read_response_getai};
 
     #[test]
     fn test_request_packet_getfdhst() {
@@ -226,38 +164,6 @@ mod tests {
 
         let hostname = CStr::from_bytes_with_nul(packet.key)?.to_str()?;
         assert_eq!(hostname, "google.com");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_response_from_getpwbyuid() -> Result<()> {
-        // Captured from strace-curl-nscd.txt
-        let reader = b"\x02\x00\x00\x00\x01\x00\x00\x00\t\x00\x00\x00\x02\x00\x00\x00\xe8\x03\x00\x00d\x00\x00\x00\x10\x00\x00\x00\x0f\x00\x00\x00\x1f\x00\x00\x00mfenniak\x00x\x00Mathieu Fenniak\x00/home/mfenniak\x00/run/current-system/sw/bin/zsh\x00";
-
-        let mut slice = &reader[..];
-        let pwresponse = read_response_getpwbyuid(&mut slice)?;
-        assert_eq!(
-            pwresponse,
-            PwResponse {
-                header: PwResponseHeader {
-                    version: 2,
-                    found: 1,
-                    pw_name_len: 9,
-                    pw_passwd_len: 2,
-                    pw_uid: 1000,
-                    pw_gid: 100,
-                    pw_gecos_len: 16,
-                    pw_dir_len: 15,
-                    pw_shell_len: 31,
-                },
-                name: CString::new(b"mfenniak")?,
-                passwd: CString::new(b"x")?,
-                gecos: CString::new(b"Mathieu Fenniak")?,
-                dir: CString::new(b"/home/mfenniak")?,
-                shell: CString::new(b"/run/current-system/sw/bin/zsh")?,
-            }
-        );
 
         Ok(())
     }

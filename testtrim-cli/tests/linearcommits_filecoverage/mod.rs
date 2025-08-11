@@ -37,7 +37,7 @@ async fn setup_test<TP: TestPlatform>(
 ) -> Result<(
     TempDir,
     ChangeWorkingDirectory,
-    MutexGuard<i32>,
+    MutexGuard<'_, i32>,
     impl CoverageDatabase,
 )> {
     simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())?;

@@ -686,7 +686,7 @@ mod tests {
         };
         assert_eq!(
             address_ip6,
-            &Ipv6Net::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 128).unwrap()
+            &Ipv6Net::new(Ipv6Addr::LOCALHOST, 128).unwrap()
         );
 
         let PolicyMatch::AddressPort(address, port) = &policy.match_rules[3] else {
@@ -695,10 +695,7 @@ mod tests {
         let IpNet::V4(address_ip4) = address else {
             panic!("expected match_rules[3] to be Ipv4Net");
         };
-        assert_eq!(
-            address_ip4,
-            &Ipv4Net::new(Ipv4Addr::new(127, 0, 0, 1), 32).unwrap()
-        );
+        assert_eq!(address_ip4, &Ipv4Net::new(Ipv4Addr::LOCALHOST, 32).unwrap());
         assert_eq!(port, &8080);
 
         let PolicyMatch::AddressPortRange(address, port_range) = &policy.match_rules[4] else {
@@ -707,10 +704,7 @@ mod tests {
         let IpNet::V4(address_ip4) = address else {
             panic!("expected match_rules[4] to be Ipv4Net");
         };
-        assert_eq!(
-            address_ip4,
-            &Ipv4Net::new(Ipv4Addr::new(127, 0, 0, 1), 32).unwrap()
-        );
+        assert_eq!(address_ip4, &Ipv4Net::new(Ipv4Addr::LOCALHOST, 32).unwrap());
         assert_eq!(*port_range.start(), 8085);
         assert_eq!(*port_range.end(), 8086);
 
