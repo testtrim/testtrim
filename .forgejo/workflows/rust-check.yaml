@@ -30,7 +30,7 @@ jobs:
       RUST_BACKTRACE: "1"
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           # testtrim needs ancestor commits in order to identify changes relevant to running tests; `fetch-depth: 0`
           # would be the safest in order to ensure the "last commit we have coverage data" is available, but if it slows
