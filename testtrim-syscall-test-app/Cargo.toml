@@ -4,7 +4,7 @@
 
 [package]
 name = "testtrim-syscall-test-app"
-version = "0.14.4"
+version = "0.14.5"
 edition = "2024"
 
 [dependencies]
