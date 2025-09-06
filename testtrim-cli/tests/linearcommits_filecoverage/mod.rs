@@ -4,9 +4,12 @@
 
 use anyhow::{Result, anyhow};
 use log::{debug, info};
+use named_lock::NamedLock;
 use std::collections::HashSet;
+use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tempfile::TempDir;
 use testtrim::cmd::cli::{GetTestIdentifierMode, PlatformTaggingMode, SourceMode};
 use testtrim::cmd::get_test_identifiers::{self, AncestorSearchMode, get_target_test_cases};
@@ -18,7 +21,7 @@ use testtrim::scm::git::GitScm;
 use tokio::sync::MutexGuard;
 
 use crate::util::ChangeWorkingDirectory;
-use crate::{CWD_MUTEX, git_checkout, git_clone};
+use crate::{CWD_MUTEX, copy_dir_all, git_checkout, git_clone};
 
 mod dotnet_test;
 mod golang_test;
@@ -31,6 +34,12 @@ struct CommitTestData<'a> {
     relevant_test_cases: Vec<&'a str>,
     expected_failing_test_cases: Vec<&'a str>,
 }
+
+// This is an intra-process lock which is used when accessing the `.linearcommits` cache directory that contains our git
+// checkouts.  Whenever we're touching that cache we want to avoid two processes doing so simultaneously, that way we
+// don't pull out a partially cached copy, or try to write twice to the same cache, etc.
+static LINEARCOMMITS_CACHE: LazyLock<NamedLock> =
+    LazyLock::new(|| NamedLock::create("testtrim-linearcommits-cache").unwrap());
 
 async fn setup_test<TP: TestPlatform>(
     test_project: &str,
@@ -45,12 +54,24 @@ async fn setup_test<TP: TestPlatform>(
     let _cwd_mutex = CWD_MUTEX.lock().await;
 
     let tmp_dir = tempfile::Builder::new().prefix("testtrim-test").tempdir()?;
-    let _tmp_dir_cwd = ChangeWorkingDirectory::new(tmp_dir.path());
-    git_clone(test_project)?;
-    drop(_tmp_dir_cwd);
+    let cache_path = env::current_dir()?
+        .join(".linearcommits")
+        .join(test_project);
+    let project_path = tmp_dir.path().join(test_project); // FIXME: hack assumes folder name
+    {
+        let _cache_lock = LINEARCOMMITS_CACHE.lock();
+        if std::fs::exists(&cache_path)? {
+            copy_dir_all(&cache_path, &project_path)?;
+        } else {
+            let _tmp_dir_cwd = ChangeWorkingDirectory::new(tmp_dir.path());
+            git_clone(test_project)?;
+            copy_dir_all(&project_path, cache_path)?;
+            drop(_tmp_dir_cwd);
+        }
+    }
 
     // FIXME: remove the CWD here so that we can test the new project_dir capabilities
-    let _tmp_dir_cwd = ChangeWorkingDirectory::new(&tmp_dir.path().join(test_project)); // FIXME: hack assumes folder name
+    let _tmp_dir_cwd = ChangeWorkingDirectory::new(&project_path);
 
     let coverage_db = create_test_db()?;
     coverage_db.clear_project_data::<TP>(test_project).await?;
