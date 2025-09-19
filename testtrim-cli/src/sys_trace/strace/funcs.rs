@@ -209,8 +209,7 @@ impl FunctionExtractor {
         ensure!(
             // mode_t mode optional 4th
             (3..=4).contains(&arguments.len()),
-            "expected 3-4 argument to openat, but arguments were: {:?}",
-            arguments,
+            "expected 3-4 argument to openat, but arguments were: {arguments:?}",
         );
         let path = Self::path(arguments, 1)?;
         let path = match &arguments[0] {
@@ -228,8 +227,7 @@ impl FunctionExtractor {
     fn extract_chdir<'a>(arguments: &[&Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 1,
-            "expected 1 argument to chdir, but arguments were: {:?}",
-            arguments
+            "expected 1 argument to chdir, but arguments were: {arguments:?}",
         );
         let path = Self::path(arguments, 0)?;
         Ok(Function::Chdir { path })
@@ -238,8 +236,7 @@ impl FunctionExtractor {
     fn extract_clone<'a>(arguments: &[&Argument<'a>], retval: i32) -> Result<Function<'a>> {
         ensure!(
             arguments.len() >= 2,
-            "expected >=2 arguments to clone, but arguments were: {:?}",
-            arguments
+            "expected >=2 arguments to clone, but arguments were: {arguments:?}",
         );
         let flags = Self::enum_text(arguments, 1)?;
         Ok(Function::Clone {
@@ -251,8 +248,7 @@ impl FunctionExtractor {
     fn extract_clone3<'a>(arguments: &[&Argument<'a>], retval: i32) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 2,
-            "expected 2 arguments to clone3, but arguments were: {:?}",
-            arguments
+            "expected 2 arguments to clone3, but arguments were: {arguments:?}",
         );
         let flags = arguments
             .index(0)?
@@ -301,8 +297,7 @@ impl FunctionExtractor {
     fn extract_connect<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Option<Function<'a>>> {
         ensure!(
             arguments.len() == 3,
-            "expected 3 argument to connect, but arguments were: {:?}",
-            arguments
+            "expected 3 argument to connect, but arguments were: {arguments:?}",
         );
         let socket_addr = match &arguments[1] {
             Argument::Structure(v) => Self::interpret_socket_structure(v)?,
@@ -418,8 +413,7 @@ impl FunctionExtractor {
     fn extract_recvfrom<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 6,
-            "expected 6 argument to recvfrom, but arguments were: {:?}",
-            arguments
+            "expected 6 argument to recvfrom, but arguments were: {arguments:?}",
         );
         let data = Self::data(arguments, 1)?;
         let socket_fd = Self::numeric(arguments, 0)?;
@@ -429,8 +423,7 @@ impl FunctionExtractor {
     fn extract_execve<'a>(arguments: &'a [&'a Argument<'a>]) -> Result<Function<'a>> {
         ensure!(
             arguments.len() == 3,
-            "expected 3 argument to execve, but arguments were: {:?}",
-            arguments
+            "expected 3 argument to execve, but arguments were: {arguments:?}",
         );
         let path = Self::path(arguments, 0)?;
         Ok(Function::Execve { arg0: path })
