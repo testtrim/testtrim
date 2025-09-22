@@ -104,11 +104,11 @@ impl TestDiscovery<DotnetConcreteTestIdentifier, DotnetTestIdentifier> for Dotne
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-struct TargetFrameworkName(String);
+// #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+// struct TargetFrameworkName(String);
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-struct ProjectFile(PathBuf);
+// #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+// struct ProjectFile(PathBuf);
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub struct PackageName(pub String);
@@ -119,35 +119,35 @@ pub struct PackageVersion(pub String);
 // TODO: external dependency tracking
 // type SolutionDependencyMap = HashMap<PackageName, PackageVersion>;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct PackageLock {
-    version: i32,
-    dependencies: HashMap<TargetFrameworkName, TargetFrameworkDependencies>,
-}
+// #[derive(Debug, Serialize, Deserialize)]
+// struct PackageLock {
+//     version: i32,
+//     dependencies: HashMap<TargetFrameworkName, TargetFrameworkDependencies>,
+// }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct TargetFrameworkDependencies {
-    #[serde(flatten)]
-    dependencies: HashMap<PackageName, DependencyData>,
-}
+// #[derive(Debug, Serialize, Deserialize)]
+// struct TargetFrameworkDependencies {
+//     #[serde(flatten)]
+//     dependencies: HashMap<PackageName, DependencyData>,
+// }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-enum DependencyType {
-    Transitive,
-    Project,
-    Direct,
-}
+// #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+// enum DependencyType {
+//     Transitive,
+//     Project,
+//     Direct,
+// }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct DependencyData {
-    #[serde(rename = "type")]
-    dependency_type: DependencyType,
-    requested: Option<String>, // eg. "[17.11.1, )"
-    resolved: Option<String>,  // eg. "17.11.1"
-    #[serde(rename = "contentHash")]
-    content_hash: Option<String>, // eg. "U3Ty4BaGoEu+T2bwSko9tWqWUOU16WzSFkq6U8zve75oRBMSLTBdMAZrVNNz1Tq12aCdDom9fcOcM9QZaFHqFg=="
-    dependencies: Option<HashMap<String, String>>, // eg. "Microsoft.CodeCoverage": "17.11.1",
-}
+// #[derive(Debug, Serialize, Deserialize)]
+// struct DependencyData {
+//     #[serde(rename = "type")]
+//     dependency_type: DependencyType,
+//     requested: Option<String>, // eg. "[17.11.1, )"
+//     resolved: Option<String>,  // eg. "17.11.1"
+//     #[serde(rename = "contentHash")]
+//     content_hash: Option<String>, // eg. "U3Ty4BaGoEu+T2bwSko9tWqWUOU16WzSFkq6U8zve75oRBMSLTBdMAZrVNNz1Tq12aCdDom9fcOcM9QZaFHqFg=="
+//     dependencies: Option<HashMap<String, String>>, // eg. "Microsoft.CodeCoverage": "17.11.1",
+// }
 
 pub struct DotnetTestPlatform;
 
