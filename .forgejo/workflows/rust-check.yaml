@@ -20,7 +20,7 @@ jobs:
 
     services:
       pgsql:
-        image: postgres:18@sha256:67a7c384da54fc55a3b5ad38e9853b76003603d12732c90af368b31bb1f2517f
+        image: postgres:18@sha256:89d2f8737b5e602bec8daac0a4c3c9fde7bec1e306abeb538bbd704579f19efc
         env:
           POSTGRES_USER: testtrim
           POSTGRES_PASSWORD: testtrim
