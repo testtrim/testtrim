@@ -40,7 +40,7 @@ jobs:
             codeberg.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVIC02vnjFyL+I4RHfvIGNtOgJMe769VTF1VR4EB3ZB
             # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
             # codeberg.org:22 SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3
-      - uses: https://github.com/cachix/install-nix-action@a809471b5c7c913aa67bec8f459a11a0decc3fce # v31
+      - uses: https://github.com/cachix/install-nix-action@9280e7aca88deada44c930f1e2c78e21c3ae3edd # v31
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
