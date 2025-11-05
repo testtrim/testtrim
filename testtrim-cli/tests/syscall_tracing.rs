@@ -222,7 +222,7 @@ async fn test_access_network(trace_command: &SysTraceCommandDispatch) -> Result<
             .get_connect_sockets()
             .iter()
             .any(|s| match &s.address {
-                UnifiedSocketAddr::Unix(path) => *path == PathBuf::from("/tmp/test.sock"),
+                UnifiedSocketAddr::Unix(path) => path == &PathBuf::from("/tmp/test.sock"),
                 _ => false,
             })
     );
