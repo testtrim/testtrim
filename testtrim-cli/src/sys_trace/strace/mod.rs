@@ -437,7 +437,7 @@ impl STraceSysTraceCommand {
         new_cmd
             .env("__TESTTRIM_STRACE", receptionist_address)
             .arg("--follow-forks")
-            // %process will guarantee that we get all process lifecycle syscalls, which helps guarentee that the
+            // %process will guarantee that we get all process lifecycle syscalls, which helps guarantee that the
             // pid-filtering capability for sub-strace doesn't miss any subprocesses
             .arg("--trace=chdir,openat,clone,clone3,connect,sendto,close,read,recvfrom,%process")
             // 512 bytes should be sufficient for most DNS.  testtrim's integration tests are showing we're exceeding
@@ -619,7 +619,7 @@ impl STraceSysTraceCommand {
                 drop(stdout_write_fd); // because dup2'd into stdout already
                 drop(stderr_write_fd); // because dup2'd into stderr already
 
-                // Execute the target commend, replacing this child process.
+                // Execute the target command, replacing this child process.
                 let exec_err = orig_cmd.into_std().exec();
                 // We won't reach here.
                 panic!("error in exec: {exec_err:?}");

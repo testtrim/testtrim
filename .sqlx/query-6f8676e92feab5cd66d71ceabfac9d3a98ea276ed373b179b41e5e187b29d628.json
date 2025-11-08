@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO project (id, name)\n                VALUES (uuid_generate_v4(), $1)\n                ON CONFLICT (name)\n                    -- 'do nothing' but returning the record's id rather than omitting row\n                    DO UPDATE SET name = EXCLUDED.name\n                RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6f8676e92feab5cd66d71ceabfac9d3a98ea276ed373b179b41e5e187b29d628"
+}

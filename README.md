@@ -31,7 +31,7 @@ This is the core concept behind [testtrim](https://codeberg.org/testtrim/testtri
 
 ### Local Files
 
-Some tests might access data files while they're running, in order to have a file that contains the expected input or output from a test.  In order to accomodate this, testtrim runs all the tests with syscall tracing (only supported on Linux presently) in order to detect which local files are needed by which tests.  In the future if those local files change, then the tests that read then will be targeted for re-execution.
+Some tests might access data files while they're running, in order to have a file that contains the expected input or output from a test.  In order to accommodate this, testtrim runs all the tests with syscall tracing (only supported on Linux presently) in order to detect which local files are needed by which tests.  In the future if those local files change, then the tests that read then will be targeted for re-execution.
 
 Some tests might embed local files during their compile; in Rust, using the `include_str!`, `include_bytes!`, or `include!` compiler macros.  testtrim inspects the code to find those include macros, and in the future if those local files are modified, the appropriate tests are targeted for re-execution.
 
@@ -316,7 +316,7 @@ One or more network-policy tables can exist in the file, which must contain:
     - `address-port` -- an array of an address and a port, eg. `["127.0.0.1/32", 8080]`
     - `address-port-range` -- an address of an address and port range, eg. `["127.0.0.1/32", "8085-8086"]`
     - `host` -- a hostname, eg. `"localhost"`, on any network port.
-        - **Note**: hostname matching internally functions by monitoring hostname resolution while the process is running.  This functions by monitoring traffic to `/var/run/nscd/socket` and DNS servers (on port `:53`) and decoding it.  This capability is therefore only available when syscall tracing is supported, which is currenty limited to Linux systems with `strace` available.
+        - **Note**: hostname matching internally functions by monitoring hostname resolution while the process is running.  This functions by monitoring traffic to `/var/run/nscd/socket` and DNS servers (on port `:53`) and decoding it.  This capability is therefore only available when syscall tracing is supported, which is currently limited to Linux systems with `strace` available.
         - **Note**: hostname matching can have unexpected outcomes; if a two hostnames resolve to the same IP address, then any network traffic to that IP address will match network policies from either hostname as testtrim cannot identify which hostname was used for that network traffic.
     - `host-port` -- an array of a hostname and a port, eg. `["127.0.0.1/32", 8080]`; notes for `host` still apply
     - `host-port-range` -- an address of a hostname and port range, eg. `["127.0.0.1/32", "8085-8086"]`; notes for `host` still apply

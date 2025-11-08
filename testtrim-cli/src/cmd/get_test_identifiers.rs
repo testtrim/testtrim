@@ -349,10 +349,10 @@ struct AncestorCommit<Commit: ScmCommit, TP: TestPlatform> {
     coverage_data: FullCoverageData<TP::TI, TP::CI>,
 }
 
-/// Identify a useable commit which has stored coverage data and can be used as a basis for determining which tests to
+/// Identify a usable commit which has stored coverage data and can be used as a basis for determining which tests to
 /// run in this project.
 ///
-/// A useable commit is one that doesn't come from a branch, as coverage data could change during a merge making any
+/// A usable commit is one that doesn't come from a branch, as coverage data could change during a merge making any
 /// branch commits an incorrect source of data.  Commits are searched starting at HEAD and going towards their ancestors
 /// checking for any coverage data.  If a merge commit is found, then the search skips to the best common ancestor to
 /// both parents of the merge commit, and continues from there.

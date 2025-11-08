@@ -21,7 +21,7 @@ use crate::{network::NetworkDependency, platform::TestIdentifier};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Note: Serialize & Deserialize are present because of the mishmash between internal data structures and web API. Since
 // TI will likely serialize as a struct, everything HashMap<TI> will need to be serialized as an array rather than a map
-// for JSON compatbility.
+// for JSON compatibility.
 pub struct CommitCoverageData<TI: TestIdentifier, CI: CoverageIdentifier> {
     all_existing_test_set: HashSet<TI>,
     executed_test_set: HashSet<TI>,

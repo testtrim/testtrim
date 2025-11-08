@@ -22,7 +22,7 @@ pub enum SubcommandErrors {
     },
 
     #[error(
-        "test sub-command '{command:?}' had unparseable output; error: {error:?} output: {output:?})"
+        "test sub-command '{command:?}' had unparsable output; error: {error:?} output: {output:?})"
     )]
     SubcommandOutputParseFailed {
         command: String,

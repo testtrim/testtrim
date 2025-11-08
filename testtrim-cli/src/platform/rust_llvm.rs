@@ -45,7 +45,7 @@ impl Default for CoverageLibrary {
 // counts at this time.
 //
 // As a downside, this implementation is nowhere close to being fine-grained -- if we wanted to get branch-level detail
-// we'd need to reimplement (or adapt) the expression-based suppoed that CoverageMapping implemetns.  But while we might
+// we'd need to reimplement (or adapt) the expression-based supposed that CoverageMapping implements.  But while we might
 // go function-level in the future, branch-level is quite optimistic.
 //
 // The important part of this note is that if something starts breaking in this implementation, we can likely review
@@ -153,7 +153,7 @@ impl CoverageLibrary {
                 }))
             }
             None => {
-                // coverage point didn't have any files asociated with it
+                // coverage point didn't have any files associated with it
                 Ok(None)
             }
         }

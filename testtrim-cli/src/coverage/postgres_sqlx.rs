@@ -98,7 +98,7 @@ impl PostgresCoverageDatabase {
                 INSERT INTO project (id, name)
                 VALUES (uuid_generate_v4(), $1)
                 ON CONFLICT (name)
-                    -- 'do nothing' but returning the record's id rather than omiting row
+                    -- 'do nothing' but returning the record's id rather than omitting row
                     DO UPDATE SET name = EXCLUDED.name
                 RETURNING id
             ",

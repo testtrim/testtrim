@@ -103,7 +103,7 @@ fn has_relative_path(open_paths: &HashSet<PathBuf>, filename: &str) -> bool {
     // On some systems, running the testtrim-syscall-test-app app will result in strace capturing a chdir() to the
     // working directory of the process with a fully-qualified path, then an execve.  In this case, the strace module
     // will capture all the open calls and make them relative to the chdir, making them fully-qualified.  This is
-    // technically correct, and those paths could be fully qualified and sitll be valid syscall traces.  So we inspect
+    // technically correct, and those paths could be fully qualified and still be valid syscall traces.  So we inspect
     // all the paths looking for anything where, if we strip the repo root, it's the path we're looking for.  It would
     // be ideal of the syscall tracing output was a little more consistent, but both relative and absolute path accesses
     // are completely valid syscalls so normalizing them at the syscall trace layer doesn't seem like the right thing to

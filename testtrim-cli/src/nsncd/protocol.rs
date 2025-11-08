@@ -131,7 +131,7 @@ impl<'a> Request<'a> {
 /// Structure containing the resulting data of a [`RequestType::GETAI`] operation.
 ///
 /// Unlike most of the data types declared in this module, this structure isn't meant to be directly serialized to the
-/// wire. Instead, it contains all the necessary informations to to generate a [`AiResponseHeader`] and its associated
+/// wire. Instead, it contains all the necessary information to to generate a [`AiResponseHeader`] and its associated
 /// payload.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiResponse {

@@ -360,7 +360,7 @@ impl GolangTestPlatform {
     // testtrim works around this by, for every module that we're running tests, generating a "no-op" test coverage map.
     // Basically run a test that doesn't exists (eg. "FooBarTestAbc123987!"), and capture its coverage specifically for
     // external dependencies.  And then when we run a later test, we'll use that no-op test coverage map as a baseline.
-    // The external dependency will only be considered a dependency of the test if the coverage map for that extermal
+    // The external dependency will only be considered a dependency of the test if the coverage map for that external
     // dependency varies from the baseline.
     //
     // `-mode count` causes Go to collect a count for the number of times each branch is touched, rather than a boolean

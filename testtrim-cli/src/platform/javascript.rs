@@ -362,7 +362,7 @@ impl JavascriptMochaTestPlatform {
     // When a JavaScript test is run, imports of the test file are executed in order to provide their exports.  The
     // execution of that file is counted in the code coverage, even though the exports from that file may not be used.
     // The execution of the file can even run functions during it's own initialization to create its exports, making it
-    // somewhat difficult to identify whether that file was truely touched by a test, or it was just exported and
+    // somewhat difficult to identify whether that file was truly touched by a test, or it was just exported and
     // imported and none of the exports were used.
     //
     // In order to address this, when we run the `dry-run` in order to identify what tests exist, we also run that under

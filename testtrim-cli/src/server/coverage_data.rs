@@ -78,7 +78,7 @@ impl InstallCoverageDataHandlers for Scope {
 pub enum GetCoverageDataError {
     #[error("internal server misconfiguration")]
     CreateDatabase(#[from] crate::coverage::CreateDatabaseError),
-    #[error("internal server error accessing coverage databaase")]
+    #[error("internal server error accessing coverage database")]
     CoverageDatabase(#[from] crate::coverage::CoverageDatabaseDetailedError),
     #[error("internal server error serializing data to JSON")]
     Serialization(#[from] serde_json::Error),
@@ -192,7 +192,7 @@ pub struct PostCoverageDataRequest<TI: TestIdentifier, CI: CoverageIdentifier> {
 enum PostCoverageDataError {
     #[error("internal server misconfiguration")]
     CreateDatabase(#[from] crate::coverage::CreateDatabaseError),
-    #[error("internal server error accessing coverage databaase")]
+    #[error("internal server error accessing coverage database")]
     CoverageDatabase(#[from] crate::coverage::CoverageDatabaseDetailedError),
 }
 
@@ -278,7 +278,7 @@ async fn post_coverage_data<TP: TestPlatform>(
 enum DeleteCoverageDataError {
     #[error("internal server misconfiguration")]
     CreateDatabase(#[from] crate::coverage::CreateDatabaseError),
-    #[error("internal server error accessing coverage databaase")]
+    #[error("internal server error accessing coverage database")]
     CoverageDatabase(#[from] crate::coverage::CoverageDatabaseDetailedError),
     #[error("internal server error serializing data to JSON")]
     Serialization(#[from] serde_json::Error),

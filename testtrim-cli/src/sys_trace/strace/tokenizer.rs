@@ -79,7 +79,7 @@ pub enum Argument<'a> {
     /// This is an awkward case because it will represent one more argument in the resumed case than in the standard
     /// syscall case -- to compensate for this, the `Sequencer` must merge any Structure arguments followed by a
     /// `WrittenStructureResumed` argument.  At this time I don't know if multiple of these are possible at once which
-    /// would be more confusing; but I've only seen a case for a signle.
+    /// would be more confusing; but I've only seen a case for a signal.
     WrittenArgumentResumed(Box<Argument<'a>>),
     /// Enum: `MSG_NOSIGNAL|MSG_NOSIGNAL`
     Enum(&'a str),
@@ -410,7 +410,7 @@ fn parse_resumed_call<'i>(input: &mut &'i str) -> ModalResult<InternalLineType<'
     let _ = literal("<... ").parse_next(input)?;
     let function_name = parse_function_name(input)?;
     let _ = literal(" resumed>").parse_next(input)?;
-    let _ = opt(literal(", ")).parse_next(input)?; // sometimes "resumed>, ", somtimes straight into args -- can't quite see why it would be one or the other right now
+    let _ = opt(literal(", ")).parse_next(input)?; // sometimes "resumed>, ", sometimes straight into args -- can't quite see why it would be one or the other right now
     let resumed = opt((parse_written_argument_resumed, opt(literal(", ")))).parse_next(input)?;
     let mut arguments: Vec<Argument> =
         separated(0.., parse_argument, literal(", ")).parse_next(input)?;

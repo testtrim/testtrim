@@ -186,7 +186,7 @@ pub enum SourceMode {
 
     /// Tests run on the working tree, and a coverage map is saved under the HEAD commit; working tree must be clean.
     ///
-    /// `CleanCommit` will fail if the current working tree is not clean, as that could indicate uncommited changes that
+    /// `CleanCommit` will fail if the current working tree is not clean, as that could indicate uncommitted changes that
     /// would then be saved into the coverage map for that commit, possibly corrupting the coverage data.  It is
     /// recommended to use `CleanCommit` for continuous integration systems which are providing the coverage map, either
     /// for other developers, or for future continuous integration runs -- the advantage it has over `Automatic` is that
@@ -203,7 +203,7 @@ pub enum SourceMode {
     /// Tests will be run with the contents of the current working tree, and no coverage map will be saved.
     ///
     /// If available, a recent commit may still be used as a basis for identifying useful tests to run.  This mode is
-    /// recommended for developers working on braches or local trees before they are finalized.
+    /// recommended for developers working on branches, breaches or local trees before they are finalized.
     WorkingTree,
 }
 

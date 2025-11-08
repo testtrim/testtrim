@@ -480,7 +480,7 @@ impl DotnetTestPlatform {
     //     let package_lock_json_path = project_dir.join("packages.lock.json");
     //     if !fs::exists(&package_lock_json_path)? {
     //         // This package doesn't have a packages.lock.json.  That could be either because RestorePackagesWithLockFile
-    //         // is diabled (which we would want to warn about as we need this for coverage tracking), or because there
+    //         // is disabled (which we would want to warn about as we need this for coverage tracking), or because there
     //         // are no external dependencies (which is fine).  Let's err on the side of warning.
     //         warn!("project {project_file:?} has no accompanying packages.lock.json which will prevent external dependency update tracking by testtrim");
     //         return Ok(());

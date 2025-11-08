@@ -78,7 +78,7 @@ where
                 let _permit = sem.acquire().await.unwrap();
                 future.await
             }
-            // propogate our task subscriber into the new spawn(); normally a `spawn` it would have no subscriber and
+            // propagate our task subscriber into the new spawn(); normally a `spawn` it would have no subscriber and
             // lose all instrumentation from this point.
             .with_current_subscriber(),
         );
