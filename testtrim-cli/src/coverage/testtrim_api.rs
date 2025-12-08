@@ -871,7 +871,7 @@ mod tests {
         // implementation we'll be using to test here.
         assert_eq!(
             request_headers.get("accept-encoding"),
-            Some(&String::from("gzip, zstd"))
+            Some(&String::from("zstd,gzip"))
         );
         assert_eq!(
             response_headers.get("content-encoding"),
