@@ -36,7 +36,7 @@ lcov = "0.8.1"
 llvm_profparser = "0.10.0"
 log = "0.4.22"
 named-lock = "0.4.1"
-nix = { version = "^0.30.0", features = ["fs", "process", "socket", "user", "signal"] }
+nix = { version = "^0.31.0", features = ["fs", "process", "socket", "user", "signal"] }
 num_cpus = "1.16.0"
 num_enum = "0.7.3"
 num-derive = "0.4.2"
