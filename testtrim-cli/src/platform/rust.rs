@@ -425,6 +425,7 @@ impl RustTestPlatform {
 
     #[instrument(skip_all, fields(perftrace = "parse-test-data"))]
     fn parse_profiling_data(
+        project_dir: &Path,
         test_case: &RustConcreteTestIdentifier,
         profile_file: &PathBuf,
         coverage_library: &CoverageLibrary,
@@ -437,7 +438,10 @@ impl RustTestPlatform {
 
         for point in profiling_data.get_hit_instrumentation_points() {
             if let Ok(Some(metadata)) = coverage_library.search_metadata(&point) {
-                let file = metadata.file_path;
+                let mut file = metadata.file_path;
+                if file.starts_with(project_dir) {
+                    file = file.strip_prefix(project_dir)?.to_path_buf();
+                }
                 if file.is_relative() {
                     coverage_data.add_file_to_test(FileCoverage {
                         file_name: file,
@@ -648,6 +652,7 @@ impl RustTestPlatform {
 
         let coverage_library_lock = coverage_library.read().unwrap();
         Self::parse_profiling_data(
+            project_dir,
             test_case,
             &profile_file,
             &coverage_library_lock,

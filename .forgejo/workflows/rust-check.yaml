@@ -75,7 +75,7 @@ jobs:
           fi
 
       - run: |
-          VERSION=$(nix develop .# --command dasel -f ./testtrim-cli/Cargo.toml -r toml .package.version -w -)
+          VERSION=$(cat ./testtrim-cli/Cargo.toml | nix develop .# --command dasel query -i toml -o yaml "package.version")
           echo "Will use testtrim $VERSION:"
           FLAKE="git+https://codeberg.org/testtrim/testtrim.git?ref=refs/tags/v${VERSION}"
           nix run $FLAKE#testtrim -- --version
