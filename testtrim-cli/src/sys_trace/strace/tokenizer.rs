@@ -525,7 +525,7 @@ fn parse_argument<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
 
 fn parse_argument_without_write<'i>(input: &mut &'i str) -> ModalResult<Argument<'i>> {
     trace("parse_argument_without_write", |input: &mut _| {
-        alt((
+        alt([
             parse_named_argument,
             parse_null_argument,
             parse_enum_argument,
@@ -540,7 +540,7 @@ fn parse_argument_without_write<'i>(input: &mut &'i str) -> ModalResult<Argument
             parse_function_argument,
             parse_variable_reference_argument,
             parse_wait_flags_argument,
-        ))
+        ])
         .parse_next(input)
     })
     .parse_next(input)
