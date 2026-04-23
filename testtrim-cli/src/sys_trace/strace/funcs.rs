@@ -432,7 +432,7 @@ impl FunctionExtractor {
     fn numeric(args: &[&Argument<'_>], index: usize) -> Result<i32> {
         match &args[index] {
             Argument::Numeric(v) => Ok(i32::from_str(v)?),
-            v => Err(anyhow!("argument {index} was not numeric; it was {v:?}",)),
+            v => Err(anyhow!("argument {index} was not numeric; it was {v:?}")),
         }
     }
 
@@ -445,14 +445,14 @@ impl FunctionExtractor {
                     "argument {index} was named, but not an enum; it was {v:?}",
                 )),
             },
-            v => Err(anyhow!("argument {index} was not enum; it was {v:?}",)),
+            v => Err(anyhow!("argument {index} was not enum; it was {v:?}")),
         }
     }
 
     fn path(args: &[&Argument<'_>], index: usize) -> Result<PathBuf> {
         match &args[index] {
             Argument::String(v) => Ok(PathBuf::from(OsStr::from_bytes(v.decoded()))),
-            v => Err(anyhow!("argument {index} was not string; it was {v:?}",)),
+            v => Err(anyhow!("argument {index} was not string; it was {v:?}")),
         }
     }
 

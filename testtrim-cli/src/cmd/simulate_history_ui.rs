@@ -144,13 +144,13 @@ where
                 }
                 UiStage::Compiling => {
                     let internal = make_progress_bar();
-                    internal.set_message(format!("        {BUILD}Compiling...",));
+                    internal.set_message(format!("        {BUILD}Compiling..."));
                     progress_bar = Some(internal);
                     span_data.hide_when_finished = true;
                 }
                 UiStage::RunTests => {
                     let internal = make_progress_bar();
-                    internal.set_message(format!("        {TEST}Running tests ...",));
+                    internal.set_message(format!("        {TEST}Running tests ..."));
                     if let Some(test_count) = span_data.raw_ui_information.test_count {
                         internal.set_length(test_count);
                         internal.set_style(

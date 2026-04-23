@@ -433,57 +433,54 @@ impl JavascriptMochaTestPlatform {
                     name: ref function_name,
                     count,
                     ..
-                }) if count > 0 => {
-                    if !current_source_file_is_hit {
-                        if let Some(ref current_source_file) = current_source_file {
-                            if let Some(function_map) =
-                                coverage_data_baseline.get(current_source_file)
-                            {
-                                // FIXME: this is a dumb clone -- just occurring to create the wrapper FunctionName type
-                                if function_map.contains(&FunctionName(function_name.clone())) {
-                                    // This function was hit even in the baseline, so we can't count on it as a good
-                                    // indicator of a test dependency.  Don't match current_source_file_is_hit because
-                                    // there may be other functions in this file, but move on from this function without
-                                    // processing it.
-                                    trace!(
-                                        "test {:?} ignoring coverage touch of {} {function_name:?} due to presence in baseline",
-                                        test_case.test_identifier.full_title,
-                                        current_source_file.display(),
-                                    );
-                                    continue;
-                                }
-                            }
-
-                            if current_source_file.starts_with("node_modules") {
-                                let package_dependency = Self::touched_external_dependency(
-                                    test_case,
-                                    coverage_data,
-                                    current_source_file,
-                                    external_dependencies,
-                                );
-                                if let Some(package_dependency) = package_dependency {
-                                    trace!(
-                                        "test {:?} hit external dependency {:?}",
-                                        test_case.test_identifier.full_title,
-                                        package_dependency.resolved,
-                                    );
-                                }
-                            } else if current_source_file.is_absolute() {
-                                // not sure what an absolute file is here, but it's not a project file
-                            } else {
+                }) if count > 0 && !current_source_file_is_hit => {
+                    if let Some(ref current_source_file) = current_source_file {
+                        if let Some(function_map) = coverage_data_baseline.get(current_source_file)
+                        {
+                            // FIXME: this is a dumb clone -- just occurring to create the wrapper FunctionName type
+                            if function_map.contains(&FunctionName(function_name.clone())) {
+                                // This function was hit even in the baseline, so we can't count on it as a good
+                                // indicator of a test dependency.  Don't match current_source_file_is_hit because
+                                // there may be other functions in this file, but move on from this function without
+                                // processing it.
                                 trace!(
-                                    "test {:?} hit in-project file {}",
+                                    "test {:?} ignoring coverage touch of {} {function_name:?} due to presence in baseline",
                                     test_case.test_identifier.full_title,
-                                    current_source_file.display()
+                                    current_source_file.display(),
                                 );
-                                coverage_data.add_file_to_test(FileCoverage {
-                                    file_name: current_source_file.clone(),
-                                    test_identifier: test_case.test_identifier.clone(),
-                                });
+                                continue;
                             }
                         }
-                        current_source_file_is_hit = true;
+
+                        if current_source_file.starts_with("node_modules") {
+                            let package_dependency = Self::touched_external_dependency(
+                                test_case,
+                                coverage_data,
+                                current_source_file,
+                                external_dependencies,
+                            );
+                            if let Some(package_dependency) = package_dependency {
+                                trace!(
+                                    "test {:?} hit external dependency {:?}",
+                                    test_case.test_identifier.full_title,
+                                    package_dependency.resolved,
+                                );
+                            }
+                        } else if current_source_file.is_absolute() {
+                            // not sure what an absolute file is here, but it's not a project file
+                        } else {
+                            trace!(
+                                "test {:?} hit in-project file {}",
+                                test_case.test_identifier.full_title,
+                                current_source_file.display()
+                            );
+                            coverage_data.add_file_to_test(FileCoverage {
+                                file_name: current_source_file.clone(),
+                                test_identifier: test_case.test_identifier.clone(),
+                            });
+                        }
                     }
+                    current_source_file_is_hit = true;
                 }
                 _ => {}
             }
