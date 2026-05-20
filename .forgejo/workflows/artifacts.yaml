@@ -13,7 +13,7 @@ jobs:
   oci-container:
     runs-on: debian-ci-latest
     container:
-      image: forgejo.kainnef.com/mfenniak/debian-latest-forgejo-runner@sha256:a670ccd1e2470bcd3d3ace05e4bce6747f4bf3152ab60dcc6265431aa0947ba8
+      image: forgejo.kainnef.com/mfenniak/debian-latest-forgejo-runner@sha256:d7c00d65d2e28ec6f9b5fb80d5dfa9e8f708aa4bb3c679da838ff17662f1a25e
       options: --volume nix-forgejo-cache-public:/nix
     env:
       DOCKER_HOST: "tcp://forgejo-act-runner-docker-in-docker:2375"
