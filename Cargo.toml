@@ -52,7 +52,7 @@ serde-map-to-array = { version = "3.0.0", features = ["std"] }
 shared_memory = "0.12.4"
 shared-mem-queue = "0.4.0"
 simplelog = "0.12.2"
-sqlx = { version = "0.8.2", features = ["runtime-tokio", "postgres", "uuid", "json", "time", "migrate"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "postgres", "uuid", "json", "time", "migrate"] }
 tempfile = "3.16.0"
 thiserror = "2.0.0"
 time = "0.3.37"
