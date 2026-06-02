@@ -15,7 +15,7 @@ jobs:
   rust-checks:
     runs-on: debian-ci-latest
     container:
-      image: forgejo.kainnef.com/mfenniak/debian-latest-forgejo-runner@sha256:a7140088e776672dc5fa5799032f8b093ad19e657665eb263b908fb0c2a1ced1
+      image: forgejo.kainnef.com/mfenniak/debian-latest-forgejo-runner@sha256:5b69f544fdeff13290729ef6a0602db354108269879dad638585108ee5cb51a3
       options: --volume nix-forgejo-cache-public:/nix
 
     services:
