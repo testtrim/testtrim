@@ -149,7 +149,7 @@ impl CoverageLibrary {
                 // test discovery?
                 Ok(Some(InstrumentationPointMetadata {
                     file_path: file[filenames_ref.1].clone(),
-                    function_name: point.rec.name.clone().unwrap(),
+                    function_name: String::from(&*point.rec.name.clone().unwrap()),
                 }))
             }
             None => {
