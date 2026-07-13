@@ -61,7 +61,7 @@ impl Scm<GitScmCommit> for GitScm {
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
-                command: format!("git diff --name-only {}", &commit.sha).to_string(),
+                command: format!("git diff --name-only {}", commit.sha).to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }
@@ -208,7 +208,7 @@ impl Scm<GitScmCommit> for GitScm {
         let output = Command::new("git")
             .args([
                 "show",
-                &format!("{}:{}", &commit.sha, path.to_str().unwrap()),
+                &format!("{}:{}", commit.sha, path.to_str().unwrap()),
             ])
             .current_dir(&self.project_dir)
             .output()
@@ -219,7 +219,7 @@ impl Scm<GitScmCommit> for GitScm {
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
-                command: format!("git show {}:{}", &commit.sha, path.to_str().unwrap()),
+                command: format!("git show {}:{}", commit.sha, path.to_str().unwrap()),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }
@@ -241,7 +241,7 @@ impl Scm<GitScmCommit> for GitScm {
 
         if !output.status.success() {
             return Err(SubcommandErrors::SubcommandFailed {
-                command: format!("git checkout {}", &commit.sha),
+                command: format!("git checkout {}", commit.sha),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             }
