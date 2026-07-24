@@ -39,7 +39,7 @@ named-lock = "0.4.1"
 nix = { version = "^0.31.0", features = ["fs", "process", "socket", "user", "signal"] }
 num_cpus = "1.16.0"
 num_enum = "0.7.3"
-num-derive = "0.4.2"
+num-derive = "0.5.0"
 num-traits = "^0.2"
 ouroboros = "0.18.5"
 quick-xml = { version = "0.41.0", features = ["serialize"] }
