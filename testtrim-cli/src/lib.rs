@@ -11,6 +11,7 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::items_after_statements)] // maybe should warn on it, but currently use this pattern and like it
 #![allow(clippy::too_many_lines)] // probably the right thing to warn on, but somewhat arbitrary
+#![allow(clippy::unused_async_trait_impl)] // doesn't seem important; surprised the compiler can't just fix this internally
 #![warn(clippy::print_stderr)]
 #![warn(clippy::print_stdout)]
 #![warn(clippy::string_slice)]
