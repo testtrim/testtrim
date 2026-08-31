@@ -17,7 +17,7 @@ jobs:
     name: testtrim-release # no whitespace; https://github.com/containers/podman/issues/24869
     runs-on: debian-ci-latest
     container:
-      image: forgejo.kainnef.com/mfenniak/debian-latest-forgejo-runner@sha256:666d6e9d258b7bff3dbbb985bd38dc68dcc9f53c87111702a725a10979617085
+      image: forgejo.kainnef.com/mfenniak/debian-latest-forgejo-runner@sha256:e1491e0751e4afee60c08f15c51313b919d9af524cd932f616933501d9a40084
       options: --volume nix-forgejo-cache-public:/nix
     permissions:
       # Give the default GITHUB_TOKEN write permission to commit and push the
