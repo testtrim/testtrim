@@ -3378,7 +3378,7 @@ dependencies = [
 
 [[package]]
 name = "testtrim"
-version = "0.14.9"
+version = "0.14.10"
 dependencies = [
  "actix-test",
  "actix-web",
@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "testtrim-syscall-test-app"
-version = "0.14.9"
+version = "0.14.10"
 dependencies = [
  "clap",
  "dns-protocol",
