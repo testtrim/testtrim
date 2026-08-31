@@ -80,22 +80,21 @@ jobs:
             exit 1
           fi
 
-      # Temporarily disabled: running testtrim on itself, to be enabled after the next release
-      # - run: |
-      #     VERSION=$(cat ./testtrim-cli/Cargo.toml | nix develop .# --command dasel query -i toml -o yaml "package.version")
-      #     echo "Will use testtrim $VERSION:"
-      #     FLAKE="git+https://codeberg.org/testtrim/testtrim.git?ref=refs/tags/v${VERSION}"
-      #     nix run $FLAKE#testtrim -- --version
-      #     echo "TESTTRIM=$FLAKE#testtrim" >> $GITHUB_ENV
-      # - name: get-test-identifiers -- output tests that will be run, and why
-      #   run: nix develop .# --command nix run $TESTTRIM -- get-test-identifiers -v
-      # - name: build testtrim-syscall-test-app
-      #   run: nix develop .# --command cargo build --bin testtrim-syscall-test-app
-      # - name: run-tests
-      #   run: nix develop .# --command nix run $TESTTRIM -- run-tests -v --source-mode=clean-commit
-      #   env:
-      #     TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
-      #     RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
+      - run: |
+          VERSION=$(cat ./testtrim-cli/Cargo.toml | nix develop .# --command dasel query -i toml -o yaml "package.version")
+          echo "Will use testtrim $VERSION:"
+          FLAKE="git+https://codeberg.org/testtrim/testtrim.git?ref=refs/tags/v${VERSION}"
+          nix run $FLAKE#testtrim -- --version
+          echo "TESTTRIM=$FLAKE#testtrim" >> $GITHUB_ENV
+      - name: get-test-identifiers -- output tests that will be run, and why
+        run: nix develop .# --command nix run $TESTTRIM -- get-test-identifiers -v
+      - name: build testtrim-syscall-test-app
+        run: nix develop .# --command cargo build --bin testtrim-syscall-test-app
+      - name: run-tests
+        run: nix develop .# --command nix run $TESTTRIM -- run-tests -v --source-mode=clean-commit
+        env:
+          TESTTRIM_UNITTEST_PGSQL_URL: postgres://testtrim:testtrim@pgsql/testtrim
+          RUST_COVERAGE_SPECIMEN_PAT: ${{ secrets.RUST_COVERAGE_SPECIMEN_PAT }}
 
       # There's always the risk that testtrim is broken and doesn't run all the necessary tests, especially when we're
       # using testtrim to test testtrim.  So as a backup, on the main branch only, also run all tests.  This will
