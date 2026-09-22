@@ -81,7 +81,7 @@
               # resolve because when testtrim is being used normally, it would be someone else's responsibility to get dev
               # tools in place that are relevant to the project.
               dotnet-sdk_8  # for dotnet-coverage-specimen
-              go_1_25 # for go-coverage-specimen
+              go_1_27 # for go-coverage-specimen
               nodejs_22 # for javascript-coverage-specimen
             ];
 
