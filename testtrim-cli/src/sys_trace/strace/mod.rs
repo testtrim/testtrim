@@ -556,7 +556,7 @@ impl STraceSysTraceCommand {
 
                 // Create a pidfd that we can use with tokio to wait for the child process.
                 let pidfd = Self::pidfd_open(child.as_raw())?;
-                let pidfd = AsyncFd::new(pidfd)?;
+                let pidfd = unsafe { AsyncFd::register(pidfd) }?; // SAFETY: pidfd is opened above and adopted here with no other consumers
                 // AsyncFdReadyGuard is dropped without a care; we never read from this fd, just use it to identify if
                 // the child pid is ready for a wait that won't block.
                 let _ = pidfd.readable().await?;
