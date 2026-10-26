@@ -19,7 +19,7 @@ jobs:
       DOCKER_HOST: "tcp://forgejo-runner-dind:2375"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: https://github.com/cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+      - uses: https://github.com/cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
       # install-nix-action by default uses {{ github.token }} and configures it as a github token; makes sense, but
       # we're running as a Forgejo action so Forgejo puts its own token in {{ github.token }} which GitHub can't
       # understand. So we replace github.com in the access-token field of the nix.conf file.
